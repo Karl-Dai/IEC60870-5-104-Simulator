@@ -131,10 +131,31 @@ cd crates/iec104master-app && cargo tauri dev
 
 ## Quick Start
 
-1. **Slave** — click *New Server*; it auto-starts on port `2404` with default data points.
-2. **Master** — click *New Connection*, enter `127.0.0.1:2404`, connect, and send GI.
-3. The Master's IOA table fills with every received data point.
-4. **Slave** — click *Random Mutation* to simulate value changes; the Master receives the spontaneous updates in real time.
+A full round-trip in four steps — drive the simulated Slave from the Master, no hardware required. (Screenshots show the Chinese UI; flip to English any time with the **中 / EN** toggle.)
+
+### 1 · Slave — create a server with data points
+
+Open **IEC104Slave** and click **新建服务器 (New Server)**: it binds `0.0.0.0:2404` and auto-starts. Add a station, then batch-add points spanning all 8 monitored types — single/double point, step position, bitstring, normalized, scaled, short-float and integrated totals. Each point carries an IOA, a value and quality flags.
+
+![Slave with a running server and data points](docs/screenshots/tut-1-slave.png)
+
+### 2 · Master — create a connection
+
+Open **IEC104Master** and click **新建连接 (New Connection)**. The defaults already target the local Slave: address `127.0.0.1`, port `2404`, Common Address `1`. To reach several stations over one link, list the CAs comma-separated (`1, 2, 3`); tick **启用 TLS (Enable TLS)** for a secure link. Click **创建 (Create)**, then **连接 (Connect)**.
+
+![New Connection dialog](docs/screenshots/tut-2-master-newconn.png)
+
+### 3 · Master — General Interrogation fills the table
+
+Press **总召唤 (General Interrogation)**. The Slave answers with every point; the connection tree shows per-category counts and the table fills with the received IOAs, values and quality.
+
+![Master data table after General Interrogation](docs/screenshots/tut-3-master-data.png)
+
+### 4 · Watch the wire — and live updates
+
+Expand **通信日志 (Communication Log)** at the bottom: every U/I/S frame is decoded — frame type, Cause of Transmission, a readable detail and the raw hex side by side. Back on the Slave, click **随机变化 (Random Mutation)** — changed values are pushed spontaneously (COT=3) and surface in the Master's table and log in real time.
+
+![Communication log with decoded frames and raw hex](docs/screenshots/tut-4-master-log.png)
 
 ## Protocol Support
 
