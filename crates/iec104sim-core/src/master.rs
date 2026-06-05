@@ -1099,12 +1099,12 @@ impl MasterConnection {
     }
 
     /// Send Set-point (normalized) command.
-    pub async fn send_setpoint_normalized(&self, ioa: u32, value: f32, select: bool, ca: u16, ql: u8, cot: u8) -> Result<(), MasterError> {
-        let frame = build_setpoint_normalized(ca, ioa, value, select, ql, cot);
-        let detail = format!("归一化设定值 IOA={} val={:.4} sel={} QL={} COT={}", ioa, value, select, ql, cot);
+    pub async fn send_setpoint_normalized(&self, ioa: u32, nva: i16, select: bool, ca: u16, ql: u8, cot: u8) -> Result<(), MasterError> {
+        let frame = build_setpoint_normalized(ca, ioa, nva, select, ql, cot);
+        let detail = format!("归一化设定值 IOA={} val={} sel={} QL={} COT={}", ioa, nva, select, ql, cot);
         let event = crate::log_entry::DetailEvent {
             kind: "setpoint_normalized".to_string(),
-            payload: serde_json::json!({ "ioa": ioa, "val": value, "select": select, "ql": ql, "cot": cot }),
+            payload: serde_json::json!({ "ioa": ioa, "val": nva, "select": select, "ql": ql, "cot": cot }),
         };
         self.send_frame_with_event(&frame, &detail, FrameLabel::SetpointNormalized, ca, Some(event)).await
     }
@@ -2198,10 +2198,9 @@ fn build_step_command(ca: u16, ioa: u32, value: u8, select: bool, qu: u8, cot: u
     ]
 }
 
-fn build_setpoint_normalized(ca: u16, ioa: u32, value: f32, select: bool, ql: u8, cot: u8) -> Vec<u8> {
+fn build_setpoint_normalized(ca: u16, ioa: u32, nva: i16, select: bool, ql: u8, cot: u8) -> Vec<u8> {
     let ca_bytes = ca.to_le_bytes();
     let ioa_bytes = ioa.to_le_bytes();
-    let nva = (value * 32767.0) as i16;
     let nva_bytes = nva.to_le_bytes();
     let mut qos = ql & 0x7F;
     if select { qos |= 0x80; }
@@ -2481,22 +2480,29 @@ mod tests {
 
     #[test]
     fn test_build_setpoint_normalized() {
-        let frame = build_setpoint_normalized(1, 400, 0.5, false, 0, 6);
+        // 入参现在是原始 NVA i16，原样写线，不做任何缩放。
+        let frame = build_setpoint_normalized(1, 400, 16384, false, 0, 6);
         assert_eq!(frame[0], 0x68);
         assert_eq!(frame[6], 48);
         let nva = i16::from_le_bytes([frame[15], frame[16]]);
-        assert_eq!(nva, (0.5_f32 * 32767.0) as i16);
+        assert_eq!(nva, 16384);
         assert_eq!(frame[17], 0x00); // QOS = no select, QL=0
 
-        // With select
-        let frame = build_setpoint_normalized(1, 400, -0.5, true, 0, 6);
+        // 边界原样透传
+        let frame = build_setpoint_normalized(1, 400, -32768, false, 0, 6);
+        assert_eq!(i16::from_le_bytes([frame[15], frame[16]]), -32768);
+        let frame = build_setpoint_normalized(1, 400, 32767, false, 0, 6);
+        assert_eq!(i16::from_le_bytes([frame[15], frame[16]]), 32767);
+
+        // 带 select 位
+        let frame = build_setpoint_normalized(1, 400, -16384, true, 0, 6);
         assert_eq!(frame[17], 0x80); // QOS = select bit
     }
 
     #[test]
     fn test_build_setpoint_normalized_with_ql() {
         // QL=2, no SbO
-        let frame = build_setpoint_normalized(1, 400, 0.0, false, 2, 6);
+        let frame = build_setpoint_normalized(1, 400, 0, false, 2, 6);
         assert_eq!(frame[17], 0x02);
     }
 

@@ -534,7 +534,7 @@ pub async fn send_control_command(
                     .map_err(|e| format!("failed to send command: {}", e))?;
             }
             "setpoint_normalized" => {
-                let value = request.value.parse::<f32>().map_err(|e| format!("{}", e))?;
+                let value = request.value.parse::<i16>().map_err(|e| format!("{}", e))?;
                 conn.connection.send_setpoint_normalized(ioa, value, false, ca, qu, cot).await
                     .map_err(|e| format!("failed to send command: {}", e))?;
             }
@@ -615,7 +615,7 @@ pub async fn send_control_command(
             ).await.map_err(|e| format!("{}", e))
         }
         "setpoint_normalized" => {
-            let value = request.value.parse::<f32>().map_err(|e| format!("{}", e))?;
+            let value = request.value.parse::<i16>().map_err(|e| format!("{}", e))?;
             let select_frame = build_control_frames_setpoint_norm(ca, ioa, value, true, qu, cot);
             let execute_frame = build_control_frames_setpoint_norm(ca, ioa, value, false, qu, cot);
             let event = DetailEvent {
@@ -624,7 +624,7 @@ pub async fn send_control_command(
             };
             conn.connection.send_control_with_sbo_event(
                 select_frame, execute_frame, ioa,
-                &format!("归一化设定值 IOA={} val={:.4} QL={} COT={}", ioa, value, qu, cot),
+                &format!("归一化设定值 IOA={} val={} QL={} COT={}", ioa, value, qu, cot),
                 FrameLabel::SetpointNormalized, ca, Some(event),
             ).await.map_err(|e| format!("{}", e))
         }
@@ -784,11 +784,10 @@ fn build_control_frames_step(ca: u16, ioa: u32, value: u8, select: bool, qu: u8,
          ca_bytes[0], ca_bytes[1], ioa_bytes[0], ioa_bytes[1], ioa_bytes[2], rco]
 }
 
-fn build_control_frames_setpoint_norm(ca: u16, ioa: u32, value: f32, select: bool, ql: u8, cot: u8) -> Vec<u8> {
+fn build_control_frames_setpoint_norm(ca: u16, ioa: u32, value: i16, select: bool, ql: u8, cot: u8) -> Vec<u8> {
     let ca_bytes = ca.to_le_bytes();
     let ioa_bytes = ioa.to_le_bytes();
-    let nva = (value * 32767.0) as i16;
-    let nva_bytes = nva.to_le_bytes();
+    let nva_bytes = value.to_le_bytes();
     let mut qos = ql & 0x7F;
     if select { qos |= 0x80; }
     vec![0x68, 0x10, 0x00, 0x00, 0x00, 0x00, 48, 0x01, cot, 0x00,
