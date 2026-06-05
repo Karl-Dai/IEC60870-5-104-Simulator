@@ -648,10 +648,24 @@ impl MasterConnection {
             MasterError::ConnectionError(format!("Failed to connect to {}: {}", addr, e))
         })?;
 
-        // Short read timeout so the receive loop ticks timers (t1/t2/t3)
-        // promptly when no data is flowing.
-        tcp_stream.set_read_timeout(Some(std::time::Duration::from_millis(100))).ok();
         tcp_stream.set_nodelay(true).ok();
+        // The TLS handshake below is blocking, multi-round I/O. A 100 ms read
+        // timeout would bound *every* handshake round, so a single-connection
+        // RTU that answers the reconnect a hair late (still releasing its old
+        // TLS session) trips a handshake-read timeout — surfacing as
+        // WSAETIMEDOUT (os error 10060) on Windows / "the handshake process was
+        // interrupted" on macOS. Arm the socket per path:
+        //   • TLS   → a generous *handshake* timeout (`timeout`). The TLS
+        //             receive loop switches the socket to set_nonblocking()
+        //             afterwards, so it never relies on this read_timeout.
+        //   • plain → the 100 ms receive-poll timeout the plain receive loop
+        //             needs to tick t1/t2/t3 promptly when idle.
+        if self.config.tls.enabled {
+            tcp_stream.set_read_timeout(Some(timeout)).ok();
+            tcp_stream.set_write_timeout(Some(timeout)).ok();
+        } else {
+            tcp_stream.set_read_timeout(Some(std::time::Duration::from_millis(100))).ok();
+        }
 
         // Wrap with TLS if configured
         let master_stream = if self.config.tls.enabled {

@@ -418,3 +418,80 @@ async fn tls_reconnect_after_unexpected_drop_single_conn() {
     );
     assert!(second.is_ok(), "second connect failed: {second:?}");
 }
+
+/// Root-cause repro for the user's reconnect failure:
+///   Windows: "TLS 握手失败: ... (os error 10060)"  (WSAETIMEDOUT)
+///   macOS:   "TLS 握手失败: the handshake process was interrupted"
+///
+/// `connect_inner` armed the TCP socket with a 100 ms read_timeout BEFORE the
+/// blocking TLS handshake. That timeout exists only to let the *plain-TCP*
+/// receive loop tick its timers — the TLS receive loop uses `set_nonblocking`
+/// instead — but it was applied unconditionally, so it also bounded every
+/// handshake read at 100 ms. A single-connection RTU still tearing down its
+/// previous TLS session answers the reconnect handshake a hair late; any round
+/// >100 ms makes the handshake read time out. A fast localhost server hides
+/// this (every round <100 ms), which is why the existing reconnect tests pass.
+/// Here we model the slow peer explicitly: delay the TLS accept past 100 ms.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tls_handshake_survives_server_slower_than_receive_poll() {
+    let port = free_port();
+    let certs = cert_gen::generate();
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = cert_gen::write_to_dir(&certs, tmp.path());
+
+    let p12 = std::fs::read(&paths.server_pkcs12).unwrap();
+    let identity = native_tls::Identity::from_pkcs12(&p12, cert_gen::PKCS12_PASS).unwrap();
+    let acceptor = native_tls::TlsAcceptor::new(identity).unwrap();
+    let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+
+    let server = std::thread::spawn(move || -> String {
+        let (tcp, _) = match listener.accept() {
+            Ok(v) => v,
+            Err(e) => return format!("accept err: {e}"),
+        };
+        // Single-connection RTU still releasing the old session: it answers the
+        // new handshake later than the master's 100 ms receive-poll timeout.
+        std::thread::sleep(Duration::from_millis(250));
+        let mut s = match acceptor.accept(tcp) {
+            Ok(s) => s,
+            Err(e) => return format!("server handshake err: {e}"),
+        };
+        let mut buf = [0u8; 1024];
+        let _ = s.read(&mut buf); // STARTDT ACT
+        let _ = s.write_all(&[0x68u8, 0x04, 0x0b, 0x00, 0x00, 0x00]); // STARTDT CON
+        std::thread::sleep(Duration::from_millis(200));
+        "ok".into()
+    });
+
+    sleep(Duration::from_millis(100)).await;
+
+    let config = MasterConfig {
+        target_address: "127.0.0.1".to_string(),
+        port,
+        common_address: 1,
+        tls: TlsConfig {
+            enabled: true,
+            ca_file: paths.ca_cert.to_str().unwrap().to_string(),
+            cert_file: String::new(),
+            key_file: String::new(),
+            pkcs12_file: String::new(),
+            pkcs12_password: String::new(),
+            accept_invalid_certs: false,
+            version: TlsVersionPolicy::Auto,
+        },
+        ..Default::default()
+    };
+    let mut master = MasterConnection::new(config);
+
+    let res = master.connect().await;
+    assert!(
+        res.is_ok(),
+        "TLS handshake must survive a peer that answers slower than the 100ms \
+         receive-poll timeout (this is the reconnect-against-a-single-conn-RTU \
+         case); got: {res:?}"
+    );
+    assert_eq!(master.state(), MasterState::Connected);
+
+    master.disconnect().await.ok();
+    let _ = server.join();
+}
