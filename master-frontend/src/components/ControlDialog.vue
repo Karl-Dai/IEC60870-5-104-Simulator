@@ -65,7 +65,14 @@ const cot = ref<number>(6)
 const singleValue = ref(saved.singleValue ?? 'true')
 const doubleValue = ref(saved.doubleValue ?? '2')
 const stepValue = ref(saved.stepValue ?? '2')
-const normalizedValue = ref(saved.normalizedValue ?? '0.0')
+// 旧版本持久化的是 [-1,1) 小数；现在统一存原始 NVA 整数字符串。
+// 加载时取整并夹到 i16 范围，避免历史小数残留导致解析失败。
+function toRawNorm(x: string | undefined): string {
+  const n = Number(x)
+  if (x == null || x === '' || !Number.isFinite(n)) return '0'
+  return String(Math.max(-32768, Math.min(32767, Math.round(n))))
+}
+const normalizedValue = ref(toRawNorm(saved.normalizedValue))
 const scaledValue = ref(saved.scaledValue ?? '0')
 const floatValue = ref(saved.floatValue ?? '0.0')
 const bitstringValue = ref<number>(saved.bitstringValue ?? 0)
@@ -296,13 +303,11 @@ const caSelectValue = computed<number>({
             <button :class="['ctrl-btn', { active: stepValue === '2' }]" @click="stepValue = '2'">&#9650; {{ t('control.optStepUp') }}</button>
           </div>
 
-          <!-- Normalized: slider + input -->
-          <div v-else-if="commandType === 'setpoint_normalized'" class="slider-control">
-            <div class="slider-row">
-              <input type="range" class="slider-input" min="-1" max="1" step="0.001" v-model="normalizedValue" />
-              <input type="number" class="number-sm" min="-1" max="1" step="0.001" v-model="normalizedValue" />
-            </div>
-          </div>
+          <!-- Normalized: raw NVA integer (-32768 ~ 32767), same form as scaled -->
+          <label v-else-if="commandType === 'setpoint_normalized'" class="form-label">
+            {{ t('control.valueRangeNormalized') }}
+            <input v-model="normalizedValue" class="form-input" type="number" min="-32768" max="32767" step="1" />
+          </label>
 
           <!-- Scaled: integer input -->
           <label v-else-if="commandType === 'setpoint_scaled'" class="form-label">
@@ -542,39 +547,6 @@ const caSelectValue = computed<number>({
 .ctrl-btn-sm {
   padding: 6px 8px;
   font-size: 11px;
-}
-
-.slider-control {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.slider-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.slider-input {
-  flex: 1;
-  accent-color: var(--c-blue);
-}
-
-.number-sm {
-  width: 80px;
-  padding: 4px 6px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
-  font-size: 12px;
-  font-family: var(--font-mono);
-}
-
-.number-sm:focus {
-  outline: none;
-  border-color: var(--c-blue);
 }
 
 .toggle-row {

@@ -192,6 +192,7 @@ export type DictShape = {
     optStepDown: string
     optStepUp: string
     valueRangeScaled: string
+    valueRangeNormalized: string
     valueLabel: string
     valueRangeBitstring: string
     bitstringHex: string
@@ -486,6 +487,7 @@ const dict: DictShape = {
     optStepDown: '降',
     optStepUp: '升',
     valueRangeScaled: '值 (-32768 ~ 32767)',
+    valueRangeNormalized: '归一化值 (原始整数 -32768 ~ 32767)',
     valueLabel: '值',
     valueRangeBitstring: '值 (32 位无符号)',
     bitstringHex: '十六进制',

@@ -241,6 +241,7 @@ const dict: DictShape = {
     optStepDown: 'Down',
     optStepUp: 'Up',
     valueRangeScaled: 'Value (-32768 ~ 32767)',
+    valueRangeNormalized: 'Normalized (raw NVA -32768 ~ 32767)',
     valueLabel: 'Value',
     valueRangeBitstring: 'Value (32-bit unsigned)',
     bitstringHex: 'Hex',
