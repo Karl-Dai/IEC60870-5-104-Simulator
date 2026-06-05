@@ -821,6 +821,12 @@ fn build_control_frames_setpoint_float(ca: u16, ioa: u32, value: f32, select: bo
 // Data Commands
 // ---------------------------------------------------------------------------
 
+/// 主站侧把归一化值显示为线上原始 NVA 整数 (-32768..32767)，而非 [-1,1) 小数。
+/// `round(value * 32767)` 可无损还原原始 NVA：f32 往返误差 < 0.002，远小于 0.5。
+fn normalized_raw_string(value: f32) -> String {
+    ((value * 32767.0).round() as i16).to_string()
+}
+
 fn point_to_info(ca: u16, p: &iec104sim_core::data_point::DataPoint) -> ReceivedDataPointInfo {
     ReceivedDataPointInfo {
         ioa: p.ioa,
@@ -828,7 +834,10 @@ fn point_to_info(ca: u16, p: &iec104sim_core::data_point::DataPoint) -> Received
         asdu_type: p.asdu_type.name().to_string(),
         asdu_type_id: p.asdu_type as u8,
         category: p.asdu_type.category().name().to_string(),
-        value: p.value.display(),
+        value: match &p.value {
+            iec104sim_core::data_point::DataPointValue::Normalized { value } => normalized_raw_string(*value),
+            _ => p.value.display(),
+        },
         quality_ov: p.quality.ov,
         quality_bl: p.quality.bl,
         quality_sb: p.quality.sb,
@@ -1145,5 +1154,14 @@ mod tests {
         assert_eq!(info.key_file, "/etc/client-key.pem");
         assert!(info.accept_invalid_certs);
         assert_eq!(info.tls_version, "tls13_only");
+    }
+
+    #[test]
+    fn normalized_raw_string_recovers_wire_nva() {
+        // 主站把线上 NVA 解码为 `nva as f32 / 32767.0`；显示必须无损还原成原始整数。
+        for nva in [-32768i16, -32767, -16384, -1, 0, 1, 16384, 32766, 32767] {
+            let decoded = nva as f32 / 32767.0;
+            assert_eq!(super::normalized_raw_string(decoded), nva.to_string(), "nva={}", nva);
+        }
     }
 }
