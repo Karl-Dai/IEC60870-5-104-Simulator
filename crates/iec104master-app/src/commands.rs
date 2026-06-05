@@ -76,6 +76,56 @@ impl CreateConnectionRequest {
     }
 }
 
+/// Map the core TLS version policy to the string the frontend `<select>` uses.
+fn tls_version_str(p: TlsVersionPolicy) -> &'static str {
+    match p {
+        TlsVersionPolicy::Auto => "auto",
+        TlsVersionPolicy::Tls12Only => "tls12_only",
+        TlsVersionPolicy::Tls13Only => "tls13_only",
+    }
+}
+
+impl ConnectionInfo {
+    /// Single source of truth for building the DTO from a live connection's
+    /// config — used by both `create_connection` and `list_connections` so
+    /// the TLS paths/policy are echoed identically. Without this, the edit
+    /// dialog had no way to read a connection's real cert paths and fell back
+    /// to a shared localStorage blob, making cert-path edits appear to revert.
+    fn from_config(
+        id: String,
+        state: String,
+        common_addresses: Vec<u16>,
+        cfg: &MasterConfig,
+        timing_corrections: Vec<iec104sim_core::timing::TimingCorrection>,
+    ) -> Self {
+        ConnectionInfo {
+            id,
+            target_address: cfg.target_address.clone(),
+            port: cfg.port,
+            common_addresses,
+            state,
+            use_tls: cfg.tls.enabled,
+            ca_file: cfg.tls.ca_file.clone(),
+            cert_file: cfg.tls.cert_file.clone(),
+            key_file: cfg.tls.key_file.clone(),
+            accept_invalid_certs: cfg.tls.accept_invalid_certs,
+            tls_version: tls_version_str(cfg.tls.version).to_string(),
+            t0: cfg.t0,
+            t1: cfg.t1,
+            t2: cfg.t2,
+            t3: cfg.t3,
+            k: cfg.k,
+            w: cfg.w,
+            default_qoi: cfg.default_qoi,
+            default_qcc: cfg.default_qcc,
+            interrogate_period_s: cfg.interrogate_period_s,
+            counter_interrogate_period_s: cfg.counter_interrogate_period_s,
+            timing_corrections,
+            broadcast_address: cfg.broadcast_address,
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn create_connection(
     state: State<'_, AppState>,
@@ -164,27 +214,13 @@ pub async fn create_connection(
         }
     });
 
-    let use_tls = config.tls.enabled;
-    let info = ConnectionInfo {
-        id: id.clone(),
-        target_address: config.target_address,
-        port: config.port,
-        common_addresses: common_addresses.clone(),
-        state: format!("{:?}", connection.state()),
-        use_tls,
-        t0: config.t0,
-        t1: config.t1,
-        t2: config.t2,
-        t3: config.t3,
-        k: config.k,
-        w: config.w,
-        default_qoi: config.default_qoi,
-        default_qcc: config.default_qcc,
-        interrogate_period_s: config.interrogate_period_s,
-        counter_interrogate_period_s: config.counter_interrogate_period_s,
+    let info = ConnectionInfo::from_config(
+        id.clone(),
+        format!("{:?}", connection.state()),
+        common_addresses.clone(),
+        &config,
         timing_corrections,
-        broadcast_address: config.broadcast_address,
-    };
+    );
 
     state.connections.write().await.insert(
         id.clone(),
@@ -299,29 +335,15 @@ pub async fn list_connections(
     let mut result = Vec::new();
 
     for (id, conn_state) in connections.iter() {
-        let cfg = &conn_state.connection.config;
-        result.push(ConnectionInfo {
-            id: id.clone(),
-            target_address: cfg.target_address.clone(),
-            port: cfg.port,
-            common_addresses: conn_state.common_addresses.clone(),
-            state: format!("{:?}", conn_state.connection.state()),
-            use_tls: cfg.tls.enabled,
-            t0: cfg.t0,
-            t1: cfg.t1,
-            t2: cfg.t2,
-            t3: cfg.t3,
-            k: cfg.k,
-            w: cfg.w,
-            default_qoi: cfg.default_qoi,
-            default_qcc: cfg.default_qcc,
-            interrogate_period_s: cfg.interrogate_period_s,
-            counter_interrogate_period_s: cfg.counter_interrogate_period_s,
-            // Live connections already hold normalized config; no corrections
-            // to report on a steady-state list.
-            timing_corrections: Vec::new(),
-            broadcast_address: cfg.broadcast_address,
-        });
+        // Live connections already hold normalized config; no timing
+        // corrections to report on a steady-state list.
+        result.push(ConnectionInfo::from_config(
+            id.clone(),
+            format!("{:?}", conn_state.connection.state()),
+            conn_state.common_addresses.clone(),
+            &conn_state.connection.config,
+            Vec::new(),
+        ));
     }
 
     Ok(result)
@@ -972,6 +994,12 @@ pub async fn save_config(
                 default_qcc: cfg.default_qcc,
                 interrogate_period_s: cfg.interrogate_period_s,
                 counter_interrogate_period_s: cfg.counter_interrogate_period_s,
+                use_tls: cfg.tls.enabled,
+                ca_file: cfg.tls.ca_file.clone(),
+                cert_file: cfg.tls.cert_file.clone(),
+                key_file: cfg.tls.key_file.clone(),
+                accept_invalid_certs: cfg.tls.accept_invalid_certs,
+                tls_version: tls_version_str(cfg.tls.version).to_string(),
                 broadcast_address: Some(cfg.broadcast_address),
                 snapshot,
             });
@@ -1002,12 +1030,12 @@ pub async fn load_config(
             common_addresses: Some(conn.common_addresses),
             common_address: None,
             timeout_ms: Some(conn.timeout_ms),
-            use_tls: None,
-            ca_file: None,
-            cert_file: None,
-            key_file: None,
-            accept_invalid_certs: None,
-            tls_version: None,
+            use_tls: Some(conn.use_tls),
+            ca_file: Some(conn.ca_file),
+            cert_file: Some(conn.cert_file),
+            key_file: Some(conn.key_file),
+            accept_invalid_certs: Some(conn.accept_invalid_certs),
+            tls_version: Some(conn.tls_version),
             t0: Some(conn.t0),
             t1: Some(conn.t1),
             t2: Some(conn.t2),
@@ -1077,5 +1105,46 @@ mod tests {
         let json = r#"{"target_address":"127.0.0.1","port":2404,"common_addresses":[1]}"#;
         let req: CreateConnectionRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.broadcast_address, None);
+    }
+
+    #[test]
+    fn tls_version_str_maps_all_variants() {
+        assert_eq!(tls_version_str(TlsVersionPolicy::Auto), "auto");
+        assert_eq!(tls_version_str(TlsVersionPolicy::Tls12Only), "tls12_only");
+        assert_eq!(tls_version_str(TlsVersionPolicy::Tls13Only), "tls13_only");
+    }
+
+    // Regression: ConnectionInfo must echo the TLS file paths/policy so the
+    // edit dialog reads them from the connection itself. Before this, the DTO
+    // dropped them and cert-path edits silently reverted on reopen.
+    #[test]
+    fn connection_info_echoes_tls_paths() {
+        let cfg = MasterConfig {
+            target_address: "10.0.0.1".into(),
+            port: 2404,
+            tls: TlsConfig {
+                enabled: true,
+                ca_file: "/etc/ca.pem".into(),
+                cert_file: "/etc/client.pem".into(),
+                key_file: "/etc/client-key.pem".into(),
+                accept_invalid_certs: true,
+                version: TlsVersionPolicy::Tls13Only,
+                ..Default::default()
+            },
+            ..MasterConfig::default()
+        };
+        let info = ConnectionInfo::from_config(
+            "conn_1".into(),
+            "Disconnected".into(),
+            vec![1, 2],
+            &cfg,
+            Vec::new(),
+        );
+        assert!(info.use_tls);
+        assert_eq!(info.ca_file, "/etc/ca.pem");
+        assert_eq!(info.cert_file, "/etc/client.pem");
+        assert_eq!(info.key_file, "/etc/client-key.pem");
+        assert!(info.accept_invalid_certs);
+        assert_eq!(info.tls_version, "tls13_only");
     }
 }

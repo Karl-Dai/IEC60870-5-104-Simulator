@@ -56,6 +56,7 @@ const dict: DictShape = {
     tlsAuto: 'Auto',
     tls12: 'TLS 1.2 only',
     tls13: 'TLS 1.3 only',
+    tls13WinWarn: "This Windows build's SChannel may not support TLS 1.3 (Windows 10 / Server 2019 and earlier do not; requires Windows 11 / Server 2022+). If the handshake fails, switch to Auto or TLS 1.2 only.",
     caFile: 'CA Certificate Path',
     certFile: 'Client Certificate Path',
     keyFile: 'Client Key Path',

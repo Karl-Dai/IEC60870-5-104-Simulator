@@ -114,6 +114,13 @@ const form = ref<NewConnForm>(loadForm())
 // recreating preserves the ergonomics with one extra round-trip.)
 const editingConnId = ref<string | null>(null)
 
+// WebView2 on Windows reports "Windows NT 10.0" for both Win10 and Win11
+// (Microsoft never bumped the UA token), so we can't tell the versions apart —
+// surface the TLS 1.3 caveat on all Windows. Harmless on Win11/Server 2022+
+// where SChannel does support it; critical on Win10/Server 2019 where it
+// silently fails the handshake. macOS/Linux backends do support TLS 1.3.
+const isWindows = /Windows/i.test(navigator.userAgent)
+
 watch(form, (v) => {
   // Don't pollute the persisted "last new-connection" form with edit-time
   // values from another connection — only save when the user is filling
@@ -145,15 +152,22 @@ async function openEditConnection(connId: string) {
       return
     }
     editingConnId.value = connId
-    // backend ConnectionInfo doesn't carry TLS file paths — carry them over
-    // from the persisted "new connection" form so the user doesn't have to
-    // retype every cert path when editing.
+    // Pre-fill TLS cert paths from the connection itself (backend is the
+    // authoritative source). Fall back to the persisted "new connection" form
+    // only when the backend value is empty (e.g. TLS-disabled connection), so
+    // toggling TLS on during edit still shows sensible default paths.
+    const lf = loadForm()
     form.value = {
-      ...loadForm(),
+      ...lf,
       target_address: conn.target_address,
       port: conn.port,
       common_addresses_text: conn.common_addresses.join(', '),
       use_tls: conn.use_tls,
+      ca_file: conn.ca_file || lf.ca_file,
+      cert_file: conn.cert_file || lf.cert_file,
+      key_file: conn.key_file || lf.key_file,
+      accept_invalid_certs: conn.accept_invalid_certs ?? lf.accept_invalid_certs,
+      tls_version: conn.tls_version || lf.tls_version,
       t0: conn.t0,
       t1: conn.t1,
       t2: conn.t2,
@@ -345,6 +359,9 @@ defineExpose({ openEditConnection, openNew })
                 <option value="tls12_only">{{ t('newConn.tls12') }}</option>
                 <option value="tls13_only">{{ t('newConn.tls13') }}</option>
               </select>
+              <span v-if="form.tls_version === 'tls13_only' && isWindows" class="tls13-warn">
+                {{ t('newConn.tls13WinWarn') }}
+              </span>
             </label>
             <label class="form-label">
               {{ t('newConn.caFile') }}
@@ -440,6 +457,16 @@ defineExpose({ openEditConnection, openNew })
   font-size: 11px;
   color: var(--c-overlay0);
   margin-top: 2px;
+}
+.tls13-warn {
+  margin-top: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--c-yellow, var(--c-text));
+  background: color-mix(in srgb, var(--c-yellow, var(--c-surface1)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c-yellow, var(--c-surface1)) 35%, transparent);
+  border-radius: 4px;
 }
 .tls-toggle {
   padding-top: 4px;

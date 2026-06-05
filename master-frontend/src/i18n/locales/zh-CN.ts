@@ -54,6 +54,7 @@ export type DictShape = {
     tlsAuto: string
     tls12: string
     tls13: string
+    tls13WinWarn: string
     caFile: string
     certFile: string
     keyFile: string
@@ -299,6 +300,7 @@ const dict: DictShape = {
     tlsAuto: '自动',
     tls12: '仅 TLS 1.2',
     tls13: '仅 TLS 1.3',
+    tls13WinWarn: '当前 Windows 的 SChannel 可能不支持 TLS 1.3(Windows 10/Server 2019 及更早均不支持,需 Windows 11/Server 2022+)。若握手失败,请改用「自动」或「仅 TLS 1.2」。',
     caFile: 'CA 证书路径',
     certFile: '客户端证书路径',
     keyFile: '客户端密钥路径',

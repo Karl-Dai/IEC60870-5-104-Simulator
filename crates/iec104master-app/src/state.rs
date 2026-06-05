@@ -51,6 +51,21 @@ pub struct ConnectionInfo {
     pub common_addresses: Vec<u16>,
     pub state: String,
     pub use_tls: bool,
+    // Echo back the TLS file paths / policy so the edit dialog can pre-fill
+    // from the connection itself (the authoritative source) instead of a
+    // shared localStorage blob — otherwise edits to a cert path silently
+    // revert on reopen and multiple connections clobber each other.
+    #[serde(default)]
+    pub ca_file: String,
+    #[serde(default)]
+    pub cert_file: String,
+    #[serde(default)]
+    pub key_file: String,
+    #[serde(default)]
+    pub accept_invalid_certs: bool,
+    /// "auto" | "tls12_only" | "tls13_only" (matches the frontend select).
+    #[serde(default)]
+    pub tls_version: String,
     // Echo back the protocol parameters so the frontend can pre-fill the
     // edit dialog without re-parsing the persisted form state.
     pub t0: u32,

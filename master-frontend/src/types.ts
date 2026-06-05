@@ -12,6 +12,14 @@ export interface ConnectionInfo {
   common_addresses: number[]
   state: string
   use_tls: boolean
+  /** TLS file paths / policy echoed back from the backend (authoritative
+   *  source), so the edit dialog pre-fills a connection's real cert paths
+   *  instead of a shared localStorage blob. Empty when TLS is disabled. */
+  ca_file: string
+  cert_file: string
+  key_file: string
+  accept_invalid_certs: boolean
+  tls_version: 'auto' | 'tls12_only' | 'tls13_only'
   /** IEC 60870-5-104 protocol parameters echoed back from the backend so the
    *  edit dialog can pre-fill without re-parsing local form state. */
   t0: number
