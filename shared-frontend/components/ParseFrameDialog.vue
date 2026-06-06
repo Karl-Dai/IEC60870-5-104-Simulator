@@ -99,7 +99,7 @@ function formatValue(obj: ParsedObject): string {
     case 'bitstring':        return `0x${(v.value as number).toString(16).toUpperCase().padStart(8, '0')}`
     case 'normalized':       return (v.value as number).toFixed(4)
     case 'scaled':           return String(v.value)
-    case 'short_float':      return (v.value as number).toFixed(3)
+    case 'short_float':      return (v.value as number).toFixed(6)
     case 'integrated_total': {
       let s = String(v.value)
       if (v.carry) s += ' [C]'

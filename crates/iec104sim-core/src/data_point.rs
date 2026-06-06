@@ -58,7 +58,7 @@ impl DataPointValue {
             Self::Bitstring { value } => format!("0x{:08X}", value),
             Self::Normalized { value } => format!("{:.4}", value),
             Self::Scaled { value } => format!("{}", value),
-            Self::ShortFloat { value } => format!("{:.3}", value),
+            Self::ShortFloat { value } => format!("{:.6}", value),
             Self::IntegratedTotal { value, carry, sequence } => {
                 let mut s = format!("{}", value);
                 if *carry { s.push_str(" [C]"); }
@@ -282,7 +282,7 @@ mod tests {
         assert_eq!(DataPointValue::SinglePoint { value: true }.display(), "ON");
         assert_eq!(DataPointValue::SinglePoint { value: false }.display(), "OFF");
         assert_eq!(DataPointValue::DoublePoint { value: 2 }.display(), "ON");
-        assert_eq!(DataPointValue::ShortFloat { value: 25.123 }.display(), "25.123");
+        assert_eq!(DataPointValue::ShortFloat { value: 25.125 }.display(), "25.125000");
         assert_eq!(DataPointValue::Bitstring { value: 0xFF00 }.display(), "0x0000FF00");
     }
 
