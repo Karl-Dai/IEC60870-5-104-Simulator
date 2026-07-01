@@ -87,14 +87,27 @@ describe('DataPointTable 子站数据表', () => {
     wrapper.unmount()
   })
 
+  it('首批加载不逐点高亮(避免 N 个 setTimeout 定时器风暴)', async () => {
+    // 切站后 dataMap 为空,首批返回的全部点都是"新点"。这些不是值变化,
+    // 不应触发高亮——否则 2000 点/类型时会瞬间挂起数千个 3s setTimeout。
+    invokeMock.mockResolvedValue({ points: [A, B, C], seq: 1, total_count: 3 })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+
+    const vm = wrapper.vm as unknown as { changedKeys: Set<string>; displayPoints: unknown[] }
+    expect(vm.displayPoints.length).toBe(3) // 数据已加载
+    expect(vm.changedKeys.size).toBe(0) // 但无一被标记高亮
+    wrapper.unmount()
+  })
+
   it('8.2 仅值变化的点位被标记高亮', async () => {
-    // 首批:全部新点(都会闪一次,符合预期)
+    // 首批:全部新点(首批不闪,见上一用例)
     invokeMock.mockResolvedValueOnce({ points: [A, B, C], seq: 1, total_count: 3 })
     const { wrapper, refs } = mountTable()
     await selectStation(refs)
 
     const vm = wrapper.vm as unknown as { changedKeys: Set<string> }
-    vm.changedKeys.clear() // 模拟首批高亮已过期
+    vm.changedKeys.clear() // 与增量隔离(首批本就不闪)
 
     // 增量:仅 B 的值从 '0' -> '1'
     const Bchanged = dp(2, 'M_SP_NA_1', '单点 (SP)', '1')

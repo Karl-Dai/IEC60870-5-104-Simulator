@@ -119,10 +119,13 @@ function markChanged(key: string) {
 // 用后端返回的完整列表替换 dataMap，避免删除/重建 server 等场景下
 // 旧条目残留累加（前端 server_id 复用时 watcher 不触发 reset）。
 // Merge one incremental point into dataMap, flashing it if the value moved.
-function mergePoint(p: DataPointInfo) {
+// `flashNew` 控制"首次出现的点"是否高亮:切站后的首批加载,全部点都是新点
+// 但并非值变化,不应逐点挂 3s setTimeout(2000 点/类型时会瞬时数千个定时器,
+// 拖垮前端)。增量轮询中 flashNew=true,新增点仍会闪。
+function mergePoint(p: DataPointInfo, flashNew: boolean) {
   const key = pointKey(p.ioa, p.asdu_type)
   const old = dataMap.get(key)
-  if (!old || old.value !== p.value) markChanged(key)
+  if (old ? old.value !== p.value : flashNew) markChanged(key)
   dataMap.set(key, p)
 }
 
@@ -139,12 +142,14 @@ async function loadDataPoints() {
   if (loadInFlight) return
   loadInFlight = true
   try {
+    // 首批加载(切站后 dataMap 空)不给新点挂高亮,避免定时器风暴。
+    const initialLoad = dataMap.size === 0
     const resp = await invoke<IncrementalDataResponse>('list_data_points_since', {
       serverId: srvId,
       commonAddress: ca,
       sinceSeq: lastSeq,
     })
-    for (const p of resp.points) mergePoint(p)
+    for (const p of resp.points) mergePoint(p, !initialLoad)
     lastSeq = resp.seq
     let changed = resp.points.length > 0
 
@@ -152,6 +157,8 @@ async function loadDataPoints() {
       // A point was removed — rebuild from scratch, diffing against the
       // previous cache so unchanged rows do not all flash.
       const prev = dataMap
+      // 若上一份缓存本就为空(首批即走 resync),新点同样不闪。
+      const flashNew = prev.size > 0
       dataMap = new Map()
       const full = await invoke<IncrementalDataResponse>('list_data_points_since', {
         serverId: srvId,
@@ -161,7 +168,7 @@ async function loadDataPoints() {
       for (const p of full.points) {
         const key = pointKey(p.ioa, p.asdu_type)
         const old = prev.get(key)
-        if (!old || old.value !== p.value) markChanged(key)
+        if (old ? old.value !== p.value : flashNew) markChanged(key)
         dataMap.set(key, p)
       }
       lastSeq = full.seq
