@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, shallowRef, computed, inject, watch, onMounted, onUnmounted, type Ref } from 'vue'
+import { ref, shallowRef, computed, inject, watch, nextTick, onMounted, onUnmounted, type Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { LogEntry } from '../types'
 import { useI18n } from '@shared/i18n'
@@ -32,10 +32,57 @@ function onLogContextMenu(e: MouseEvent, log: LogEntry) {
 // shallowRef: 日志条目可达数千行，deep ref 在每次 invoke 全替换时
 // 会重建所有 Proxy，触发 v-for diff 全量重渲染（视觉上一闪一闪）。
 const logs = shallowRef<LogEntry[]>([])
-// 倒序：最新条目浮到顶部，与主站 LogPanel 行为对齐。
-const displayLogs = computed(() => logs.value.slice().reverse())
+// 倒序：最新条目浮到顶部，与主站 LogPanel 行为对齐。每项携带稳定 key
+// (= 原数组正向下标),供虚拟滚动切片后仍能稳定 diff。
+const displayLogs = computed(() => {
+  const arr = logs.value
+  const n = arr.length
+  const out: { log: LogEntry; key: number }[] = new Array(n)
+  for (let i = 0; i < n; i++) out[i] = { log: arr[n - 1 - i], key: n - 1 - i }
+  return out
+})
 // 折叠栏状态点:有报文流过为绿,空为暗灰。
 const hasLogs = computed(() => logs.value.length > 0)
+
+// === 虚拟滚动(与 DataPointTable 同构)===
+// 日志上限 10000 条,一次性渲染 40000 个 DOM 节点会卡;仅渲染可视窗口的行。
+// 依赖固定行高:模板/样式强制单行(nowrap + ellipsis + table-layout:fixed)。
+// 25 = line-height 16 + 上下 padding 各 4 + 底边框 1(须与实际渲染行高一致,
+// 否则累积漂移导致滚动错位)。
+const ROW_HEIGHT = 25
+const OVERSCAN = 12
+const scrollContainer = ref<HTMLDivElement | null>(null)
+const scrollTop = ref(0)
+const containerHeight = ref(300)
+
+const totalHeight = computed(() => displayLogs.value.length * ROW_HEIGHT)
+const visibleStart = computed(() => Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN))
+const visibleEnd = computed(() => {
+  const count = Math.ceil(containerHeight.value / ROW_HEIGHT) + OVERSCAN * 2
+  return Math.min(displayLogs.value.length, visibleStart.value + count)
+})
+const visibleRows = computed(() => displayLogs.value.slice(visibleStart.value, visibleEnd.value))
+const offsetY = computed(() => visibleStart.value * ROW_HEIGHT)
+const bottomSpacer = computed(() =>
+  Math.max(0, totalHeight.value - offsetY.value - visibleRows.value.length * ROW_HEIGHT))
+
+// 把滚动事件合并到每帧一次,避免频繁触发虚拟滚动 computed。
+let scrollRaf = 0
+function onScroll(e: Event) {
+  const el = e.target as HTMLElement
+  if (scrollRaf) return
+  scrollRaf = requestAnimationFrame(() => {
+    scrollRaf = 0
+    scrollTop.value = el.scrollTop
+    containerHeight.value = el.clientHeight
+  })
+}
+
+// 展开面板后测量滚动容器高度(初次为 fallback 值)。
+function measureContainer() {
+  const el = scrollContainer.value
+  if (el) containerHeight.value = el.clientHeight
+}
 const isLoading = ref(false)
 const error = ref<string | null>(null)
 let refreshTimer: number | null = null
@@ -153,6 +200,8 @@ watch(() => props.expanded, async (expanded) => {
   if (expanded) {
     if (selectedServerId.value) await loadLogs()
     startAutoRefresh()
+    await nextTick()
+    measureContainer() // 面板刚展开,量取滚动容器可视高度
   } else {
     stopAutoRefresh()
   }
@@ -170,10 +219,15 @@ onMounted(async () => {
   if (props.expanded && selectedServerId.value) {
     await loadLogs()
     startAutoRefresh()
+    await nextTick()
+    measureContainer()
   }
 })
 
-onUnmounted(() => stopAutoRefresh())
+onUnmounted(() => {
+  stopAutoRefresh()
+  if (scrollRaf) cancelAnimationFrame(scrollRaf)
+})
 </script>
 
 <template>
@@ -189,7 +243,7 @@ onUnmounted(() => stopAutoRefresh())
       </div>
     </div>
 
-    <div v-if="expanded" class="log-body">
+    <div v-if="expanded" ref="scrollContainer" class="log-body" @scroll="onScroll">
       <div v-if="isLoading" class="log-loading">{{ t('log.loading') }}</div>
       <div v-else-if="!selectedServerId" class="log-empty">{{ t('log.chooseServer') }}</div>
       <div v-else-if="logs.length === 0" class="log-empty">{{ t('log.noLogs') }}</div>
@@ -203,14 +257,21 @@ onUnmounted(() => stopAutoRefresh())
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(log, idx) in displayLogs" :key="logs.length - 1 - idx"
-              :class="{ 'log-row-parsable': !!log.raw_bytes && log.raw_bytes.length > 0 }"
-              :title="log.raw_bytes && log.raw_bytes.length ? t('toolbar.parseFrameInLog') : ''"
-              @contextmenu="onLogContextMenu($event, log)">
-            <td class="col-time">{{ formatTimestamp(log.timestamp) }}</td>
-            <td :class="['col-dir', log.direction.toLowerCase()]">{{ log.direction }}</td>
-            <td class="col-frame">{{ formatFrameLabel(log.frame_label) }}</td>
-            <td class="col-detail">{{ formatDetail(log) }}</td>
+          <!-- 虚拟滚动:上/下 spacer 行撑出完整滚动高度,仅渲染可视窗口的行。 -->
+          <tr v-if="offsetY > 0" class="log-spacer" aria-hidden="true">
+            <td colspan="4" :style="{ height: offsetY + 'px', padding: 0 }"></td>
+          </tr>
+          <tr v-for="row in visibleRows" :key="row.key"
+              :class="{ 'log-row-parsable': !!row.log.raw_bytes && row.log.raw_bytes.length > 0 }"
+              :title="row.log.raw_bytes && row.log.raw_bytes.length ? t('toolbar.parseFrameInLog') : ''"
+              @contextmenu="onLogContextMenu($event, row.log)">
+            <td class="col-time">{{ formatTimestamp(row.log.timestamp) }}</td>
+            <td :class="['col-dir', row.log.direction.toLowerCase()]">{{ row.log.direction }}</td>
+            <td class="col-frame">{{ formatFrameLabel(row.log.frame_label) }}</td>
+            <td class="col-detail" :title="formatDetail(row.log)">{{ formatDetail(row.log) }}</td>
+          </tr>
+          <tr v-if="bottomSpacer > 0" class="log-spacer" aria-hidden="true">
+            <td colspan="4" :style="{ height: bottomSpacer + 'px', padding: 0 }"></td>
           </tr>
         </tbody>
       </table>
@@ -293,6 +354,8 @@ onUnmounted(() => stopAutoRefresh())
   border-collapse: collapse;
   font-size: 12px;
   font-family: var(--font-mono);
+  /* 固定布局:配合虚拟滚动锁定列宽与单行行高,防止可视行内容差异导致列抖动。 */
+  table-layout: fixed;
 }
 
 .log-table th,
@@ -300,6 +363,16 @@ onUnmounted(() => stopAutoRefresh())
   padding: 4px 10px;
   text-align: left;
   border-bottom: 1px solid var(--c-base);
+  /* 单行 + 溢出省略:保证每行等高(虚拟滚动 ROW_HEIGHT 前提)。 */
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 虚拟滚动上/下占位行:纯撑高,无边框/交互。 */
+.log-spacer td {
+  border-bottom: none;
 }
 
 .log-table th {
