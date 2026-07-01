@@ -809,12 +809,17 @@ pub async fn list_data_points(
     common_address: u16,
     _category: Option<String>,
 ) -> Result<Vec<DataPointInfo>, String> {
-    let servers = state.servers.read().await;
-    let srv = servers
-        .get(&server_id)
-        .ok_or_else(|| format!("server {} not found", server_id))?;
-
-    let stations = srv.server.stations.read().await;
+    // 仅在极短时间内持有全局 servers 锁:克隆该服务器的 stations 句柄(Arc)后立即释放,
+    // 避免把下面 O(N) 的 def_map 构建与序列化压在全局锁内,拖住 start_server/stop_server
+    // 等写操作(它们需要 servers 的写锁)。
+    let stations_arc = {
+        let servers = state.servers.read().await;
+        let srv = servers
+            .get(&server_id)
+            .ok_or_else(|| format!("server {} not found", server_id))?;
+        srv.server.stations.clone()
+    };
+    let stations = stations_arc.read().await;
     let station = stations
         .get(&common_address)
         .ok_or_else(|| format!("station CA={} not found", common_address))?;
@@ -846,12 +851,16 @@ pub async fn list_data_points_since(
     common_address: u16,
     since_seq: u64,
 ) -> Result<IncrementalDataResponse, String> {
-    let servers = state.servers.read().await;
-    let srv = servers
-        .get(&server_id)
-        .ok_or_else(|| format!("server {} not found", server_id))?;
-
-    let stations = srv.server.stations.read().await;
+    // 同 list_data_points:短暂持锁克隆 stations 句柄后释放,O(N) 的 changed_since
+    // 序列化在全局锁外进行,不阻塞 start_server/stop_server 的写锁。
+    let stations_arc = {
+        let servers = state.servers.read().await;
+        let srv = servers
+            .get(&server_id)
+            .ok_or_else(|| format!("server {} not found", server_id))?;
+        srv.server.stations.clone()
+    };
+    let stations = stations_arc.read().await;
     let station = stations
         .get(&common_address)
         .ok_or_else(|| format!("station CA={} not found", common_address))?;
@@ -883,11 +892,16 @@ pub async fn get_communication_logs(
     state: State<'_, AppState>,
     server_id: String,
 ) -> Result<Vec<LogEntry>, String> {
-    let servers = state.servers.read().await;
-    let srv = servers
-        .get(&server_id)
-        .ok_or_else(|| format!("server {} not found", server_id))?;
-    Ok(srv.log_collector.get_all().await)
+    // 短暂持锁克隆 log_collector 句柄后释放:日志可达上万条,get_all 的克隆 + 序列化
+    // 不应压在全局 servers 锁内(该命令每 2s 被日志面板轮询)。
+    let log_collector = {
+        let servers = state.servers.read().await;
+        let srv = servers
+            .get(&server_id)
+            .ok_or_else(|| format!("server {} not found", server_id))?;
+        srv.log_collector.clone()
+    };
+    Ok(log_collector.get_all().await)
 }
 
 #[tauri::command]
