@@ -835,6 +835,43 @@ pub async fn list_data_points(
     Ok(result)
 }
 
+/// 单点查询:按 (server, CA, IOA, asdu_type) 返回一个点的详情,或 `None`。
+/// 替代 ValuePanel 选点时全量拉取 `list_data_points` 再前端 `find` ——
+/// 大点位场景(上万点)那样单次序列化耗时数百 ms 且压着全局锁。
+/// 与 #22 一致:短暂持锁克隆 stations 句柄后释放,再做查询。
+#[tauri::command]
+pub async fn get_data_point(
+    state: State<'_, AppState>,
+    server_id: String,
+    common_address: u16,
+    ioa: u32,
+    asdu_type: String,
+) -> Result<Option<DataPointInfo>, String> {
+    let ty = parse_asdu_type(&asdu_type)?;
+    let stations_arc = {
+        let servers = state.servers.read().await;
+        let srv = servers
+            .get(&server_id)
+            .ok_or_else(|| format!("server {} not found", server_id))?;
+        srv.server.stations.clone()
+    };
+    let stations = stations_arc.read().await;
+    let station = stations
+        .get(&common_address)
+        .ok_or_else(|| format!("station CA={} not found", common_address))?;
+
+    let Some(p) = station.data_points.get(ioa, ty) else {
+        return Ok(None);
+    };
+    // 只取该点对应的 def(若有),复用 data_point_to_info。
+    let def_map: std::collections::HashMap<(u32, AsduTypeId), &InformationObjectDef> =
+        station.object_defs.iter()
+            .filter(|d| d.ioa == ioa && d.asdu_type == ty)
+            .map(|d| ((d.ioa, d.asdu_type), d))
+            .collect();
+    Ok(Some(data_point_to_info(p, &def_map)))
+}
+
 /// Incremental variant of `list_data_points`: returns only points whose
 /// `update_seq` exceeds `since_seq`, so a polling UI transfers a handful of
 /// changed rows instead of the whole (potentially 80k-row) table each tick.

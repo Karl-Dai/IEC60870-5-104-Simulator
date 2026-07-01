@@ -68,13 +68,14 @@ watch(
       return
     }
     try {
-      const allPoints = await invoke<DataPointInfo[]>('list_data_points', {
+      // 单点查询:直接取该点详情,避免在大点位场景(上万点)全量拉取
+      // list_data_points 再 find(注释见下方 writeValue,单次耗时数百 ms)。
+      pointDetail.value = await invoke<DataPointInfo | null>('get_data_point', {
         serverId,
         commonAddress: ca,
+        ioa: points[0].ioa,
+        asduType: points[0].asdu_type,
       })
-      pointDetail.value = allPoints.find(
-        p => p.ioa === points[0].ioa && p.asdu_type === points[0].asdu_type,
-      ) ?? null
     } catch {
       pointDetail.value = null
     }

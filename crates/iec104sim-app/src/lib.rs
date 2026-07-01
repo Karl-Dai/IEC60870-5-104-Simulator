@@ -36,6 +36,7 @@ pub fn run() {
             commands::batch_update_data_points,
             commands::list_data_points,
             commands::list_data_points_since,
+            commands::get_data_point,
             // Log commands
             commands::get_communication_logs,
             commands::clear_communication_logs,

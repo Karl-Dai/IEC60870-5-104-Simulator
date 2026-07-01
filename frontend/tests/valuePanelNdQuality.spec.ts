@@ -24,7 +24,7 @@ function makeDetail(asdu_type: string): Detail {
 }
 
 async function mountSingle(detail: Detail) {
-  invokeMock.mockResolvedValue([detail]) // list_data_points 返回该点
+  invokeMock.mockResolvedValue(detail) // get_data_point 返回该点(单对象,非数组)
   const selectedPoints = ref([{ ioa: detail.ioa, asdu_type: detail.asdu_type, value: detail.value }])
   const w = mount(ValuePanel, {
     global: {
