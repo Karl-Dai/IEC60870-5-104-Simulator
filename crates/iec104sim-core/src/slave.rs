@@ -524,6 +524,9 @@ pub struct SlaveServer {
     pub protocol_timing: SharedProtocolTiming,
     state: ServerState,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// 与 `shutdown_flag` 搭配:stop() 置位标志后立即唤醒周期任务,
+    /// 使其无需等到下一个 `interval.tick()`(默认 2000ms)才退出。
+    shutdown_notify: Arc<tokio::sync::Notify>,
     server_handle: Option<tokio::task::JoinHandle<()>>,
     cyclic_handle: Option<tokio::task::JoinHandle<()>>,
     /// 按 (ca, ioa, asdu_type) 维护的周期变位任务句柄。每个点位独立启停;
@@ -543,6 +546,7 @@ impl SlaveServer {
             protocol_timing: Arc::new(RwLock::new(ProtocolTimingConfig::default())),
             state: ServerState::Stopped,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shutdown_notify: Arc::new(tokio::sync::Notify::new()),
             server_handle: None,
             cyclic_handle: None,
             point_mutation_handles: tokio::sync::Mutex::new(HashMap::new()),
@@ -715,6 +719,8 @@ impl SlaveServer {
 
         let shutdown_flag = self.shutdown_flag.clone();
         shutdown_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+        // 每次启动重建停止通知句柄,避免上一轮遗留的 permit 让新任务误退出。
+        self.shutdown_notify = Arc::new(tokio::sync::Notify::new());
         let stations = self.stations.clone();
         let log_collector = self.log_collector.clone();
         let is_tls = self.transport.tls.enabled;
@@ -729,6 +735,7 @@ impl SlaveServer {
         // Start cyclic background task.
         let cyclic_stations = self.stations.clone();
         let cyclic_flag = self.shutdown_flag.clone();
+        let cyclic_shutdown = self.shutdown_notify.clone();
         let cyclic_log = self.log_collector.clone();
         let cyclic_remote_ops = self.remote_ops.clone();
         let cyclic_handle = tokio::spawn(async move {
@@ -743,7 +750,12 @@ impl SlaveServer {
             let mut interval_ms = get_interval_ms().await;
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(interval_ms as u64));
             loop {
-                interval.tick().await;
+                // 竞速:正常按 interval 周期唤醒;stop() 触发时立即经 notify 唤醒退出,
+                // 不必干等到下一个 tick(否则 stop 会阻塞最长一个 interval,约 2s)。
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = cyclic_shutdown.notified() => break,
+                }
                 if cyclic_flag.load(std::sync::atomic::Ordering::SeqCst) { break; }
 
                 // Check if interval changed
@@ -963,6 +975,9 @@ impl SlaveServer {
     pub async fn stop(&mut self) -> Result<(), SlaveError> {
         if self.state == ServerState::Stopped { return Err(SlaveError::NotRunning); }
         self.shutdown_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        // 立即唤醒周期任务(否则它要等到下一个 interval tick 才检查退出标志,
+        // 而 stop_server 命令在此期间持有全局写锁 → 前端所有轮询 IPC 被冻结)。
+        self.shutdown_notify.notify_one();
         // Connect briefly to unblock listener.accept()
         let addr = format!("{}:{}", self.transport.bind_address, self.transport.port);
         let _ = tokio::net::TcpStream::connect(&addr).await;
@@ -2773,6 +2788,40 @@ mod tests {
         let station = Station::new(1, "站1");
         server.add_station(station).await.unwrap();
         assert!(server.add_station(Station::new(1, "重复")).await.is_err());
+    }
+
+    // 回归:停止服务器必须立即返回。周期传输任务过去只在 `interval.tick()`
+    // (默认 2000ms) 之后才检查退出标志,导致 stop() 干等到下一个 tick;
+    // 由于 stop_server 命令在此期间持有全局写锁,前端所有轮询 IPC 被冻结,
+    // 表现为"断开服务器前端响应超级慢"。stop() 应在毫秒级返回。
+    #[tokio::test]
+    async fn test_stop_returns_promptly_after_start() {
+        // 借一个空闲端口再释放,让 stop() 的自连接(用于唤醒 accept)可命中。
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let transport = SlaveTransportConfig {
+            bind_address: "127.0.0.1".to_string(),
+            port,
+            tls: SlaveTlsConfig::default(),
+        };
+        let mut server = SlaveServer::new(transport);
+        server.start().await.expect("start should succeed");
+
+        // 预热:让周期任务越过"立即触发"的首个 tick,park 在下一个 2s tick 上。
+        // 真实场景中服务器已运行一段时间,停止时任务正卡在 interval.tick() 等待。
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let t = std::time::Instant::now();
+        server.stop().await.expect("stop should succeed");
+        let elapsed = t.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "stop() 耗时 {:?},应 < 500ms(周期任务需能被立即唤醒退出,而非干等 2s 的 interval tick)",
+            elapsed
+        );
     }
 
     #[test]
