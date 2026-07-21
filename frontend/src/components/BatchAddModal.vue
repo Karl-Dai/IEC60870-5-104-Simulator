@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
-import { ASDU_TYPE_OPTIONS } from '../constants/asduTypes'
+import { ASDU_TYPE_OPTIONS, asduTypeIdOf } from '../constants/asduTypes'
 import type { DataPointInfo } from '../types'
 import {
   IOA_MAX,
@@ -24,6 +24,8 @@ interface Props {
   // current ASDU type — same-IOA collisions across different types are not
   // collisions, so we never need the full DataPointInfo, just (ioa, asdu_type).
   existingPoints: ReadonlyArray<Pick<DataPointInfo, 'ioa' | 'asdu_type'>>
+  /// 侧栏当前选中的分类(snake_case),用于收窄类型下拉;null = 不过滤。
+  category?: string | null
 }
 
 const props = defineProps<Props>()
@@ -32,9 +34,12 @@ const emit = defineEmits<{
   added: []
 }>()
 
-const ASDU_TYPES = computed(() =>
-  ASDU_TYPE_OPTIONS.map(o => ({ value: o.value, label: t(o.labelKey), typeId: o.typeId }))
-)
+const ASDU_TYPES = computed(() => {
+  const opts = props.category
+    ? ASDU_TYPE_OPTIONS.filter(o => o.category === props.category)
+    : ASDU_TYPE_OPTIONS
+  return opts.map(o => ({ value: o.value, label: t(o.labelKey), typeId: o.typeId }))
+})
 
 const startIoa = ref(0)
 const count = ref(10)
@@ -50,12 +55,16 @@ const isValid = computed(() => {
 
 // existingPoints arrives IOA-sorted from the parent and (ioa, asdu_type) is
 // unique upstream (DataPointTable's dataMap is keyed by that pair), so
-// filter alone is enough — no Set/sort needed.
-const existingSameTypeIoas = computed<number[]>(() =>
-  props.existingPoints
-    .filter(p => p.asdu_type === formAsduType.value)
-    .map(p => p.ioa),
-)
+// filter alone is enough — no Set/sort needed. 后端点位用显示名
+// ("M_SP_NA_1")而表单值是 PascalCase("MSpNa1"),须经 typeId 归一化比较,
+// 直接字符串相等永远不命中,冲突提示会整体失效。
+const existingSameTypeIoas = computed<number[]>(() => {
+  const wanted = asduTypeIdOf(formAsduType.value)
+  if (wanted === undefined) return []
+  return props.existingPoints
+    .filter(p => asduTypeIdOf(p.asdu_type) === wanted)
+    .map(p => p.ioa)
+})
 
 const existingRangesText = computed<string>(() =>
   compressRanges(existingSameTypeIoas.value),
@@ -106,7 +115,7 @@ watch(() => props.visible, (visible) => {
   if (visible) {
     startIoa.value = 0
     count.value = 10
-    formAsduType.value = 'MSpNa1'
+    formAsduType.value = ASDU_TYPES.value[0]?.value ?? 'MSpNa1'
     namePrefix.value = ''
     isSaving.value = false
   }

@@ -21,6 +21,7 @@ pub fn run() {
             commands::delete_server,
             commands::list_servers,
             commands::update_server_transport,
+            commands::list_bind_addresses,
             // Station commands
             commands::add_station,
             commands::remove_station,
@@ -36,6 +37,7 @@ pub fn run() {
             commands::set_data_point_quality,
             commands::batch_set_data_point_quality,
             commands::batch_update_data_points,
+            commands::batch_update_control_options,
             commands::list_data_points,
             commands::list_data_points_since,
             commands::get_data_point,

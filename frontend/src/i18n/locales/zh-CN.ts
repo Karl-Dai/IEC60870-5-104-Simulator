@@ -47,6 +47,8 @@ export type DictShape = {
   }
   newServer: {
     title: string
+    bindAddress: string
+    bindAddressHint: string
     portLabel: string
     initMode: string
     initZero: string
@@ -76,6 +78,8 @@ export type DictShape = {
     ctxDeleteStation: string
     ctxEditRuntimeParams: string
     connTooltip: string
+    confirmDeleteServer: string
+    confirmDeleteRunningServer: string
   }
   runtimeParams: {
     title: string
@@ -162,6 +166,7 @@ export type DictShape = {
     timestampCol: string
     deletePoint: string
     editPoint: string
+    editControlOptions: string
     startMutation: string
     stopMutation: string
     mutationPeriod: string
@@ -195,6 +200,22 @@ export type DictShape = {
     executionModeFlexible: string
     executionModeDirect: string
     executionModeSbo: string
+    quUnset: string
+    quNoDef: string
+    quShortPulse: string
+    quLongPulse: string
+    quPersistent: string
+    quCustom: string
+    quCustomRequired: string
+  }
+  controlOptions: {
+    title: string
+    applyQualifier: string
+    applySbo: string
+    mixedFamilyHint: string
+    qlHint: string
+    nothingToApply: string
+    apply: string
   }
   batchModal: {
     title: string
@@ -385,6 +406,7 @@ export type DictShape = {
     packingStrategy: string
     autoPacking: string
     syncTb: string
+    syncTbHint: string
     mutationSim: string
     randomPacing: string
     perSend: string
@@ -462,6 +484,8 @@ const dict: DictShape = {
   },
   newServer: {
     title: '新建服务器',
+    bindAddress: '绑定地址',
+    bindAddressHint: '0.0.0.0 = 监听所有网卡;可下拉选择本机网卡 IP 或手动输入。',
     portLabel: '端口号',
     initMode: '初始值',
     initZero: '全零',
@@ -491,6 +515,8 @@ const dict: DictShape = {
     ctxDeleteStation: '删除站',
     ctxEditRuntimeParams: '修改运行参数',
     connTooltip: '已连接 {n} 个客户端',
+    confirmDeleteServer: '确定删除该服务器?点位配置将一并移除。',
+    confirmDeleteRunningServer: '该服务器正在运行,删除将先停止服务并断开所有连接。确定删除?',
   },
   runtimeParams: {
     title: '修改运行参数',
@@ -577,6 +603,7 @@ const dict: DictShape = {
     timestampCol: '时间戳',
     deletePoint: '删除数据点',
     editPoint: '编辑点位配置',
+    editControlOptions: '修改遥控参数',
     startMutation: '启动周期变位',
     stopMutation: '停止周期变位',
     mutationPeriod: '周期',
@@ -610,6 +637,22 @@ const dict: DictShape = {
     executionModeFlexible: '宽松（兼容旧配置）',
     executionModeDirect: '仅执行（直接控制）',
     executionModeSbo: '选择后执行（SBO）',
+    quUnset: '不校验（接受任意 QU）',
+    quNoDef: '无附加定义（默认）',
+    quShortPulse: '短脉冲',
+    quLongPulse: '长脉冲',
+    quPersistent: '持续输出',
+    quCustom: '自定义',
+    quCustomRequired: '选择「自定义」后需填写 4..31 的 QU 数值。',
+  },
+  controlOptions: {
+    title: '批量修改遥控参数',
+    applyQualifier: '修改 QU/QL 限定词',
+    applySbo: '修改 S/E 执行模式',
+    mixedFamilyHint: '选中点位同时包含命令（QU）与设点（QL）两族,限定词语义不同,仅支持批量修改 S/E 执行模式。',
+    qlHint: '设点 QL:0..127。留空 = 不校验（接受任意值）。',
+    nothingToApply: '请先勾选要修改的项目。',
+    apply: '应用',
   },
   batchModal: {
     title: '批量添加数据点',
@@ -806,6 +849,7 @@ const dict: DictShape = {
     packingStrategy: '组包策略',
     autoPacking: '自动组包（连续 IOA 合并）',
     syncTb: '变位同步上送 TB（按分类）',
+    syncTbHint: '仅在变位自发上送时附加一帧对应 TB 时标报文,不改变点位声明的 ASDU 类型;TB 帧可在报文日志中查看。',
     mutationSim: '变位仿真',
     randomPacing: '随机变位节流',
     perSend: '每发送',

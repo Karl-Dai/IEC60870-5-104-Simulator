@@ -14,6 +14,10 @@ const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ (e: 'update:visible', v: boolean): void }>()
 
 const port = ref('2404')
+const bindAddress = ref('0.0.0.0')
+// 本机可选监听地址(0.0.0.0 / 回环 / 各网卡 IPv4),弹窗打开时从后端枚举;
+// 输入框配 datalist,既可下拉选择也可手动输入。
+const bindOptions = ref<string[]>(['0.0.0.0', '127.0.0.1'])
 const initMode = ref('zero')
 const count = ref(10)
 const useTls = ref(false)
@@ -24,6 +28,7 @@ const requireClientCert = ref(false)
 
 function reset() {
   port.value = '2404'
+  bindAddress.value = '0.0.0.0'
   initMode.value = 'zero'
   count.value = 10
   useTls.value = false
@@ -33,7 +38,20 @@ function reset() {
   requireClientCert.value = false
 }
 
-watch(() => props.visible, (v) => { if (v) reset() })
+async function loadBindOptions() {
+  try {
+    bindOptions.value = await invoke<string[]>('list_bind_addresses')
+  } catch {
+    // 枚举失败时保留默认(通配 + 回环),不阻塞创建流程
+  }
+}
+
+watch(() => props.visible, (v) => {
+  if (v) {
+    reset()
+    loadBindOptions()
+  }
+})
 
 function close() { emit('update:visible', false) }
 
@@ -50,6 +68,7 @@ async function submit() {
       : 10
     const info = await invoke<{ id: string }>('create_server', {
       request: {
+        bind_address: bindAddress.value.trim() || undefined,
         port: p,
         init_mode: initMode.value,
         count_per_category: c,
@@ -74,6 +93,14 @@ async function submit() {
     <div v-if="visible" class="modal-overlay dialog-blur" @mousedown.self="close">
       <div class="modal-box">
         <div class="modal-title">{{ t('newServer.title') }}</div>
+        <div class="modal-field">
+          <label>{{ t('newServer.bindAddress') }}</label>
+          <input v-model="bindAddress" type="text" list="bind-addr-options" placeholder="0.0.0.0" @keyup.enter="submit" />
+          <datalist id="bind-addr-options">
+            <option v-for="addr in bindOptions" :key="addr" :value="addr" />
+          </datalist>
+          <div class="field-hint">{{ t('newServer.bindAddressHint') }}</div>
+        </div>
         <div class="modal-field">
           <label>{{ t('newServer.portLabel') }}</label>
           <input v-model="port" type="number" min="1" max="65535" @keyup.enter="submit" />
@@ -157,6 +184,12 @@ async function submit() {
   font-size: 12px;
   color: var(--c-subtext0);
   margin-bottom: 6px;
+}
+.field-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--c-overlay0);
+  line-height: 1.4;
 }
 .modal-field input[type="number"],
 .modal-field input[type="text"] {

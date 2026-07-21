@@ -15,6 +15,9 @@ interface Props {
   serverId: string
   commonAddress: number
   point?: DataPointInfo | null
+  /// 侧栏当前选中的分类(snake_case)。新增时用于收窄类型下拉;
+  /// null/未传 = 不过滤(站点级 "All Points" 入口)。
+  category?: string | null
 }
 
 const props = defineProps<Props>()
@@ -23,16 +26,27 @@ const emit = defineEmits<{
   added: []
 }>()
 
-const ASDU_TYPES = computed(() =>
-  ASDU_TYPE_OPTIONS.map(o => ({ value: o.value, label: t(o.labelKey), typeId: o.typeId }))
-)
+const ASDU_TYPES = computed(() => {
+  // 编辑态类型锁定,不过滤以保证当前值可渲染;新增态按选中分类收窄。
+  const opts = isEditing.value || !props.category
+    ? ASDU_TYPE_OPTIONS
+    : ASDU_TYPE_OPTIONS.filter(o => o.category === props.category)
+  return opts.map(o => ({ value: o.value, label: t(o.labelKey), typeId: o.typeId }))
+})
+
+const IOA_MAX = 16777215
 
 const formIoa = ref<number | undefined>(undefined)
 const formAsduType = ref('MSpNa1')
 const formName = ref('')
 const formComment = ref('')
 const formQualifier = ref<number | undefined>(undefined)
-const formSbo = ref<boolean | undefined>(undefined)
+// S/E 执行模式(单选):flexible=兼容旧配置宽松接受 / direct=仅直接执行 / sbo=必须先选择
+type SeMode = 'flexible' | 'direct' | 'sbo'
+const seMode = ref<SeMode>('flexible')
+// QU 限定词(单/双/步命令):unset=不校验(None) / '0'..'3'=标准预设 / custom=自定义数值
+type QuMode = 'unset' | '0' | '1' | '2' | '3' | 'custom'
+const quMode = ref<QuMode>('unset')
 interface MappingTarget { common_address: number; ioa: number; asdu_type: string; name: string }
 const mappingTargets = ref<MappingTarget[]>([])
 const mappingKey = ref('')
@@ -40,7 +54,8 @@ const isSaving = ref(false)
 const isEditing = computed(() => Boolean(props.point))
 const isControlType = computed(() => formAsduType.value.startsWith('C'))
 const isBitstringType = computed(() => formAsduType.value.startsWith('CBo'))
-const qualifierMax = computed(() => formAsduType.value.startsWith('CSe') ? 127 : 31)
+// 设点命令携带 QL(0..127,自由数值);单/双/步命令携带 QU(0..31,有标准预设)。
+const isSetpointType = computed(() => formAsduType.value.startsWith('CSe'))
 
 function targetKey(target: Pick<MappingTarget, 'common_address' | 'ioa' | 'asdu_type'>) {
   return `${target.common_address}|${target.ioa}|${target.asdu_type}`
@@ -75,11 +90,17 @@ watch(() => props.visible, (visible) => {
     const point = props.point
     formIoa.value = point?.ioa
     const prevAsduType = formAsduType.value
-    formAsduType.value = point ? normalizeAsduType(point.asdu_type) : 'MSpNa1'
+    formAsduType.value = point
+      ? normalizeAsduType(point.asdu_type)
+      : (ASDU_TYPES.value[0]?.value ?? 'MSpNa1')
     formName.value = point?.name ?? ''
     formComment.value = point?.comment ?? ''
     formQualifier.value = point?.command_qualifier ?? undefined
-    formSbo.value = point?.select_before_operate ?? undefined
+    const q = point?.command_qualifier
+    quMode.value = q == null ? 'unset' : (q >= 0 && q <= 3 ? String(q) as QuMode : 'custom')
+    seMode.value = point?.select_before_operate == null
+      ? 'flexible'
+      : (point.select_before_operate ? 'sbo' : 'direct')
     mappingKey.value = point?.mapping_common_address != null
       && point.mapping_ioa != null
       && point.mapping_asdu_type
@@ -110,9 +131,36 @@ const mapping = computed(() => {
   }
 })
 
+// 提交时把 QU/QL 表单状态折算成后端的 command_qualifier(None=不校验)。
+function resolveQualifier(): number | null {
+  if (!isControlType.value || isBitstringType.value) return null
+  if (isSetpointType.value) {
+    return typeof formQualifier.value === 'number' ? formQualifier.value : null
+  }
+  if (quMode.value === 'unset') return null
+  if (quMode.value === 'custom') {
+    return typeof formQualifier.value === 'number' ? formQualifier.value : null
+  }
+  return Number(quMode.value)
+}
+
 async function handleConfirm() {
-  if (formIoa.value === undefined || formIoa.value < 0) {
+  // v-model.number 清空输入框后得到 '' 而非 undefined,非整数(1.5)也会通过
+  // 松散比较——须显式要求非负整数,否则后端 serde 报未本地化的原始错误。
+  if (
+    typeof formIoa.value !== 'number'
+    || !Number.isInteger(formIoa.value)
+    || formIoa.value < 0
+    || formIoa.value > IOA_MAX
+  ) {
     await showAlert(t('errors.invalidIoa'))
+    return
+  }
+  if (
+    isControlType.value && !isBitstringType.value && !isSetpointType.value
+    && quMode.value === 'custom' && typeof formQualifier.value !== 'number'
+  ) {
+    await showAlert(t('pointModal.quCustomRequired'))
     return
   }
   isSaving.value = true
@@ -120,13 +168,17 @@ async function handleConfirm() {
     const request = {
         server_id: props.serverId,
         common_address: props.commonAddress,
-        ioa: formIoa.value,
+        // 编辑态用原 IOA 作查找键,表单值经 new_ioa 改址;新增态直接用表单值。
+        ioa: isEditing.value ? props.point!.ioa : formIoa.value,
+        new_ioa: isEditing.value ? formIoa.value : null,
         asdu_type: formAsduType.value,
         name: formName.value || null,
         comment: formComment.value || null,
         mapping: mapping.value,
-        command_qualifier: isControlType.value && !isBitstringType.value && typeof formQualifier.value === 'number' ? formQualifier.value : null,
-        select_before_operate: isControlType.value && !isBitstringType.value ? formSbo.value ?? null : null,
+        command_qualifier: resolveQualifier(),
+        select_before_operate: isControlType.value && !isBitstringType.value
+          ? (seMode.value === 'flexible' ? null : seMode.value === 'sbo')
+          : null,
     }
     await invoke(isEditing.value ? 'update_data_point_definition' : 'add_data_point', { request })
     emit('added')
@@ -156,7 +208,7 @@ async function handleConfirm() {
               type="number"
               class="form-input"
               min="0"
-              :disabled="isEditing"
+              max="16777215"
               :placeholder="t('pointModal.ioaPlaceholder')"
               @keyup.enter="handleConfirm"
             />
@@ -182,18 +234,67 @@ async function handleConfirm() {
           </div>
 
           <template v-if="isControlType && !isBitstringType">
-            <div class="form-group">
+            <!-- 设点命令:QL 自由数值 0..127;单/双/步命令:QU 标准预设 + 自定义 -->
+            <div v-if="isSetpointType" class="form-group">
               <label class="form-label">{{ t('pointModal.qualifierLabel') }}</label>
-              <input v-model.number="formQualifier" type="number" class="form-input" min="0" :max="qualifierMax" :placeholder="`0..${qualifierMax}`" />
+              <input v-model.number="formQualifier" type="number" class="form-input" min="0" max="127" placeholder="0..127" />
+              <div class="form-hint">{{ t('pointModal.qualifierHint') }}</div>
+            </div>
+            <div v-else class="form-group">
+              <label class="form-label">{{ t('pointModal.qualifierLabel') }}</label>
+              <div class="radio-group">
+                <label class="radio-option">
+                  <input type="radio" v-model="quMode" value="unset" />
+                  <span>{{ t('pointModal.quUnset') }}</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" v-model="quMode" value="0" />
+                  <span>0 · {{ t('pointModal.quNoDef') }}</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" v-model="quMode" value="1" />
+                  <span>1 · {{ t('pointModal.quShortPulse') }}</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" v-model="quMode" value="2" />
+                  <span>2 · {{ t('pointModal.quLongPulse') }}</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" v-model="quMode" value="3" />
+                  <span>3 · {{ t('pointModal.quPersistent') }}</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" v-model="quMode" value="custom" />
+                  <span>{{ t('pointModal.quCustom') }}</span>
+                  <input
+                    v-model.number="formQualifier"
+                    type="number"
+                    class="form-input radio-inline-input"
+                    min="4"
+                    max="31"
+                    placeholder="4..31"
+                    :disabled="quMode !== 'custom'"
+                  />
+                </label>
+              </div>
               <div class="form-hint">{{ t('pointModal.qualifierHint') }}</div>
             </div>
             <div class="form-group">
               <label class="form-label">{{ t('pointModal.executionModeLabel') }}</label>
-              <select v-model="formSbo" class="form-select">
-                <option :value="undefined">{{ t('pointModal.executionModeFlexible') }}</option>
-                <option :value="false">{{ t('pointModal.executionModeDirect') }}</option>
-                <option :value="true">{{ t('pointModal.executionModeSbo') }}</option>
-              </select>
+              <div class="radio-group">
+                <label class="radio-option">
+                  <input type="radio" v-model="seMode" value="flexible" />
+                  <span>{{ t('pointModal.executionModeFlexible') }}</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" v-model="seMode" value="direct" />
+                  <span>{{ t('pointModal.executionModeDirect') }}</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" v-model="seMode" value="sbo" />
+                  <span>{{ t('pointModal.executionModeSbo') }}</span>
+                </label>
+              </div>
             </div>
           </template>
 
@@ -302,6 +403,40 @@ async function handleConfirm() {
 .form-select:focus {
   outline: none;
   border-color: var(--c-blue);
+}
+
+/* 禁用态必须与可编辑态视觉可区分(IOA 编辑曾因缺此样式被误判为 bug) */
+.form-input:disabled,
+.form-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--c-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.radio-option input[type='radio'] {
+  accent-color: var(--c-blue);
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.radio-inline-input {
+  width: 90px;
+  padding: 4px 8px;
+  font-size: 13px;
 }
 
 .form-hint {

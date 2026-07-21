@@ -7,6 +7,8 @@ import type { DataPointInfo, IncrementalDataResponse, PointMutationInfo, Mutatio
 import DataPointModal from './DataPointModal.vue'
 import BatchAddModal from './BatchAddModal.vue'
 import BatchWriteModal from './BatchWriteModal.vue'
+import ControlOptionsModal from './ControlOptionsModal.vue'
+import { formatAsduType } from '../constants/asduTypes'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
 import EmptyState from '@shared/components/EmptyState.vue'
 import QualityIndicator from '@shared/components/QualityIndicator.vue'
@@ -491,6 +493,24 @@ function editSelectedPoint() {
 
 const selectedCount = computed(() => selectedRows.value.length)
 
+// 批量修改遥控参数(QU / S/E):仅当选中项全部是遥控点且不含 C_BO_*
+// (比特串命令不携带 QU/QL 与 S/E)时提供入口。
+const showControlOptionsModal = ref(false)
+const selectionAllControl = computed(() =>
+  selectedRows.value.length > 0
+  && selectedRows.value.every(r => r.asdu_type.startsWith('C_') && !r.asdu_type.startsWith('C_BO')),
+)
+
+function openControlOptionsModal() {
+  contextMenu.value.show = false
+  showControlOptionsModal.value = true
+}
+
+function onControlOptionsApplied() {
+  showControlOptionsModal.value = false
+  loadDataPoints()
+}
+
 // 删除当前选中的所有点位(单选即删一个)。改走批量命令,一次锁内删除;
 // 乐观地立即从本地 dataMap 移除并重绘,避免与 2s 轮询的 in-flight 竞态
 // 把删除"吞掉"导致看似无效。
@@ -697,7 +717,7 @@ defineExpose({ loadData: loadDataPoints })
                   >{{ mutationGlyph(activeMutations.get(point.ioa + ':' + point.asdu_type)) }}</span>
                 </template>{{ point.ioa }}
               </td>
-              <td class="col-type">{{ point.asdu_type }}</td>
+              <td class="col-type">{{ formatAsduType(point.asdu_type) }}</td>
               <td class="col-name">{{ point.name || '-' }}</td>
               <td :class="['col-value', { 'value-highlight': changedKeys.has(point.ioa + ':' + point.asdu_type) }]" @dblclick.stop="startEdit(point)">
                 <template v-if="editingCell?.ioa === point.ioa && editingCell?.asduType === point.asdu_type">
@@ -779,6 +799,9 @@ defineExpose({ loadData: loadDataPoints })
       <div v-if="selectedCount === 1" class="context-menu-item" @click="editSelectedPoint">
         {{ t('table.editPoint') }}
       </div>
+      <div v-if="selectionAllControl" class="context-menu-item" @click="openControlOptionsModal">
+        {{ selectedCount > 1 ? `${t('table.editControlOptions')} (${selectedCount})` : t('table.editControlOptions') }}
+      </div>
       <div class="context-menu-item danger" @click="deleteSelectedPoints">
         {{ selectedCount > 1 ? `${t('table.deletePoint')} (${selectedCount})` : t('table.deletePoint') }}
       </div>
@@ -789,6 +812,7 @@ defineExpose({ loadData: loadDataPoints })
       :visible="showAddModal"
       :server-id="selectedServerId ?? ''"
       :common-address="currentCA ?? 0"
+      :category="selectedCategory"
       @close="showAddModal = false"
       @added="onPointAdded"
     />
@@ -808,8 +832,19 @@ defineExpose({ loadData: loadDataPoints })
       :server-id="selectedServerId ?? ''"
       :common-address="currentCA ?? 0"
       :existing-points="showBatchModal ? displayPoints : []"
+      :category="selectedCategory"
       @close="showBatchModal = false"
       @added="onPointAdded"
+    />
+
+    <!-- Batch Control Options Modal -->
+    <ControlOptionsModal
+      :visible="showControlOptionsModal"
+      :server-id="selectedServerId ?? ''"
+      :common-address="currentCA ?? 0"
+      :points="showControlOptionsModal ? selectedRows : []"
+      @close="showControlOptionsModal = false"
+      @applied="onControlOptionsApplied"
     />
 
     <!-- Batch Write Modal -->

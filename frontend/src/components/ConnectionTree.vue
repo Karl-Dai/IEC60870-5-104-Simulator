@@ -2,14 +2,17 @@
 import { ref, inject, watch, onMounted, type Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
-import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
+import type { showAlert as ShowAlert, showConfirm as ShowConfirm } from '@shared/composables/useDialog'
 import type { ServerInfo, StationInfo } from '../types'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
 import EmptyState from '@shared/components/EmptyState.vue'
 import { formatStartServerError } from '../errors'
 
 const { t } = useI18n()
-const { showAlert } = inject<{ showAlert: typeof ShowAlert }>(dialogKey)!
+const { showAlert, showConfirm } = inject<{
+  showAlert: typeof ShowAlert
+  showConfirm: typeof ShowConfirm
+}>(dialogKey)!
 
 const CATEGORIES = [
   'single_point',
@@ -185,6 +188,12 @@ async function ctxStopServer() {
 
 async function ctxDeleteServer() {
   closeContextMenu()
+  // 运行中的服务器会先停机再删除,提示语区分两种情形,避免误点直接丢掉在线服务。
+  const running = contextMenu.value.serverState === 'Running'
+  const ok = await showConfirm(
+    running ? t('tree.confirmDeleteRunningServer') : t('tree.confirmDeleteServer'),
+  )
+  if (!ok) return
   try {
     await invoke('delete_server', { id: contextMenu.value.serverId })
     if (selectedServerId.value === contextMenu.value.serverId) {

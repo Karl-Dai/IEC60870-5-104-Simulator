@@ -202,6 +202,7 @@ const timingMeta: { key: 't0' | 't1' | 't2' | 't3' | 'k' | 'w'; hintKey: string;
           <input type="checkbox" v-model="ops.sync_tb_by_category[c.key]" />
           <code class="rp-tag">{{ c.map }}</code>
         </label>
+        <div class="rp-row-hint">{{ t('remoteParams.syncTbHint') }}</div>
       </div>
     </div>
   </section>

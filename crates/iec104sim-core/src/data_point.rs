@@ -208,6 +208,21 @@ impl DataPointMap {
         self.points.remove(&(ioa, asdu_type))
     }
 
+    /// 把点位改址到新 IOA,保留 value/quality/timestamp。经 `insert` 重新
+    /// 盖章 update_seq,增量查询能观察到移动。源不存在或目标键已占用时
+    /// 返回 false 且不做任何修改。
+    pub fn rekey(&mut self, old_ioa: u32, asdu_type: AsduTypeId, new_ioa: u32) -> bool {
+        if self.points.contains_key(&(new_ioa, asdu_type)) {
+            return false;
+        }
+        let Some(mut point) = self.points.remove(&(old_ioa, asdu_type)) else {
+            return false;
+        };
+        point.ioa = new_ioa;
+        self.insert(point);
+        true
+    }
+
     pub fn contains(&self, ioa: u32, asdu_type: AsduTypeId) -> bool {
         self.points.contains_key(&(ioa, asdu_type))
     }
@@ -377,6 +392,32 @@ mod tests {
         // object_defs 同步剪除
         assert_eq!(st.object_defs.len(), 1);
         assert_eq!(st.object_defs[0].ioa, 11);
+    }
+
+    #[test]
+    fn test_rekey_preserves_value_and_bumps_seq() {
+        let mut map = DataPointMap::new();
+        map.insert(DataPoint::with_value(1, AsduTypeId::MSpNa1, DataPointValue::SinglePoint { value: true }));
+        map.insert(DataPoint::new(2, AsduTypeId::MSpNa1));
+        let seq_before = map.current_seq();
+
+        // 目标已占用 → 拒绝且不动源
+        assert!(!map.rekey(1, AsduTypeId::MSpNa1, 2));
+        assert!(map.contains(1, AsduTypeId::MSpNa1));
+
+        // 源不存在 → false
+        assert!(!map.rekey(99, AsduTypeId::MSpNa1, 100));
+
+        // 正常改址:保值 + 新 update_seq 对增量查询可见
+        assert!(map.rekey(1, AsduTypeId::MSpNa1, 100));
+        assert!(!map.contains(1, AsduTypeId::MSpNa1));
+        let p = map.get(100, AsduTypeId::MSpNa1).unwrap();
+        assert_eq!(p.ioa, 100);
+        assert!(matches!(p.value, DataPointValue::SinglePoint { value: true }));
+        assert!(p.update_seq > seq_before);
+        let changed = map.changed_since(seq_before);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].ioa, 100);
     }
 
     #[test]
