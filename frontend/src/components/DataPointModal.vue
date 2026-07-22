@@ -5,6 +5,7 @@ import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
 import { ASDU_TYPE_OPTIONS } from '../constants/asduTypes'
+import { IOA_MAX } from './batchAdd/ioaRanges'
 import type { DataPointInfo } from '../types'
 
 const { t } = useI18n()
@@ -151,7 +152,14 @@ const mapping = computed(() => {
 })
 
 async function handleConfirm() {
-  if (formIoa.value === undefined || formIoa.value < 0) {
+  // v-model.number 清空输入框时给出 ''(空串)而非 undefined,小数也能通过
+  // number 输入;这两类值穿透后会落到后端 serde 的原始报错,须在表单层拦截。
+  if (
+    typeof formIoa.value !== 'number' ||
+    !Number.isInteger(formIoa.value) ||
+    formIoa.value < 0 ||
+    formIoa.value > IOA_MAX
+  ) {
     await showAlert(t('errors.invalidIoa'))
     return
   }
@@ -208,6 +216,7 @@ async function handleConfirm() {
               type="number"
               class="form-input"
               min="0"
+              :max="IOA_MAX"
               :placeholder="t('pointModal.ioaPlaceholder')"
               @keyup.enter="handleConfirm"
             />

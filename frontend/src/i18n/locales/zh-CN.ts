@@ -802,7 +802,7 @@ const dict: DictShape = {
   errors: {
     invalidPort: '请输入有效的端口号 (1-65535)',
     invalidCa: '请输入有效的公共地址 (1-65534)',
-    invalidIoa: '请输入有效的 IOA (>= 0)',
+    invalidIoa: '请输入有效的 IOA (0 ~ 16777215 的整数)',
     startBindInUse: '无法监听 {addr}：端口已被其他程序占用。请停止占用程序或更换端口。（系统错误 {osError}）',
     startBindDenied: '无法监听 {addr}：系统拒绝访问该端口。Windows 上常见原因是 Hyper-V/WSL2 保留端口段、安全软件或独占绑定；请尝试未保留的高位端口，并检查 “netsh interface ipv4 show excludedportrange protocol=tcp”。（系统错误 {osError}）',
     startBindUnavailable: '无法监听 {addr}：该地址不属于本机。请使用 0.0.0.0、127.0.0.1 或本机网卡地址。（系统错误 {osError}）',

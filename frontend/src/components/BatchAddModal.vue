@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
-import { ASDU_TYPE_OPTIONS } from '../constants/asduTypes'
+import { ASDU_TYPE_OPTIONS, findAsduTypeOption } from '../constants/asduTypes'
 import type { DataPointInfo } from '../types'
 import {
   IOA_MAX,
@@ -119,11 +119,15 @@ const namePatternExample = computed(() => {
 // existingPoints arrives IOA-sorted from the parent and (ioa, asdu_type) is
 // unique upstream (DataPointTable's dataMap is keyed by that pair), so
 // filter alone is enough — no Set/sort needed.
-const existingSameTypeIoas = computed<number[]>(() =>
-  props.existingPoints
-    .filter(p => p.asdu_type === formAsduType.value)
-    .map(p => p.ioa),
-)
+// 类型比较须经 findAsduTypeOption 归一化:父组件传的是显示名(M_SP_NA_1),
+// 表单值是 PascalCase(MSpNa1),直接 === 永远不相等,冲突提示整体失效。
+const existingSameTypeIoas = computed<number[]>(() => {
+  const wanted = findAsduTypeOption(formAsduType.value)?.typeId
+  if (wanted === undefined) return []
+  return props.existingPoints
+    .filter(p => findAsduTypeOption(p.asdu_type)?.typeId === wanted)
+    .map(p => p.ioa)
+})
 
 const existingRangesText = computed<string>(() =>
   compressRanges(existingSameTypeIoas.value),

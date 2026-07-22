@@ -36,7 +36,7 @@ function reset() {
   requireClientCert.value = false
 }
 
-// 监听地址建议:0.0.0.0 / 127.0.0.1 / 本机主要出口网卡 IP(issue #28)。
+// 监听地址建议:0.0.0.0 / 127.0.0.1 / 各网卡 IPv4 地址(issue #28)。
 // 输入框仍可自由填任意网卡地址。
 async function loadBindSuggestions() {
   try {

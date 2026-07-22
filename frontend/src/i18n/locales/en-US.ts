@@ -350,7 +350,7 @@ const dict: DictShape = {
   errors: {
     invalidPort: 'Please enter a valid port number (1-65535)',
     invalidCa: 'Please enter a valid common address (1-65534)',
-    invalidIoa: 'Please enter a valid IOA (>= 0)',
+    invalidIoa: 'Please enter a valid IOA (integer between 0 and 16777215)',
     startBindInUse: 'Cannot listen on {addr}: the port is already in use. Stop the other process or choose another port. (OS error {osError})',
     startBindDenied: 'Cannot listen on {addr}: access to this port was denied. On Windows this is commonly caused by a Hyper-V/WSL2 excluded port range, security software, or an exclusive bind. Try an unreserved high port and check “netsh interface ipv4 show excludedportrange protocol=tcp”. (OS error {osError})',
     startBindUnavailable: 'Cannot listen on {addr}: the address is not assigned to this computer. Use 0.0.0.0, 127.0.0.1, or a local interface address. (OS error {osError})',
