@@ -112,6 +112,8 @@ export interface RemoteOperationConfig {
   ack_unmapped_commands: boolean
   sbo_enforce: boolean
   sbo_timeout_ms: number
+  answer_clock_sync: boolean
+  send_act_term: boolean
 }
 
 /** 周期变位方式:翻转(两态振荡)/ 递增 / 递减(三角波)。 */
@@ -146,4 +148,6 @@ export const DEFAULT_REMOTE_OPS: RemoteOperationConfig = {
   ack_unmapped_commands: true,
   sbo_enforce: false,
   sbo_timeout_ms: 30000,
+  answer_clock_sync: true,
+  send_act_term: true,
 }

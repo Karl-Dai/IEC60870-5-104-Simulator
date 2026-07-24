@@ -405,6 +405,9 @@ export type DictShape = {
     gi: string
     counterInterrogation: string
     commands: string
+    clockSync: string
+    sendActTerm: string
+    appLayerNote: string
     controlMappingHint: string
     autoMapCommands: string
     ackUnmappedCommands: string
@@ -865,6 +868,9 @@ const dict: DictShape = {
     gi: '总召唤',
     counterInterrogation: '累积量召唤',
     commands: '遥控、遥调',
+    clockSync: '时钟同步（对时）',
+    sendActTerm: '执行后追加 ACT_TERM（激活终止帧）',
+    appLayerNote: '应用层字节数由 IEC 60870-5-104 固定：CA=2、IOA=3、COT=2（含源发地址 ORG，应答自动回显主站 ORG）。',
     controlMappingHint: '控制点可在点位编辑器中独立映射到任意兼容的监视点。',
     autoMapCommands: '兼容模式：未显式映射时按相同 CA + IOA 自动映射',
     ackUnmappedCommands: '已声明但未映射的控制点仍正常应答 COT 7 → 10',

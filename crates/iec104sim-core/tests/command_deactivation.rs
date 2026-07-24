@@ -918,3 +918,100 @@ async fn master_emits_cot8_broadcast_gi_deactivation() {
     master.disconnect().await.unwrap();
     let _ = slave.stop().await;
 }
+
+// =========================================================================
+// issue #28:时钟同步应答开关(answer_clock_sync)与 Actterm 开关(send_act_term)
+// =========================================================================
+
+/// answer_clock_sync=false:合法激活对时也应按未知类型拒收(COT=44 + P/N),不执行对时。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clock_sync_rejected_when_answer_disabled() {
+    let (mut slave, port) = spawn_slave().await;
+    let mut ops = slave.get_remote_ops().await;
+    ops.answer_clock_sync = false;
+    slave.set_remote_ops(ops).await;
+
+    let mut stream = connect_and_startdt(port);
+    send(&mut stream, &build_clock_sync_frame(1, 6));
+
+    let resp = first_iframe(&mut stream);
+    assert_eq!(
+        iframe_cot(&resp) & 0x3F,
+        44,
+        "禁用后 103 应回 COT=44(UNKNOWN_TYPE),实际 COT 字节={:#04X}",
+        resp[8]
+    );
+    assert!(
+        iframe_negative(&resp),
+        "禁用后 103 拒收应带 negative-confirm(bit6),COT 字节={:#04X}",
+        resp[8]
+    );
+
+    let _ = slave.stop().await;
+}
+
+/// 构造 C_SC_NA_1(45) 执行帧:COT=6,IOA=1,SCO=ON(0x01)。
+fn build_sc_execute_frame(ca: u16) -> Vec<u8> {
+    let ca_bytes = ca.to_le_bytes();
+    vec![
+        0x68, 0x0E, 0x00, 0x00, 0x00, 0x00,
+        45, 0x01, 6, 0x00,
+        ca_bytes[0], ca_bytes[1],
+        0x01, 0x00, 0x00, // IOA=1
+        0x01, // SCO: execute, ON
+    ]
+}
+
+/// send_act_term=true(默认):执行应答 ACT_CON(7) 后应跟随 ACT_TERM(10)。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_sends_act_term_by_default() {
+    let (mut slave, port) = spawn_slave().await;
+    let mut stream = connect_and_startdt(port);
+
+    send(&mut stream, &build_sc_execute_frame(1));
+
+    let first = first_iframe(&mut stream);
+    assert_eq!(first[6], 45, "首帧应为 type=45 回显");
+    assert_eq!(iframe_cot(&first) & 0x3F, 7, "首帧应为 ACT_CON(7)");
+
+    let mut got_term = false;
+    while let Some((frame, ctrl1)) = read_one_frame(&mut stream) {
+        if ctrl1 & 0x01 != 0 { continue; }
+        if frame.len() > 8 && frame[6] == 45 && iframe_cot(&frame) & 0x3F == 10 {
+            got_term = true;
+            break;
+        }
+    }
+    assert!(got_term, "默认应追加 ACT_TERM(COT=10)");
+
+    let _ = slave.stop().await;
+}
+
+/// send_act_term=false(Actterm 关):仅回 ACT_CON(7),不再追加 ACT_TERM。
+/// 自动映射产生的突发上送(COT=3,监视类型)不受影响。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_without_act_term_when_disabled() {
+    let (mut slave, port) = spawn_slave().await;
+    let mut ops = slave.get_remote_ops().await;
+    ops.send_act_term = false;
+    slave.set_remote_ops(ops).await;
+
+    let mut stream = connect_and_startdt(port);
+    send(&mut stream, &build_sc_execute_frame(1));
+
+    let first = first_iframe(&mut stream);
+    assert_eq!(first[6], 45, "首帧应为 type=45 回显");
+    assert_eq!(iframe_cot(&first) & 0x3F, 7, "首帧应为 ACT_CON(7)");
+
+    // 后续帧(直到 2s 读超时)不得再出现 type=45 的 ACT_TERM(10)。
+    while let Some((frame, ctrl1)) = read_one_frame(&mut stream) {
+        if ctrl1 & 0x01 != 0 { continue; }
+        assert!(
+            !(frame.len() > 8 && frame[6] == 45 && iframe_cot(&frame) & 0x3F == 10),
+            "Actterm 关闭后不应出现 ACT_TERM 帧: {:02X?}",
+            frame
+        );
+    }
+
+    let _ = slave.stop().await;
+}

@@ -111,6 +111,11 @@ const timingMeta: { key: 't0' | 't1' | 't2' | 't3' | 'k' | 'w'; hintKey: string;
         <code class="rp-tag">C_CI_NA_1</code>
       </label>
       <label class="rp-switch">
+        <input type="checkbox" v-model="ops.answer_clock_sync" />
+        <span class="rp-switch-text">{{ t('remoteParams.clockSync') }}</span>
+        <code class="rp-tag">C_CS_NA_1</code>
+      </label>
+      <label class="rp-switch">
         <input type="checkbox" v-model="ops.answer_commands" />
         <span class="rp-switch-text">{{ t('remoteParams.commands') }}</span>
       </label>
@@ -162,6 +167,11 @@ const timingMeta: { key: 't0' | 't1' | 't2' | 't3' | 'k' | 'w'; hintKey: string;
           <option v-for="o in cotOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
       </div>
+      <label class="rp-switch">
+        <input type="checkbox" v-model="ops.send_act_term" />
+        <span class="rp-switch-text">{{ t('remoteParams.sendActTerm') }}</span>
+      </label>
+      <div class="rp-note">{{ t('remoteParams.appLayerNote') }}</div>
     </div>
 
     <slot name="actions-ops" />

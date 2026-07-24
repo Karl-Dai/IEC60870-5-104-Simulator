@@ -211,6 +211,12 @@ pub struct RemoteOperationConfig {
     pub sbo_enforce: bool,
     /// SBO select 的有效期(毫秒),超时后 Execute 被拒。
     pub sbo_timeout_ms: u64,
+    /// 应答主站时钟同步命令 (C_CS_NA_1, Type 103)。关闭后按未知类型拒收
+    /// (COT=44 + P/N),不执行对时(issue #28)。
+    pub answer_clock_sync: bool,
+    /// 命令执行后在 ACT_CON(7) 之外追加终止帧(COT 取 execute_ack_cot,默认 10)。
+    /// 关闭后仅回 ACT_CON,适配不期待 ACT_TERM 的主站(issue #28 Actterm 开关)。
+    pub send_act_term: bool,
 }
 
 impl Default for RemoteOperationConfig {
@@ -233,6 +239,8 @@ impl Default for RemoteOperationConfig {
             ack_unmapped_commands: true,
             sbo_enforce: false,
             sbo_timeout_ms: 30_000,
+            answer_clock_sync: true,
+            send_act_term: true,
         }
     }
 }
@@ -956,15 +964,14 @@ async fn process_control_command(
     }
 
     if ops.answer_commands {
-        let (ack, term) = {
+        {
             let mut s = seq.lock().await;
-            (
-                build_response_frame(data, 7, &mut s),
-                build_response_frame(data, ops.execute_ack_cot.as_u8(), &mut s),
-            )
-        };
-        out.replies.push(ack);
-        out.replies.push(term);
+            out.replies.push(build_response_frame(data, 7, &mut s));
+            // Actterm 开关(issue #28):关闭后仅回 ACT_CON,不再追加终止帧。
+            if ops.send_act_term {
+                out.replies.push(build_response_frame(data, ops.execute_ack_cot.as_u8(), &mut s));
+            }
+        }
         out.spontaneous = target.map(|(tca, tioa, ttype)| (tca, (tioa, ttype)));
     }
 
@@ -1840,8 +1847,17 @@ async fn handle_client_read_loop(
                             // 短于 22 视为畸形,按未知类型拒收回 COT=44(UNKNOWN_TYPE)+negative,不当合法对时处理。
                             if data.len() >= 22 {
                                 let cot_in = cause & 0x3F;
-                                let is_activation = cot_in == 6;
-                                let ack_cot = if is_activation { 7u8 } else { 45 | 0x40 };
+                                // 时间同步应答开关(issue #28):关闭后按未知类型拒收
+                                // (COT=44 + P/N),与不支持该类型的装置行为一致。
+                                let enabled = ops_snapshot.answer_clock_sync;
+                                let is_activation = enabled && cot_in == 6;
+                                let ack_cot = if !enabled {
+                                    44 | 0x40
+                                } else if is_activation {
+                                    7u8
+                                } else {
+                                    45 | 0x40
+                                };
                                 let ack = { let mut s = seq.lock().await; build_response_frame(&data[..n], ack_cot, &mut s)
                                 };
                                 queue.lock().await.extend_from_slice(&ack);
@@ -1851,6 +1867,8 @@ async fn handle_client_read_loop(
                                         FrameLabel::ClockSync,
                                         if is_activation {
                                             format!("时钟同步确认 CA={}", ca)
+                                        } else if !enabled {
+                                            format!("时钟同步 拒收(应答已禁用) CA={}", ca)
                                         } else {
                                             format!(
                                                 "时钟同步 拒收(非激活 COT={}) CA={}",
@@ -2184,8 +2202,16 @@ fn handle_client_blocking(
                         // 短于 22 视为畸形,按未知类型拒收回 COT=44(UNKNOWN_TYPE)+negative,不当合法对时处理。
                         if data.len() >= 22 {
                             let cot_in = cause & 0x3F;
-                            let is_activation = cot_in == 6;
-                            let ack_cot = if is_activation { 7u8 } else { 45 | 0x40 };
+                            // 时间同步应答开关(issue #28):与明文 TCP 路径一致。
+                            let enabled = ops_snapshot.answer_clock_sync;
+                            let is_activation = enabled && cot_in == 6;
+                            let ack_cot = if !enabled {
+                                44 | 0x40
+                            } else if is_activation {
+                                7u8
+                            } else {
+                                45 | 0x40
+                            };
                             let ack = rt.block_on(async { let mut s = seq.lock().await; build_response_frame(&data[..n], ack_cot, &mut s)
                             });
                             let _ = stream.write_all(&ack);
@@ -2195,6 +2221,8 @@ fn handle_client_blocking(
                                     FrameLabel::ClockSync,
                                     if is_activation {
                                         format!("时钟同步确认 CA={}", ca)
+                                    } else if !enabled {
+                                        format!("时钟同步 拒收(应答已禁用) CA={}", ca)
                                     } else {
                                         format!("时钟同步 拒收(非激活 COT={}) CA={}", cot_in, ca)
                                     },
