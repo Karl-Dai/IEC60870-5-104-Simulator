@@ -206,6 +206,13 @@ function openRuntimeParamsDrawer() {
 function closeRuntimeParamsDrawer() {
   runtimeParamsDrawerVisible.value = false
 }
+
+// 弹窗/抽屉保存参数后:刷新树(transport 可能改了标签)并 bump dataRefreshKey,
+// 让 DataPointTable 重载点位并刷新 sync-TB 徽标(issue #28:保存后 +TB 徽标不出现)。
+function onRuntimeParamsSaved() {
+  refreshTree()
+  refreshData()
+}
 provide('openRuntimeParamsDrawer', openRuntimeParamsDrawer)
 </script>
 
@@ -284,11 +291,12 @@ provide('openRuntimeParamsDrawer', openRuntimeParamsDrawer)
       :visible="runtimeParamsModalVisible"
       :server-id="runtimeParamsModalServerId"
       :server-label="runtimeParamsModalLabel"
-      @saved="refreshTree"
+      @saved="onRuntimeParamsSaved"
       @close="closeRuntimeParamsModal"
     />
     <RemoteParamsDrawer
       :visible="runtimeParamsDrawerVisible"
+      @saved="onRuntimeParamsSaved"
       @close="closeRuntimeParamsDrawer"
     />
   </div>

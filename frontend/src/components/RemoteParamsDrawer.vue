@@ -10,6 +10,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   close: []
+  saved: []
 }>()
 
 const selectedServerId = inject<Ref<string | null>>('selectedServerId') as Ref<string | null>
@@ -60,6 +61,7 @@ async function saveAll() {
     await applyOps()
     if (lastError.value) return
     baselineKey.value = snapshot(timing.value, ops.value)
+    emit('saved')
     savedFlash.value = true
     flashTimer = setTimeout(() => {
       savedFlash.value = false
@@ -93,6 +95,10 @@ function handleEsc(e: KeyboardEvent) {
 
 watch(() => props.visible, (v) => {
   if (v) {
+    // 每次打开都从后端重载:composable 只在 selectedServerId 变化时 load,
+    // 期间若经弹窗(RemoteParamsModal)改过参数,这里的快照已经过期(issue #28)。
+    // load() 翻转 loading,上面的 watch(loading) 会顺带重置 dirty 基线。
+    load()
     window.addEventListener('keydown', handleEsc)
   } else {
     window.removeEventListener('keydown', handleEsc)

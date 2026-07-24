@@ -24,7 +24,7 @@ const emit = defineEmits<{
 const localServerId = ref<string | null>(props.serverId)
 watch(() => props.serverId, v => { localServerId.value = v })
 
-const { timing, ops, loading, lastError, applyTiming, applyOps } =
+const { timing, ops, loading, lastError, load, applyTiming, applyOps } =
   useRemoteParams(localServerId)
 
 // —— 连接参数(监听地址 / 端口)——
@@ -103,6 +103,9 @@ function handleEsc(e: KeyboardEvent) {
 watch(() => props.visible, (v) => {
   if (v) {
     loadTransport()
+    // 同一服务器二次打开时 localServerId 不变,composable 的 watch 不会重载;
+    // 期间参数可能已被抽屉(RemoteParamsDrawer)改过,强制回读后端(issue #28)。
+    load()
     window.addEventListener('keydown', handleEsc)
   } else {
     window.removeEventListener('keydown', handleEsc)
