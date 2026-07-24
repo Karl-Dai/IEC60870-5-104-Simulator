@@ -54,6 +54,7 @@ export type DictShape = {
     initZero: string
     initRandom: string
     countPerCategory: string
+    countHint: string
     enableTls: string
     serverCert: string
     serverKey: string
@@ -184,6 +185,7 @@ export type DictShape = {
     mutationMin: string
     mutationMax: string
     derivedTbTitle: string
+    dupIoaTitle: string
     batchControlOptions: string
   }
   pointModal: {
@@ -192,6 +194,7 @@ export type DictShape = {
     ioaLabel: string
     ioaPlaceholder: string
     ioaEditHint: string
+    dupIoaWarn: string
     asduTypeLabel: string
     nameLabel: string
     namePlaceholder: string
@@ -243,6 +246,7 @@ export type DictShape = {
     nextGapBtn: string
     capacityFullTooltip: string
     conflictDetail: string
+    crossTypeDup: string
   }
   batchControl: {
     title: string
@@ -508,6 +512,7 @@ const dict: DictShape = {
     initZero: '全零',
     initRandom: '随机',
     countPerCategory: '每类点数',
+    countHint: '0 = 空配置（推荐）。同一 CASDU 内 IOA 应唯一，建议按需批量创建点位。',
     enableTls: '启用 TLS',
     serverCert: '服务器证书文件 (PEM)',
     serverKey: '服务器密钥文件 (PEM)',
@@ -638,6 +643,7 @@ const dict: DictShape = {
     mutationMin: '下限',
     mutationMax: '上限',
     derivedTbTitle: '变位时将追加派生帧 {tb}（「变位同步上送 TB」已开启；点位自身 Type ID 不变）',
+    dupIoaTitle: 'IOA {ioa} 与本站其他类型共用：{types}。同一 CASDU 内 IOA 应唯一，请编辑该点修改 IOA。',
     batchControlOptions: '批量设置控制参数',
   },
   pointModal: {
@@ -646,6 +652,7 @@ const dict: DictShape = {
     ioaLabel: 'IOA (信息对象地址)',
     ioaPlaceholder: '例如: 100',
     ioaEditHint: '可修改 IOA 改址；运行值与品质保留，引用本点的控制映射会同步更新。',
+    dupIoaWarn: '该 IOA 已被本站 {types} 使用。同一 CASDU 内 IOA 应唯一；仍可保存。',
     asduTypeLabel: 'ASDU 类型',
     nameLabel: '名称 (可选)',
     namePlaceholder: '可留空',
@@ -697,6 +704,7 @@ const dict: DictShape = {
     nextGapBtn: '↦ 跳到能放下的空隙',
     capacityFullTooltip: 'IOA 容量不足',
     conflictDetail: '冲突 IOA {ranges}（{count} 个点将被跳过）',
+    crossTypeDup: '{count} 个 IOA 与本站其他类型共用：{ranges}。不阻断创建，但同一 CASDU 内 IOA 应唯一。',
   },
   batchControl: {
     title: '批量设置控制参数',

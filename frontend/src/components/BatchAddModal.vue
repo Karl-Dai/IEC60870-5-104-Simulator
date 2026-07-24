@@ -152,6 +152,35 @@ const conflictCount = computed<number>(() => conflictIoas.value.length)
 
 const conflictRanges = computed<string>(() => compressRanges(conflictIoas.value))
 
+// 同 CASDU 跨类型重复 IOA 警告(issue #28,不阻断创建)。
+// 同方向且不同分类的已有点共用目标 IOA 才提示;NA/TA/TB 同分类变体与
+// 控制↔监视配对(兼容自动映射)不算。
+const crossTypeDupIoas = computed<number[]>(() => {
+  const opt = findAsduTypeOption(formAsduType.value)
+  if (!opt) return []
+  const dir = formAsduType.value.startsWith('C') ? 'c' : 'm'
+  const clashSet = new Set<number>()
+  for (const p of props.existingPoints) {
+    const po = findAsduTypeOption(p.asdu_type)
+    if (!po) continue
+    if ((po.value.startsWith('C') ? 'c' : 'm') !== dir) continue
+    if (po.category === opt.category) continue
+    clashSet.add(p.ioa)
+  }
+  if (clashSet.size === 0) return []
+  let target: number[]
+  if (ioaMode.value === 'expression') {
+    target = expandedIoas.value ?? []
+  } else if (count.value > 0 && count.value <= BATCH_MAX && startIoa.value >= 0) {
+    target = Array.from({ length: count.value }, (_, i) => startIoa.value + i)
+  } else {
+    target = []
+  }
+  return target.filter(n => clashSet.has(n))
+})
+
+const crossTypeDupRanges = computed<string>(() => compressRanges(crossTypeDupIoas.value))
+
 const nextAvailableIoa = computed<number | null>(() => {
   const xs = existingSameTypeIoas.value
   if (xs.length === 0) return null
@@ -342,6 +371,9 @@ function handleBackdropClick(e: MouseEvent) {
               </div>
               <div v-if="conflictCount > 0" class="summary-card__conflict">
                 {{ t('batchModal.conflictDetail', { ranges: conflictRanges, count: conflictCount }) }}
+              </div>
+              <div v-if="crossTypeDupIoas.length > 0" class="summary-card__conflict summary-card__conflict--warn">
+                ⚠ {{ t('batchModal.crossTypeDup', { ranges: crossTypeDupRanges, count: crossTypeDupIoas.length }) }}
               </div>
             </div>
           </div>
@@ -696,6 +728,12 @@ function handleBackdropClick(e: MouseEvent) {
   color: var(--c-red);
   font-size: 12px;
   font-family: var(--font-mono);
+}
+
+/* 跨类型重复 IOA:仅警示,不阻断创建(issue #28) */
+.summary-card__conflict--warn {
+  border-top-color: var(--c-peach);
+  color: var(--c-peach);
 }
 
 .modal-footer {

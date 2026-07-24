@@ -324,6 +324,37 @@ function derivedTbLabel(point: DataPointInfo): string | null {
   return `${tbName} (${tbId})`
 }
 
+// === 同 CASDU 内跨类型重复 IOA 检测(issue #28)===
+// 规则:同方向(监视/控制)且不同分类的点共用同一 IOA 视为冲突。
+// - NA/TA/TB 同分类变体共用 IOA 是同一信号的不同传输格式,不算;
+// - 控制点与监视点同 IOA 是合法配对(兼容自动映射),不算。
+// 仅警示不阻断:标红 + ⚠ 提示,用户可直接编辑该点修正 IOA。
+const duplicateIoaMap = computed<Map<string, string>>(() => {
+  const groups = new Map<string, DataPointInfo[]>()
+  for (const p of displayPoints.value) {
+    const dir = p.asdu_type.startsWith('C_') ? 'c' : 'm'
+    const key = `${dir}:${p.ioa}`
+    let arr = groups.get(key)
+    if (!arr) groups.set(key, arr = [])
+    arr.push(p)
+  }
+  const flagged = new Map<string, string>()
+  for (const pts of groups.values()) {
+    if (new Set(pts.map(p => p.category)).size < 2) continue
+    for (const p of pts) {
+      const others = pts
+        .filter(o => o.category !== p.category)
+        .map(o => formatAsduTypeWithId(o.asdu_type))
+      flagged.set(pointKey(p.ioa, p.asdu_type), others.join(', '))
+    }
+  }
+  return flagged
+})
+
+function duplicateIoaTypes(point: DataPointInfo): string | undefined {
+  return duplicateIoaMap.value.get(pointKey(point.ioa, point.asdu_type))
+}
+
 // === Filtered points ===
 const filteredPoints = computed(() => {
   let pts = displayPoints.value
@@ -760,14 +791,18 @@ defineExpose({ loadData: loadDataPoints })
               @click="selectRow($event, point)"
               @contextmenu.prevent="showContextMenu($event, point)"
             >
-              <td class="col-ioa">
+              <td :class="['col-ioa', { 'ioa-dup': duplicateIoaTypes(point) }]">
                 <template v-if="activeMutations.has(point.ioa + ':' + point.asdu_type)">
                   <span class="mut-dot" />
                   <span
                     class="mut-mode"
                     :title="mutationModeLabel(activeMutations.get(point.ioa + ':' + point.asdu_type))"
                   >{{ mutationGlyph(activeMutations.get(point.ioa + ':' + point.asdu_type)) }}</span>
-                </template>{{ point.ioa }}
+                </template>{{ point.ioa }}<span
+                  v-if="duplicateIoaTypes(point)"
+                  class="dup-ioa-badge"
+                  :title="t('table.dupIoaTitle', { ioa: point.ioa, types: duplicateIoaTypes(point)! })"
+                >⚠</span>
               </td>
               <td class="col-type">
                 {{ formatAsduTypeWithId(point.asdu_type) }}
@@ -872,6 +907,7 @@ defineExpose({ loadData: loadDataPoints })
       :server-id="selectedServerId ?? ''"
       :common-address="currentCA ?? 0"
       :category="selectedCategory"
+      :existing-points="showAddModal ? displayPoints : []"
       @close="showAddModal = false"
       @added="onPointAdded"
     />
@@ -881,6 +917,7 @@ defineExpose({ loadData: loadDataPoints })
       :server-id="selectedServerId ?? ''"
       :common-address="currentCA ?? 0"
       :point="editingPointDefinition"
+      :existing-points="showEditModal ? displayPoints : []"
       @close="showEditModal = false; editingPointDefinition = null"
       @added="showEditModal = false; editingPointDefinition = null; onPointEdited()"
     />
@@ -1069,6 +1106,18 @@ defineExpose({ loadData: loadDataPoints })
   color: var(--c-sapphire);
   font-size: 10px;
   line-height: 16px;
+  cursor: help;
+}
+
+/* 同 CASDU 跨类型重复 IOA:标红 + ⚠(issue #28,仅警示不阻断) */
+.col-ioa.ioa-dup {
+  color: var(--c-red);
+}
+
+.dup-ioa-badge {
+  margin-left: 4px;
+  color: var(--c-red);
+  font-size: 10px;
   cursor: help;
 }
 

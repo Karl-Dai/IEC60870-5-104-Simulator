@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
-import { ASDU_TYPE_OPTIONS } from '../constants/asduTypes'
+import { ASDU_TYPE_OPTIONS, findAsduTypeOption, formatAsduTypeWithId } from '../constants/asduTypes'
 import { IOA_MAX } from './batchAdd/ioaRanges'
 import type { DataPointInfo } from '../types'
 
@@ -18,6 +18,8 @@ interface Props {
   point?: DataPointInfo | null
   /** 当前左树选中的分类稳定键;提供时新增点位的类型下拉只显示该分类的类型。 */
   category?: string | null
+  /** 本站(当前 CA)已有点位,用于同 CASDU 跨类型重复 IOA 警告(issue #28)。 */
+  existingPoints?: ReadonlyArray<Pick<DataPointInfo, 'ioa' | 'asdu_type' | 'category'>>
 }
 
 const props = defineProps<Props>()
@@ -48,6 +50,24 @@ const mappingTargets = ref<MappingTarget[]>([])
 const mappingKey = ref('')
 const isSaving = ref(false)
 const isEditing = computed(() => Boolean(props.point))
+
+// 同 CASDU 跨类型重复 IOA 警告(issue #28,不阻断保存)。
+// 同方向且不同分类的已有点共用该 IOA 才提示;NA/TA/TB 同分类变体与
+// 控制↔监视配对(兼容自动映射)不算。编辑时自身同分类,天然被排除。
+const dupIoaTypes = computed<string | null>(() => {
+  const ioa = formIoa.value
+  if (ioa === undefined || ioa === null) return null
+  const opt = findAsduTypeOption(formAsduType.value)
+  if (!opt) return null
+  const dir = formAsduType.value.startsWith('C') ? 'c' : 'm'
+  const clashes = (props.existingPoints ?? [])
+    .filter(p =>
+      p.ioa === ioa
+      && (p.asdu_type.startsWith('C_') ? 'c' : 'm') === dir
+      && p.category !== opt.category)
+    .map(p => formatAsduTypeWithId(p.asdu_type))
+  return clashes.length ? clashes.join(', ') : null
+})
 const isControlType = computed(() => formAsduType.value.startsWith('C'))
 const isBitstringType = computed(() => formAsduType.value.startsWith('CBo'))
 const isSetpointType = computed(() => formAsduType.value.startsWith('CSe'))
@@ -221,6 +241,9 @@ async function handleConfirm() {
               @keyup.enter="handleConfirm"
             />
             <div v-if="isEditing" class="form-hint">{{ t('pointModal.ioaEditHint') }}</div>
+            <div v-if="dupIoaTypes" class="form-hint form-hint--warn">
+              ⚠ {{ t('pointModal.dupIoaWarn', { types: dupIoaTypes }) }}
+            </div>
           </div>
 
           <div class="form-group">
@@ -401,6 +424,11 @@ async function handleConfirm() {
   color: var(--c-overlay0);
   font-size: 11px;
   line-height: 1.4;
+}
+
+/* 同 CASDU 跨类型重复 IOA 警告(不阻断保存) */
+.form-hint--warn {
+  color: var(--c-peach);
 }
 
 .radio-group {
