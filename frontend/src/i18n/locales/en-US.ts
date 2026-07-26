@@ -197,6 +197,7 @@ const dict: DictShape = {
     ioaPlaceholder: 'e.g., 100',
     ioaEditHint: 'IOA can be changed here; value/quality are kept and control mappings referencing this point follow the new address.',
     dupIoaWarn: 'This IOA is already used by {types} in this station. IOA should be unique within a CASDU; you can still save.',
+    dupIoaSameTypeError: 'A point of the same type ({type}) already exists at this IOA in this station. Adding it again would overwrite its name/comment/qualifier/mapping, so it is blocked. Edit that point instead, or pick another IOA.',
     asduTypeLabel: 'ASDU Type',
     nameLabel: 'Name (optional)',
     namePlaceholder: 'Leave blank if unused',
@@ -225,6 +226,7 @@ const dict: DictShape = {
   batchModal: {
     title: 'Batch Add Data Points',
     startIoa: 'Start IOA',
+    startIoaAutoHint: 'Start IOA pre-set to avoid addresses already used in this station (editable).',
     count: 'Count',
     asduTypeLabel: 'ASDU Type',
     namePrefix: 'Name Prefix (optional)',

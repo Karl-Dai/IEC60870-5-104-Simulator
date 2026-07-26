@@ -195,6 +195,7 @@ export type DictShape = {
     ioaPlaceholder: string
     ioaEditHint: string
     dupIoaWarn: string
+    dupIoaSameTypeError: string
     asduTypeLabel: string
     nameLabel: string
     namePlaceholder: string
@@ -223,6 +224,7 @@ export type DictShape = {
   batchModal: {
     title: string
     startIoa: string
+    startIoaAutoHint: string
     count: string
     asduTypeLabel: string
     namePrefix: string
@@ -653,6 +655,7 @@ const dict: DictShape = {
     ioaPlaceholder: '例如: 100',
     ioaEditHint: '可修改 IOA 改址；运行值与品质保留，引用本点的控制映射会同步更新。',
     dupIoaWarn: '该 IOA 已被本站 {types} 使用。同一 CASDU 内 IOA 应唯一；仍可保存。',
+    dupIoaSameTypeError: '本站该 IOA 下已存在同类型点位（{type}），重复添加会覆盖它的名称/备注/限定词/映射，已阻止。请改用编辑该点，或换一个 IOA。',
     asduTypeLabel: 'ASDU 类型',
     nameLabel: '名称 (可选)',
     namePlaceholder: '可留空',
@@ -681,6 +684,7 @@ const dict: DictShape = {
   batchModal: {
     title: '批量添加数据点',
     startIoa: '起始 IOA',
+    startIoaAutoHint: '起始 IOA 已按本站已占用地址自动避让（可手动修改）。',
     count: '数量',
     asduTypeLabel: 'ASDU 类型',
     namePrefix: '名称前缀（可选）',

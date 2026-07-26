@@ -583,8 +583,16 @@ pub async fn add_data_point(
         .get_mut(&request.common_address)
         .ok_or_else(|| format!("station CA={} not found", request.common_address))?;
 
-    station.add_point(def)
-        .map_err(|e| format!("failed to add point: {}", e))
+    // 用户手动添加走严格语义:同 (IOA, 类型) 已存在时拒绝,而不是静默覆盖掉
+    // 已有点的名称/备注/QU-QL/S-E/控制映射(issue #28)。
+    station.add_point_strict(def)
+        .map_err(|e| match e {
+            SlaveError::DuplicateIoa(ioa) => format!(
+                "IOA {} of type {} already exists in station CA={} — edit that point or pick another IOA",
+                ioa, request.asdu_type, request.common_address
+            ),
+            other => format!("failed to add point: {}", other),
+        })
 }
 
 #[derive(Debug, Deserialize)]

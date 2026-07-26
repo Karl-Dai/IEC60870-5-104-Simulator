@@ -1121,6 +1121,18 @@ defineExpose({ loadData: loadDataPoints })
   cursor: help;
 }
 
+/* 选中态:行底色是 --c-blue,上面 `tr.selected .col-ioa` 会把 IOA 压成 --c-base,
+   红字直接消失(而"点中行→改 IOA"正是修冲突的操作路径)。这里反过来把冲突
+   单元格整块刷成红底 + 深色字 —— 特异性高于选中态规则,深色主题下对比最强。 */
+.table tbody tr.selected .col-ioa.ioa-dup {
+  background: var(--c-red);
+  color: var(--c-crust);
+}
+
+.table tbody tr.selected .col-ioa.ioa-dup .dup-ioa-badge {
+  color: var(--c-crust);
+}
+
 .col-name {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -181,6 +181,35 @@ const crossTypeDupIoas = computed<number[]>(() => {
 
 const crossTypeDupRanges = computed<string>(() => compressRanges(crossTypeDupIoas.value))
 
+// 本站(当前 CA)内新点应避开的 IOA:同类型已占用(硬冲突,后端会跳过)
+// + 同方向不同分类已占用(跨类型重复,虽不阻断但会触发上面的警示)。
+// 同分类的 NA/TA/TB 变体是同一信号的不同传输格式,共用 IOA 合法,不计入。
+const occupiedIoas = computed<number[]>(() => {
+  const self = findAsduTypeOption(formAsduType.value)
+  if (!self) return []
+  const dir = self.value.startsWith('C') ? 'c' : 'm'
+  const set = new Set<number>()
+  for (const p of props.existingPoints) {
+    const po = findAsduTypeOption(p.asdu_type)
+    if (!po) continue
+    if (po.value === self.value) { set.add(p.ioa); continue }
+    if ((po.value.startsWith('C') ? 'c' : 'm') !== dir) continue
+    if (po.category === self.category) continue
+    set.add(p.ioa)
+  }
+  return Array.from(set).sort((a, b) => a - b)
+})
+
+// 打开弹窗 / 切换类型时的默认起始 IOA:跨分类感知,避开 occupiedIoas。
+// 否则每次打开都固定 0,按 README 快速开始逐个分类批量添加会全落在 0..9,
+// 自己把用户导进跨类型重复警示(issue #28)。
+const suggestedStartIoa = computed<number>(() =>
+  findNextFreeGap(occupiedIoas.value, count.value > 0 ? count.value : 1) ?? 0,
+)
+
+// 用户手动改过起始 IOA(输入框或两个跳转按钮)后不再自动覆盖他的输入。
+const startIoaTouched = ref(false)
+
 const nextAvailableIoa = computed<number | null>(() => {
   const xs = existingSameTypeIoas.value
   if (xs.length === 0) return null
@@ -188,29 +217,54 @@ const nextAvailableIoa = computed<number | null>(() => {
   return next > IOA_MAX ? null : next
 })
 
+// 「跳到能放下的空隙」同样跨分类感知:落点既不撞同类型,也不撞同方向其他分类。
 const nextFreeGapStart = computed<number | null>(() =>
-  count.value > 0 ? findNextFreeGap(existingSameTypeIoas.value, count.value) : null,
+  count.value > 0 ? findNextFreeGap(occupiedIoas.value, count.value) : null,
 )
 
 const canApplyNextIoa = computed(() => nextAvailableIoa.value !== null)
 const canApplyNextGap = computed(() => nextFreeGapStart.value !== null)
 
 function applyNextAvailableIoa() {
-  if (nextAvailableIoa.value !== null) startIoa.value = nextAvailableIoa.value
+  if (nextAvailableIoa.value !== null) {
+    startIoa.value = nextAvailableIoa.value
+    startIoaTouched.value = true
+  }
 }
 
 function applyNextFreeGap() {
-  if (nextFreeGapStart.value !== null) startIoa.value = nextFreeGapStart.value
+  if (nextFreeGapStart.value !== null) {
+    startIoa.value = nextFreeGapStart.value
+    startIoaTouched.value = true
+  }
 }
 
+// 类型换了(用户在弹窗内改下拉)且起始 IOA 未被手动改过时,重新自动避让。
+watch(formAsduType, () => {
+  if (props.visible && ioaMode.value === 'range' && !startIoaTouched.value) {
+    startIoa.value = suggestedStartIoa.value
+  }
+})
 
+// 弹窗创建后不自动关闭(可连续批量添加)。父组件刷新点表后,未手动改过起始 IOA
+// 的话顺势推到下一段空闲地址 —— 否则会停在刚创建的那一段上,整段冲突。
+watch(() => props.existingPoints, () => {
+  if (props.visible && ioaMode.value === 'range' && !startIoaTouched.value) {
+    startIoa.value = suggestedStartIoa.value
+  }
+})
+
+// immediate:弹窗在父组件里常驻挂载(靠 visible 切换),但也可能以 visible=true
+// 直接挂载 —— 两种情形都要走同一套默认值初始化(尤其起始 IOA 的跨分类避让)。
 watch(() => props.visible, (visible) => {
   if (visible) {
     ioaMode.value = 'range'
-    startIoa.value = 0
     count.value = 10
     ioaExpression.value = ''
     formAsduType.value = ASDU_TYPES.value[0]?.value ?? 'MSpNa1'
+    // 起始 IOA 必须在类型定下来之后再算(避让集合依赖当前类型/方向/分类)。
+    startIoaTouched.value = false
+    startIoa.value = suggestedStartIoa.value
     namePrefix.value = ''
     nameWithTypeId.value = false
     qualifierChoice.value = 'any'
@@ -218,7 +272,7 @@ watch(() => props.visible, (visible) => {
     formSbo.value = undefined
     isSaving.value = false
   }
-})
+}, { immediate: true })
 
 async function handleConfirm() {
   if (!isValid.value) return
@@ -298,7 +352,11 @@ function handleBackdropClick(e: MouseEvent) {
                 type="number"
                 class="form-input"
                 min="0"
+                @input="startIoaTouched = true"
               />
+              <div v-if="!startIoaTouched && occupiedIoas.length > 0" class="form-hint">
+                {{ t('batchModal.startIoaAutoHint') }}
+              </div>
             </div>
             <div class="form-group half">
               <label class="form-label">{{ t('batchModal.count') }}</label>
