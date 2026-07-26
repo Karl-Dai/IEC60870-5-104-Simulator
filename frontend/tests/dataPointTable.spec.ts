@@ -123,6 +123,34 @@ describe('DataPointTable 子站数据表', () => {
     wrapper.unmount()
   })
 
+  // issue #28:改完运行参数保存后 +TB 徽标不出现 —— 徽标依赖 syncTbFlags,
+  // 而它只在 selectedServerId 变化或 dataRefreshKey bump 时回读后端。
+  // 保存运行参数的两个入口都必须 bump dataRefreshKey(App.onRuntimeParamsSaved),
+  // 这里守住"bump 后徽标立刻按新配置重算"这一环。
+  it('+TB 徽标随 dataRefreshKey 重算(保存 sync_tb_by_category 后立刻可见)', async () => {
+    let syncSp = false
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'get_remote_operation_config') {
+        return Promise.resolve({ sync_tb_by_category: { sp: syncSp } })
+      }
+      return Promise.resolve({ points: [A, B], seq: 1, total_count: 2 })
+    })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+
+    expect(wrapper.findAll('.tb-badge')).toHaveLength(0) // 开关关着:无徽标
+
+    syncSp = true // 用户在运行参数里开了 sp 的变位同步上送 TB 并保存
+    refs.dataRefreshKey.value++
+    await flushPromises()
+    await nextTick()
+
+    const badges = wrapper.findAll('.tb-badge')
+    expect(badges).toHaveLength(2) // 两个 M_SP_NA_1 点位都补上派生徽标
+    expect(badges[0].text()).toBe('+M_SP_TB_1 (30)')
+    wrapper.unmount()
+  })
+
   it('品质列渲染多位徽章(NT 高亮 / 正常显示 OK)', async () => {
     const ntPoint: DataPointInfo = { ...dp(1, 'M_SP_NA_1', '单点 (SP)', 'off'), quality_nt: true }
     const goodPoint = dp(2, 'M_SP_NA_1', '单点 (SP)', 'off')

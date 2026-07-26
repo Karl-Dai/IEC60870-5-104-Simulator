@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from '@shared/i18n'
 import { useRemoteParams } from '../composables/useRemoteParams'
 import RemoteParamsForm from './RemoteParamsForm.vue'
-import type { ServerInfo } from '../types'
+import type { ProtocolTimingConfig, RemoteOperationConfig, ServerInfo } from '../types'
 
 const { t } = useI18n()
 
@@ -20,19 +20,43 @@ const emit = defineEmits<{
   saved: []
 }>()
 
+// 连接参数(地址:端口)的已保存快照,空串表示"还没回读过" —— 见下方 transportDirty
+const transportBaseline = ref('')
+
 // 独立的 serverId ref —— 不污染 App 的全局 selectedServerId
 const localServerId = ref<string | null>(props.serverId)
-watch(() => props.serverId, v => { localServerId.value = v })
+watch(() => props.serverId, v => {
+  localServerId.value = v
+  // 换服务器:上一台的传输快照失效,清空基线让 loadTransport 必定回读
+  transportBaseline.value = ''
+})
 
 const { timing, ops, loading, lastError, load, applyTiming, applyOps } =
   useRemoteParams(localServerId)
+
+function snapshot(t: ProtocolTimingConfig, o: RemoteOperationConfig): string {
+  return JSON.stringify({ t, o })
+}
+
+// 未保存编辑的判定基线。load() 期间置空(此时表单值无意义),加载完成后取快照。
+const baselineKey = ref<string>('')
+watch(loading, (l) => {
+  baselineKey.value = l ? '' : snapshot(timing.value, ops.value)
+}, { immediate: true })
+
+const formDirty = computed(() =>
+  baselineKey.value !== '' && snapshot(timing.value, ops.value) !== baselineKey.value
+)
 
 // —— 连接参数(监听地址 / 端口)——
 // 传输配置原本仅创建时可设;这里允许停止状态下直接改端口,免去删除重建。
 const transport = reactive({ bindAddress: '', port: 0 })
 const serverState = ref('')
 const isRunning = computed(() => serverState.value === 'Running')
-let transportBaseline = ''
+const transportDirty = computed(() =>
+  transportBaseline.value !== '' &&
+  `${transport.bindAddress}:${transport.port}` !== transportBaseline.value
+)
 
 async function loadTransport() {
   const id = props.serverId
@@ -41,10 +65,13 @@ async function loadTransport() {
     const servers = await invoke<ServerInfo[]>('list_servers')
     const s = servers.find(x => x.id === id)
     if (s) {
-      transport.bindAddress = s.bind_address
-      transport.port = s.port
+      // 运行状态始终取最新(决定连接参数能否编辑);地址/端口有草稿时保留
       serverState.value = s.state
-      transportBaseline = `${s.bind_address}:${s.port}`
+      if (!transportDirty.value) {
+        transport.bindAddress = s.bind_address
+        transport.port = s.port
+        transportBaseline.value = `${s.bind_address}:${s.port}`
+      }
     }
   } catch (e) {
     lastError.value = String(e)
@@ -59,7 +86,7 @@ async function handleSave() {
   lastError.value = null
   try {
     // 先落地传输配置改动(仅当确有改动)。运行中由后端拒绝,前端也提前拦一次。
-    const changed = `${transport.bindAddress}:${transport.port}` !== transportBaseline
+    const changed = transportDirty.value
     if (changed) {
       if (isRunning.value) {
         lastError.value = t('remoteParams.stopBeforeEdit')
@@ -73,7 +100,7 @@ async function handleSave() {
             port: transport.port,
           },
         })
-        transportBaseline = `${transport.bindAddress}:${transport.port}`
+        transportBaseline.value = `${transport.bindAddress}:${transport.port}`
       } catch (e) {
         lastError.value = String(e)
         return
@@ -83,6 +110,8 @@ async function handleSave() {
     if (lastError.value) return
     await applyOps()
     if (lastError.value) return
+    // 已落库 → 基线跟上,下次打开才会重新回读后端(否则被误判成有草稿)
+    baselineKey.value = snapshot(timing.value, ops.value)
     emit('saved')
     emit('close')
   } finally {
@@ -104,8 +133,9 @@ watch(() => props.visible, (v) => {
   if (v) {
     loadTransport()
     // 同一服务器二次打开时 localServerId 不变,composable 的 watch 不会重载;
-    // 期间参数可能已被抽屉(RemoteParamsDrawer)改过,强制回读后端(issue #28)。
-    load()
+    // 期间参数可能已被抽屉(RemoteParamsDrawer)改过,回读后端(issue #28)。
+    // 但【有未保存编辑时不重载】—— 取消/Esc 关掉再打开不该静默丢弃用户的编辑。
+    if (!formDirty.value) load()
     window.addEventListener('keydown', handleEsc)
   } else {
     window.removeEventListener('keydown', handleEsc)

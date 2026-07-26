@@ -103,6 +103,58 @@ describe('RemoteParamsDrawer 打开时重载', () => {
     expect(invokeMock.mock.calls.some(c => c[0] === 'set_remote_operation_config')).toBe(true)
     expect(ww.emitted('saved')).toHaveLength(1)
   })
+
+  // 关掉抽屉保留草稿是原有设计(dirty 时才出现的 Discard 按钮就是为此)。
+  // 打开时无条件 load() 会让 Esc / 点背景关掉再打开 = 静默 Discard,无确认无提示。
+  it('有未保存编辑时关闭再打开:草稿保留,不静默回读覆盖', async () => {
+    const ww = mountDrawer(true)
+    await flushPromises()
+
+    await spSwitch(ww).setValue(true) // 用户改了但没保存
+    expect(ww.find('.rp-btn-ghost').exists()).toBe(true) // dirty → Discard 按钮出现
+    const before = opsCalls()
+
+    await ww.setProps({ visible: false }) // Esc / 点背景关闭
+    await ww.setProps({ visible: true })
+    await flushPromises()
+
+    expect(opsCalls()).toBe(before) // 没有回读 → 没覆盖草稿
+    expect(spCheckbox(ww).checked).toBe(true) // 编辑仍在
+    expect(ww.find('.rp-btn-ghost').exists()).toBe(true) // 仍可显式 Discard
+  })
+
+  it('显式 Discard 后回到后端值,基线重置(Discard 按钮消失)', async () => {
+    const ww = mountDrawer(true)
+    await flushPromises()
+
+    await spSwitch(ww).setValue(true)
+    await ww.find('.rp-btn-ghost').trigger('click')
+    await flushPromises()
+
+    expect(spCheckbox(ww).checked).toBe(false)
+    expect(ww.find('.rp-btn-ghost').exists()).toBe(false)
+  })
+
+  // useRemoteParams.load() 在 id 为 null 时早退、不翻转 loading,抽屉又借 watch(loading)
+  // 重置基线 —— 若不兜底,基线会残留上一台服务器的快照,留下点了也没用的幽灵 Discard。
+  it('选中服务器被清空(如删除服务器)不留幽灵 Discard 按钮', async () => {
+    // 后端值必须与 DEFAULT_REMOTE_OPS 不同,否则"基线残留"与"重置为默认"
+    // 快照相同,测不出问题
+    backendOps.sync_tb_by_category.dp = true
+    const sel = ref<string | null>('s1')
+    w = mount(RemoteParamsDrawer, {
+      props: { visible: true },
+      global: { stubs: { teleport: true }, provide: { selectedServerId: sel } },
+    })
+    await flushPromises()
+    await spSwitch(w).setValue(true)
+    expect(w.find('.rp-btn-ghost').exists()).toBe(true)
+
+    sel.value = null
+    await flushPromises()
+
+    expect(w.find('.rp-btn-ghost').exists()).toBe(false)
+  })
 })
 
 describe('RemoteParamsModal 二次打开重载', () => {
@@ -119,6 +171,68 @@ describe('RemoteParamsModal 二次打开重载', () => {
     backendOps.sync_tb_by_category.sp = true
     const before = opsCalls()
 
+    await w.setProps({ visible: true })
+    await flushPromises()
+
+    expect(opsCalls()).toBeGreaterThan(before)
+    expect(spCheckbox(w).checked).toBe(true)
+  })
+
+  it('有未保存编辑时取消再打开:草稿保留,不静默回读覆盖', async () => {
+    w = mount(RemoteParamsModal, {
+      props: { visible: true, serverId: 's1', serverLabel: '0.0.0.0:2404' },
+      global: { stubs: { teleport: true } },
+    })
+    await flushPromises()
+
+    await spSwitch(w).setValue(true) // 改了但点了「取消」
+    const before = opsCalls()
+
+    await w.setProps({ visible: false })
+    await w.setProps({ visible: true })
+    await flushPromises()
+
+    expect(opsCalls()).toBe(before)
+    expect(spCheckbox(w).checked).toBe(true)
+  })
+
+  it('连接参数(端口)草稿同样保留', async () => {
+    // 注意:loadTransport 只在 visible false→true 时跑,所以先关着挂载再打开
+    w = mount(RemoteParamsModal, {
+      props: { visible: false, serverId: 's1', serverLabel: '0.0.0.0:2404' },
+      global: { stubs: { teleport: true } },
+    })
+    await w.setProps({ visible: true })
+    await flushPromises()
+    // visible 每次 false→true 都会重建 modal 的 DOM,元素引用不能跨开关复用
+    const portValue = () =>
+      (w!.find('.rp-conn-grid input[type="number"]').element as HTMLInputElement).value
+    expect(portValue()).toBe('2404') // 后端值
+
+    await w.find('.rp-conn-grid input[type="number"]').setValue(2410) // 改端口但没保存
+    await w.setProps({ visible: false })
+    await w.setProps({ visible: true })
+    await flushPromises()
+
+    expect(portValue()).toBe('2410') // 草稿保留,没被后端值覆盖
+  })
+
+  it('保存成功后基线跟上:下次打开重新回读后端', async () => {
+    w = mount(RemoteParamsModal, {
+      props: { visible: true, serverId: 's1', serverLabel: '0.0.0.0:2404' },
+      global: { stubs: { teleport: true } },
+    })
+    await flushPromises()
+
+    await spSwitch(w).setValue(true)
+    await w.find('.btn-primary').trigger('click')
+    await flushPromises()
+    expect(w.emitted('saved')).toHaveLength(1)
+
+    // 保存已落库(后端也随之为 true),重开必须回读而不是被当成草稿
+    backendOps.sync_tb_by_category.sp = true
+    const before = opsCalls()
+    await w.setProps({ visible: false })
     await w.setProps({ visible: true })
     await flushPromises()
 

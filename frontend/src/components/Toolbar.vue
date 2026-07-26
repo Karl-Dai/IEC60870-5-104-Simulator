@@ -18,6 +18,7 @@ const showAbout = ref(false)
 const selectedServerId = inject<Ref<string | null>>('selectedServerId')!
 const selectedServerState = inject<Ref<string>>('selectedServerState')!
 const refreshTree = inject<() => void>('refreshTree')!
+const refreshData = inject<() => void>('refreshData')!
 const { showAlert, showPrompt, showConfirm } = inject<{
   showAlert: typeof ShowAlert
   showPrompt: typeof ShowPrompt
@@ -132,6 +133,9 @@ async function openConfig() {
   try {
     const count = await invoke<number>('load_config', { path })
     refreshTree()
+    // 配置里的运行参数(如 sync_tb_by_category)也换了一批:必须 bump dataRefreshKey,
+    // 否则数据表沿用旧快照,+TB 徽标按老配置显示(issue #28 同类残余)。
+    refreshData()
     await showAlert(t('toolbar.configLoaded', { count }))
   } catch (e) {
     await showAlert(`${t('toolbar.configLoadFailed')}: ${e}`)

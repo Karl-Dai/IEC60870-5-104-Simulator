@@ -33,6 +33,13 @@ watch(loading, (l) => {
   baselineKey.value = l ? '' : snapshot(timing.value, ops.value)
 }, { immediate: true })
 
+// selectedServerId 变成 null 时 useRemoteParams.load() 会早退、不翻转 loading,
+// 上面的 watch 不会触发 → 基线残留上一台服务器的快照,dirty 永久为真,
+// 留下一个点了也没用的"幽灵 Discard 按钮"。这里兜底重置。
+watch(selectedServerId, (id) => {
+  if (!id) baselineKey.value = snapshot(timing.value, ops.value)
+})
+
 const dirty = computed(() =>
   baselineKey.value !== '' && snapshot(timing.value, ops.value) !== baselineKey.value
 )
@@ -95,10 +102,12 @@ function handleEsc(e: KeyboardEvent) {
 
 watch(() => props.visible, (v) => {
   if (v) {
-    // 每次打开都从后端重载:composable 只在 selectedServerId 变化时 load,
+    // 打开时从后端重载:composable 只在 selectedServerId 变化时 load,
     // 期间若经弹窗(RemoteParamsModal)改过参数,这里的快照已经过期(issue #28)。
     // load() 翻转 loading,上面的 watch(loading) 会顺带重置 dirty 基线。
-    load()
+    // 但【有未保存编辑时不重载】—— 关掉抽屉保留草稿是原有设计(dirty 时才出现的
+    // Discard 按钮就是为此),无条件 load 等于 Esc/点背景关掉就静默丢弃用户编辑。
+    if (!dirty.value) load()
     window.addEventListener('keydown', handleEsc)
   } else {
     window.removeEventListener('keydown', handleEsc)

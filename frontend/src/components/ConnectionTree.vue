@@ -221,10 +221,21 @@ async function ctxDeleteStation() {
 }
 
 function ctxEditRuntimeParams() {
-  const serverId = contextMenu.value.serverId
+  const { serverId, ca, type, serverState } = contextMenu.value
   const ts = treeData.value.find(t => t.server.id === serverId)
   const serverLabel = ts ? `${ts.server.bind_address}:${ts.server.port}` : serverId
   closeContextMenu()
+  // issue #28:工具栏抽屉与数据表的 +TB 徽标读的是【树选中的】selectedServerId,
+  // 而右键弹窗走独立的 serverId。若右键的不是当前选中节点(含树上什么都没选),
+  // 先把树选中对齐到右键的服务器 —— 复用 server-select / station-select 的完整语义
+  // (顺带清掉陈旧的 CA / 分类 / 点位选择),否则改完 B 的参数抽屉和徽标仍显示 A。
+  if (type === 'station') {
+    if (selectedServerId.value !== serverId || selectedCA.value !== ca) {
+      emit('station-select', serverId, ca)
+    }
+  } else if (selectedServerId.value !== serverId) {
+    emit('server-select', serverId, ts ? ts.server.state : serverState)
+  }
   emit('edit-runtime-params', serverId, serverLabel)
 }
 
