@@ -88,63 +88,65 @@ async function submit() {
     <div v-if="visible" class="modal-overlay dialog-blur" @mousedown.self="close">
       <div class="modal-box">
         <div class="modal-title">{{ t('newServer.title') }}</div>
-        <div class="modal-field">
-          <label>{{ t('newServer.bindAddressLabel') }}</label>
-          <input
-            v-model="bindAddress"
-            type="text"
-            list="bind-address-suggestions"
-            placeholder="0.0.0.0"
-            @keyup.enter="submit"
-          />
-          <datalist id="bind-address-suggestions">
-            <option v-for="addr in bindSuggestions" :key="addr" :value="addr" />
-          </datalist>
-          <div class="field-hint">{{ t('newServer.bindAddressHint') }}</div>
-        </div>
-        <div class="modal-field">
-          <label>{{ t('newServer.portLabel') }}</label>
-          <input v-model="port" type="number" min="1" max="65535" @keyup.enter="submit" />
-        </div>
-        <div class="modal-field">
-          <label>{{ t('newServer.initMode') }}</label>
-          <div class="radio-group">
-            <label class="radio-label">
-              <input type="radio" v-model="initMode" value="zero" /> {{ t('newServer.initZero') }}
-            </label>
-            <label class="radio-label">
-              <input type="radio" v-model="initMode" value="random" /> {{ t('newServer.initRandom') }}
-            </label>
-          </div>
-        </div>
-        <div class="modal-field">
-          <label>{{ t('newServer.countPerCategory') }}</label>
-          <input v-model.number="count" type="number" min="0" max="65534" @keyup.enter="submit" />
-        </div>
-        <div class="modal-field">
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="useTls" /> {{ t('newServer.enableTls') }}
-          </label>
-        </div>
-        <template v-if="useTls">
+        <div class="modal-body">
           <div class="modal-field">
-            <label>{{ t('newServer.serverCert') }}</label>
-            <input v-model="certFile" type="text" placeholder="/path/to/server.crt" />
+            <label>{{ t('newServer.bindAddressLabel') }}</label>
+            <input
+              v-model="bindAddress"
+              type="text"
+              list="bind-address-suggestions"
+              placeholder="0.0.0.0"
+              @keyup.enter="submit"
+            />
+            <datalist id="bind-address-suggestions">
+              <option v-for="addr in bindSuggestions" :key="addr" :value="addr" />
+            </datalist>
+            <div class="field-hint">{{ t('newServer.bindAddressHint') }}</div>
           </div>
           <div class="modal-field">
-            <label>{{ t('newServer.serverKey') }}</label>
-            <input v-model="keyFile" type="text" placeholder="/path/to/server.key" />
+            <label>{{ t('newServer.portLabel') }}</label>
+            <input v-model="port" type="number" min="1" max="65535" @keyup.enter="submit" />
           </div>
           <div class="modal-field">
-            <label>{{ t('newServer.caFile') }}</label>
-            <input v-model="caFile" type="text" placeholder="/path/to/ca.crt" />
+            <label>{{ t('newServer.initMode') }}</label>
+            <div class="radio-group">
+              <label class="radio-label">
+                <input type="radio" v-model="initMode" value="zero" /> {{ t('newServer.initZero') }}
+              </label>
+              <label class="radio-label">
+                <input type="radio" v-model="initMode" value="random" /> {{ t('newServer.initRandom') }}
+              </label>
+            </div>
+          </div>
+          <div class="modal-field">
+            <label>{{ t('newServer.countPerCategory') }}</label>
+            <input v-model.number="count" type="number" min="0" max="65534" @keyup.enter="submit" />
           </div>
           <div class="modal-field">
             <label class="checkbox-label">
-              <input type="checkbox" v-model="requireClientCert" /> {{ t('newServer.requireClientCert') }}
+              <input type="checkbox" v-model="useTls" /> {{ t('newServer.enableTls') }}
             </label>
           </div>
-        </template>
+          <template v-if="useTls">
+            <div class="modal-field">
+              <label>{{ t('newServer.serverCert') }}</label>
+              <input v-model="certFile" type="text" placeholder="/path/to/server.crt" />
+            </div>
+            <div class="modal-field">
+              <label>{{ t('newServer.serverKey') }}</label>
+              <input v-model="keyFile" type="text" placeholder="/path/to/server.key" />
+            </div>
+            <div class="modal-field">
+              <label>{{ t('newServer.caFile') }}</label>
+              <input v-model="caFile" type="text" placeholder="/path/to/ca.crt" />
+            </div>
+            <div class="modal-field">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="requireClientCert" /> {{ t('newServer.requireClientCert') }}
+              </label>
+            </div>
+          </template>
+        </div>
         <div class="modal-actions">
           <button class="modal-btn cancel" @click="close">{{ t('common.cancel') }}</button>
           <button class="modal-btn confirm" @click="submit">{{ t('common.ok') }}</button>
@@ -171,13 +173,26 @@ async function submit() {
   border-radius: 8px;
   padding: 20px;
   min-width: 300px;
+  max-width: 90vw;
+  /* issue #28:勾选 TLS 后展开到 9 个字段(约 650px),小视口下标题/按钮必须常驻,
+     滚动收进 .modal-body —— 之前连 max-height 都没有,超高内容直接被裁且滚不到。 */
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 .modal-title {
+  flex-shrink: 0;
   font-size: 14px;
   font-weight: 600;
   color: var(--c-text);
   margin-bottom: 16px;
+}
+.modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 .modal-field { margin-bottom: 14px; }
 .modal-field label {
@@ -226,6 +241,7 @@ async function submit() {
   gap: 16px;
 }
 .modal-actions {
+  flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
   gap: 8px;
