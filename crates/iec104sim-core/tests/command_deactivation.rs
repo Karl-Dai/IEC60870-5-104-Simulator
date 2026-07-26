@@ -18,7 +18,10 @@ use std::time::Duration;
 use iec104sim_core::log_collector::LogCollector;
 use iec104sim_core::log_entry::Direction;
 use iec104sim_core::master::{MasterConfig, MasterConnection};
-use iec104sim_core::slave::{SlaveServer, SlaveTransportConfig, Station};
+use iec104sim_core::slave::{SlaveServer, SlaveTlsConfig, SlaveTransportConfig, Station};
+
+mod common;
+use common::cert_gen;
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -46,7 +49,8 @@ fn iframe_negative(frame: &[u8]) -> bool {
 }
 
 /// 读一条完整 104 帧,返回 (整帧字节, ctrl1)。帧不完整或读到 EOF 返回 None。
-fn read_one_frame(stream: &mut TcpStream) -> Option<(Vec<u8>, u8)> {
+/// 泛型于 `Read`,明文 TcpStream 与 TLS 流复用同一份读帧逻辑。
+fn read_one_frame<S: Read>(stream: &mut S) -> Option<(Vec<u8>, u8)> {
     let mut hdr = [0u8; 2];
     if stream.read_exact(&mut hdr).is_err() {
         return None;
@@ -83,20 +87,15 @@ async fn spawn_slave() -> (SlaveServer, u16) {
     (slave, port)
 }
 
-/// 连接 + STARTDT,返回已就绪的 TcpStream。
-fn connect_and_startdt(port: u16) -> TcpStream {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
-    stream
-        .write_all(&[0x68, 0x04, 0x07, 0x00, 0x00, 0x00])
-        .unwrap();
+/// 在已建立的流上发 STARTDT ACT 并等到 STARTDT CON。明文与 TLS 共用。
+fn startdt<S: Read + Write>(stream: &mut S) {
+    send(stream, &[0x68, 0x04, 0x07, 0x00, 0x00, 0x00]);
     // 读到 STARTDT CON (U-frame, ctrl1=0x0B)。
     loop {
-        match read_one_frame(&mut stream) {
+        match read_one_frame(stream) {
             Some((_frame, ctrl1)) if ctrl1 & 0x03 == 0x03 => {
                 assert_eq!(ctrl1, 0x0B, "expected STARTDT CON (0x0B)");
-                return stream;
+                return;
             }
             Some(_) => continue,
             None => panic!("EOF before STARTDT CON"),
@@ -104,8 +103,17 @@ fn connect_and_startdt(port: u16) -> TcpStream {
     }
 }
 
+/// 连接 + STARTDT,返回已就绪的 TcpStream。
+fn connect_and_startdt(port: u16) -> TcpStream {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+    startdt(&mut stream);
+    stream
+}
+
 /// 读到第一条 I 帧(跳过中间的 S 帧),返回整帧字节。
-fn first_iframe(stream: &mut TcpStream) -> Vec<u8> {
+fn first_iframe<S: Read>(stream: &mut S) -> Vec<u8> {
     loop {
         match read_one_frame(stream) {
             Some((frame, ctrl1)) if ctrl1 & 0x01 == 0 => return frame,
@@ -116,8 +124,9 @@ fn first_iframe(stream: &mut TcpStream) -> Vec<u8> {
 }
 
 /// 发送一帧裸 APDU。
-fn send(stream: &mut TcpStream, frame: &[u8]) {
+fn send<S: Write>(stream: &mut S, frame: &[u8]) {
     stream.write_all(frame).unwrap();
+    stream.flush().unwrap();
 }
 
 // =========================================================================
@@ -1012,6 +1021,137 @@ async fn execute_without_act_term_when_disabled() {
             frame
         );
     }
+
+    let _ = slave.stop().await;
+}
+
+/// 读到指定 ASDU type 的 I 帧(跳过 S 帧与其它类型,例如控制写回产生的 COT=3 突发),
+/// 读超时/EOF 则 panic。
+fn iframe_of_type<S: Read>(stream: &mut S, asdu_type: u8) -> Vec<u8> {
+    loop {
+        match read_one_frame(stream) {
+            Some((frame, ctrl1)) => {
+                if ctrl1 & 0x01 != 0 { continue; } // S/U 帧
+                if frame.len() > 8 && frame[6] == asdu_type { return frame; }
+            }
+            None => panic!("读超时/EOF,未收到 type={} 的 I 帧", asdu_type),
+        }
+    }
+}
+
+/// 运行中(连接不断开)切换 answer_clock_sync 与 send_act_term:两个开关都按帧现读
+/// ops 快照,因此对同一条已建立的连接立即生效。这条路径才是用户实际操作方式
+/// (先连上主站,再在界面上拨开关),其余用例都是 connect 前就设好开关。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_ops_switches_apply_on_live_connection() {
+    let (mut slave, port) = spawn_slave().await;
+    let mut stream = connect_and_startdt(port);
+
+    // --- 1. 默认开启:对时回 ACT_CON(7) ---
+    send(&mut stream, &build_clock_sync_frame(1, 6));
+    let resp = iframe_of_type(&mut stream, 103);
+    assert_eq!(iframe_cot(&resp) & 0x3F, 7, "默认应回 ACT_CON(7)");
+    assert!(!iframe_negative(&resp), "ACT_CON 不应带 negative 位");
+
+    // --- 2. 连接保持不断,运行中关掉时钟同步应答 ---
+    let mut ops = slave.get_remote_ops().await;
+    ops.answer_clock_sync = false;
+    slave.set_remote_ops(ops).await;
+
+    send(&mut stream, &build_clock_sync_frame(1, 6));
+    let resp = iframe_of_type(&mut stream, 103);
+    assert_eq!(
+        iframe_cot(&resp) & 0x3F, 44,
+        "运行中关闭后同一连接上应立即回 COT=44,实际 COT 字节={:#04X}", resp[8]
+    );
+    assert!(iframe_negative(&resp), "COT=44 拒收应带 negative 位");
+
+    // --- 3. 同一连接上先确认默认会发 ACT_TERM ---
+    send(&mut stream, &build_sc_execute_frame(1));
+    let con = iframe_of_type(&mut stream, 45);
+    assert_eq!(iframe_cot(&con) & 0x3F, 7, "执行首帧应为 ACT_CON(7)");
+    let term = iframe_of_type(&mut stream, 45);
+    assert_eq!(iframe_cot(&term) & 0x3F, 10, "默认应追加 ACT_TERM(10)");
+
+    // --- 4. 连接保持不断,运行中关掉 Actterm ---
+    let mut ops = slave.get_remote_ops().await;
+    ops.send_act_term = false;
+    slave.set_remote_ops(ops).await;
+
+    send(&mut stream, &build_sc_execute_frame(1));
+    let con = iframe_of_type(&mut stream, 45);
+    assert_eq!(iframe_cot(&con) & 0x3F, 7, "执行首帧应为 ACT_CON(7)");
+    while let Some((frame, ctrl1)) = read_one_frame(&mut stream) {
+        if ctrl1 & 0x01 != 0 { continue; }
+        assert!(
+            !(frame.len() > 8 && frame[6] == 45 && iframe_cot(&frame) & 0x3F == 10),
+            "运行中关闭 Actterm 后同一连接上不应再出现 ACT_TERM: {:02X?}",
+            frame
+        );
+    }
+
+    let _ = slave.stop().await;
+}
+
+/// TLS(阻塞收包路径 handle_client_blocking)上的时钟同步门控:与异步明文路径是
+/// 两份复制粘贴的逻辑,这里给 TLS 侧钉一条断言,防止只改一边。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clock_sync_rejected_when_answer_disabled_over_tls() {
+    let certs = cert_gen::generate();
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = cert_gen::write_to_dir(&certs, tmp.path());
+
+    let port = free_port();
+    let transport = SlaveTransportConfig {
+        bind_address: "127.0.0.1".to_string(),
+        port,
+        tls: SlaveTlsConfig {
+            enabled: true,
+            cert_file: String::new(),
+            key_file: String::new(),
+            ca_file: String::new(),
+            require_client_cert: false,
+            pkcs12_file: paths.server_pkcs12.to_str().unwrap().to_string(),
+            pkcs12_password: cert_gen::PKCS12_PASS.to_string(),
+        },
+    };
+    let mut slave = SlaveServer::new(transport);
+    slave
+        .add_station(Station::with_default_points(1, "TLS Test", 2))
+        .await
+        .unwrap();
+    let mut ops = slave.get_remote_ops().await;
+    ops.answer_clock_sync = false;
+    slave.set_remote_ops(ops).await;
+    slave.start().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // 裸 TLS 客户端:证书由 cert_gen 现生成,这里只关心应用层 COT,故跳过校验。
+    // 客户端握手与读写是阻塞 I/O,放进 spawn_blocking 避免占住 runtime 工作线程。
+    let resp = tokio::task::spawn_blocking(move || {
+        let connector = native_tls::TlsConnector::builder()
+            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_hostnames(true)
+            .build()
+            .unwrap();
+        let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        tcp.set_write_timeout(Some(Duration::from_secs(5))).ok();
+        let mut stream = connector.connect("localhost", tcp).expect("TLS 握手失败");
+
+        startdt(&mut stream);
+        send(&mut stream, &build_clock_sync_frame(1, 6));
+        first_iframe(&mut stream)
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(resp[6], 103, "应答应回显 type=103");
+    assert_eq!(
+        iframe_cot(&resp) & 0x3F, 44,
+        "TLS 路径关闭后 103 应回 COT=44,实际 COT 字节={:#04X}", resp[8]
+    );
+    assert!(iframe_negative(&resp), "TLS 路径 COT=44 拒收应带 negative 位");
 
     let _ = slave.stop().await;
 }

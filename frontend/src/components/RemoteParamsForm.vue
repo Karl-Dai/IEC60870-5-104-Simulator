@@ -115,6 +115,7 @@ const timingMeta: { key: 't0' | 't1' | 't2' | 't3' | 'k' | 'w'; hintKey: string;
         <span class="rp-switch-text">{{ t('remoteParams.clockSync') }}</span>
         <code class="rp-tag">C_CS_NA_1</code>
       </label>
+      <div class="rp-switch-note">{{ t('remoteParams.clockSyncHint') }}</div>
       <label class="rp-switch">
         <input type="checkbox" v-model="ops.answer_commands" />
         <span class="rp-switch-text">{{ t('remoteParams.commands') }}</span>
@@ -157,9 +158,14 @@ const timingMeta: { key: 't0' | 't1' | 't2' | 't3' | 'k' | 'w'; hintKey: string;
       </div>
       <div class="rp-field">
         <label>{{ t('remoteParams.execute') }}</label>
-        <select v-model="ops.execute_ack_cot">
+        <!-- Execute COT 只决定终止帧的 COT:ACT_TERM 关闭时后端根本不发终止帧,
+             此处必须禁用,否则用户改成 10 却抓不到终止帧(issue #28)。 -->
+        <select v-model="ops.execute_ack_cot" :disabled="!ops.send_act_term">
           <option v-for="o in cotOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
+      </div>
+      <div v-if="!ops.send_act_term" class="rp-note rp-note-warn">
+        {{ t('remoteParams.executeCotDisabledHint') }}
       </div>
       <div class="rp-field">
         <label>{{ t('remoteParams.cancel') }}</label>
@@ -171,6 +177,7 @@ const timingMeta: { key: 't0' | 't1' | 't2' | 't3' | 'k' | 'w'; hintKey: string;
         <input type="checkbox" v-model="ops.send_act_term" />
         <span class="rp-switch-text">{{ t('remoteParams.sendActTerm') }}</span>
       </label>
+      <div class="rp-switch-note">{{ t('remoteParams.sendActTermHint') }}</div>
       <div class="rp-note">{{ t('remoteParams.appLayerNote') }}</div>
     </div>
 
@@ -318,6 +325,19 @@ const timingMeta: { key: 't0' | 't1' | 't2' | 't3' | 'k' | 'w'; hintKey: string;
   font-size: 11px;
   color: var(--c-overlay0);
   line-height: 1.5;
+}
+
+/* 开关下方的行为说明：与开关文字左对齐（复选框 14px + gap 8px）。 */
+.rp-switch-note {
+  margin: 0 0 6px 22px;
+  font-size: 11px;
+  color: var(--c-overlay0);
+  line-height: 1.5;
+}
+
+/* 联动禁用提示：比普通说明更醒目，说明控件为何变灰。 */
+.rp-note-warn {
+  color: var(--c-yellow, var(--c-subtext1, var(--c-subtext0)));
 }
 
 /* —— 链路参数：单列表行 —— */
@@ -469,6 +489,16 @@ const timingMeta: { key: 't0' | 't1' | 't2' | 't3' | 'k' | 'w'; hintKey: string;
 .rp-field select:hover,
 .rp-field input[type="number"]:hover {
   border-color: var(--c-surface1);
+}
+
+.rp-field select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--c-surface0);
+}
+
+.rp-field select:disabled:hover {
+  border-color: var(--c-surface0);
 }
 
 .rp-field select:focus,

@@ -624,6 +624,35 @@ fn build_response_frame(recv: &[u8], cot: u8, seq: &mut SeqState) -> Vec<u8> {
     out
 }
 
+/// 时钟同步(C_CS_NA_1)应答日志。异步(明文 TCP)与阻塞(TLS)两条收包路径共用,
+/// 避免同一文案再分裂成两份。
+///
+/// `enabled=false`(时钟同步应答开关关闭,issue #28)分支带 `detail_event`,
+/// 前端按 `log.clockSyncDisabled` 随界面语言渲染,不再输出硬编码中文;
+/// 另两条分支沿用既有文案(其 i18n 键缺失属先于本次改动的独立问题)。
+fn clock_sync_log_entry(is_activation: bool, enabled: bool, cot_in: u8, ca: u16) -> LogEntry {
+    if is_activation {
+        LogEntry::new(
+            Direction::Tx,
+            FrameLabel::ClockSync,
+            format!("时钟同步确认 CA={}", ca),
+        )
+    } else if !enabled {
+        LogEntry::new(
+            Direction::Tx,
+            FrameLabel::ClockSync,
+            format!("Clock sync rejected (replies disabled) CA={}", ca),
+        )
+        .with_detail_event("clockSyncDisabled", serde_json::json!({ "ca": ca }))
+    } else {
+        LogEntry::new(
+            Direction::Tx,
+            FrameLabel::ClockSync,
+            format!("时钟同步 拒收(非激活 COT={}) CA={}", cot_in, ca),
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Control-direction command processing (Type 45-51 / 58-64)
 // 异步(明文 TCP)与阻塞(TLS)两条收包路径共用,消除历史上六份复制粘贴分支。
@@ -1849,6 +1878,10 @@ async fn handle_client_read_loop(
                                 let cot_in = cause & 0x3F;
                                 // 时间同步应答开关(issue #28):关闭后按未知类型拒收
                                 // (COT=44 + P/N),与不支持该类型的装置行为一致。
+                                // ⚠ 同步锚点:阻塞(TLS)收包路径有同一份门控 —— 见
+                                // handle_client_blocking 的 `103 =>` 分支(搜索
+                                // "同步锚点:异步(明文 TCP)收包路径")。任何改动必须两处同改,
+                                // 本文件历史上正是靠"两条路径各自复制粘贴"踩过坑。
                                 let enabled = ops_snapshot.answer_clock_sync;
                                 let is_activation = enabled && cot_in == 6;
                                 let ack_cot = if !enabled {
@@ -1862,20 +1895,7 @@ async fn handle_client_read_loop(
                                 };
                                 queue.lock().await.extend_from_slice(&ack);
                                 if let Some(ref lc) = log_collector {
-                                    lc.try_add(LogEntry::new(
-                                        Direction::Tx,
-                                        FrameLabel::ClockSync,
-                                        if is_activation {
-                                            format!("时钟同步确认 CA={}", ca)
-                                        } else if !enabled {
-                                            format!("时钟同步 拒收(应答已禁用) CA={}", ca)
-                                        } else {
-                                            format!(
-                                                "时钟同步 拒收(非激活 COT={}) CA={}",
-                                                cot_in, ca
-                                            )
-                                        },
-                                    ));
+                                    lc.try_add(clock_sync_log_entry(is_activation, enabled, cot_in, ca));
                                 }
                             } else {
                                 // 畸形短帧:回 unknown-type 拒收(COT=44 + negative),不执行对时。
@@ -2203,6 +2223,11 @@ fn handle_client_blocking(
                         if data.len() >= 22 {
                             let cot_in = cause & 0x3F;
                             // 时间同步应答开关(issue #28):与明文 TCP 路径一致。
+                            // ⚠ 同步锚点:异步(明文 TCP)收包路径有同一份门控 —— 见
+                            // handle_client_read_loop 的 `103 =>` 分支(搜索
+                            // "同步锚点:阻塞(TLS)收包路径")。任何改动必须两处同改。
+                            // 覆盖:tests/command_deactivation.rs
+                            // `clock_sync_rejected_when_answer_disabled_over_tls`。
                             let enabled = ops_snapshot.answer_clock_sync;
                             let is_activation = enabled && cot_in == 6;
                             let ack_cot = if !enabled {
@@ -2216,17 +2241,7 @@ fn handle_client_blocking(
                             });
                             let _ = stream.write_all(&ack);
                             if let Some(ref lc) = log_collector {
-                                lc.try_add(LogEntry::new(
-                                    Direction::Tx,
-                                    FrameLabel::ClockSync,
-                                    if is_activation {
-                                        format!("时钟同步确认 CA={}", ca)
-                                    } else if !enabled {
-                                        format!("时钟同步 拒收(应答已禁用) CA={}", ca)
-                                    } else {
-                                        format!("时钟同步 拒收(非激活 COT={}) CA={}", cot_in, ca)
-                                    },
-                                ));
+                                lc.try_add(clock_sync_log_entry(is_activation, enabled, cot_in, ca));
                             }
                         } else {
                             // 畸形短帧:回 unknown-type 拒收(COT=44 + negative),不执行对时。
