@@ -875,7 +875,7 @@ const dict: DictShape = {
     counterInterrogation: '累积量召唤',
     commands: '遥控、遥调',
     clockSync: '时钟同步（对时）',
-    clockSyncHint: '关闭不是静默不应答：收到 C_CS_NA_1 会回 COT=44（未知类型标识）+ P/N 否定确认，且不修改本机时钟。抓包上每条请求仍能看到一帧应答。',
+    clockSyncHint: '关闭不是静默不应答：收到 C_CS_NA_1 会回 COT=44（未知类型标识）+ P/N 否定确认，抓包上每条请求仍能看到一帧应答。无论开关开或关，模拟器都不会调整本机时钟——该开关只决定如何应答。',
     sendActTerm: '执行后追加 ACT_TERM（激活终止帧）',
     sendActTermHint: '仅作用于遥控、遥调的执行应答。总召唤与累积量召唤的结束帧按 IEC 60870-5-104 要求仍为 COT=10，不受此开关影响。',
     executeCotDisabledHint: 'Execute COT 仅在 ACT_TERM 开启时生效；ACT_TERM 关闭后完全不发终止帧，子站只回 ACT_CON（COT=7）。',

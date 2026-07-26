@@ -415,7 +415,7 @@ const dict: DictShape = {
     counterInterrogation: 'Counter Interrogation',
     commands: 'Commands & Setpoints',
     clockSync: 'Time synchronization (clock sync)',
-    clockSyncHint: 'Off does NOT mean silence: C_CS_NA_1 is rejected with COT=44 (unknown type ID) + P/N negative confirm, and the local clock is left untouched. Expect one reply frame per request in the capture.',
+    clockSyncHint: 'Off does NOT mean silence: C_CS_NA_1 is rejected with COT=44 (unknown type ID) + P/N negative confirm, so expect one reply frame per request in the capture. Either way the simulator never adjusts the host clock — this switch only decides how the command is answered.',
     sendActTerm: 'Append ACT_TERM (activation termination) after execute',
     sendActTermHint: 'Applies to command/setpoint execution only. General interrogation and counter interrogation still terminate with COT=10 as IEC 60870-5-104 requires — this switch does not change that.',
     executeCotDisabledHint: 'Execute COT only takes effect while ACT_TERM is enabled; with ACT_TERM off no termination frame is sent at all and the slave replies ACT_CON (COT=7) only.',
