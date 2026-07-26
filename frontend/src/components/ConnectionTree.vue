@@ -230,7 +230,10 @@ function ctxEditRuntimeParams() {
   // 先把树选中对齐到右键的服务器 —— 复用 server-select / station-select 的完整语义
   // (顺带清掉陈旧的 CA / 分类 / 点位选择),否则改完 B 的参数抽屉和徽标仍显示 A。
   if (type === 'station') {
-    if (selectedServerId.value !== serverId || selectedCA.value !== ca) {
+    // 仅在服务器不一致时才对齐(用 station-select 而非 server-select,顺带对上 CA,
+    // 保存后当前点表直接能看到 +TB 徽标)。服务器本已一致时不动用户当前查看的站 ——
+    // 右键看一眼服务器级参数不该把点表切到别的站。
+    if (selectedServerId.value !== serverId) {
       emit('station-select', serverId, ca)
     }
   } else if (selectedServerId.value !== serverId) {

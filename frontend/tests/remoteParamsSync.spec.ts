@@ -178,7 +178,10 @@ describe('RemoteParamsModal 二次打开重载', () => {
     expect(spCheckbox(w).checked).toBe(true)
   })
 
-  it('有未保存编辑时取消再打开:草稿保留,不静默回读覆盖', async () => {
+  // 弹窗是「取消 / 保存」语义:没有 Discard 按钮、也没有 dirty 指示,
+  // 所以「取消」必须真的取消。曾经为了保留草稿而跳过回读,导致用户放弃的改动
+  // 在下次保存时被静默写回后端(issue #28 审查发现),这两条用例守住反向行为。
+  it('取消再打开:未保存的改动被丢弃,回读后端值', async () => {
     w = mount(RemoteParamsModal, {
       props: { visible: true, serverId: 's1', serverLabel: '0.0.0.0:2404' },
       global: { stubs: { teleport: true } },
@@ -192,11 +195,11 @@ describe('RemoteParamsModal 二次打开重载', () => {
     await w.setProps({ visible: true })
     await flushPromises()
 
-    expect(opsCalls()).toBe(before)
-    expect(spCheckbox(w).checked).toBe(true)
+    expect(opsCalls()).toBeGreaterThan(before) // 重新回读了后端
+    expect(spCheckbox(w).checked).toBe(false) // 放弃的改动没留下
   })
 
-  it('连接参数(端口)草稿同样保留', async () => {
+  it('取消端口改动后再打开:端口回到后端值,且保存不会写回被放弃的端口', async () => {
     // 注意:loadTransport 只在 visible false→true 时跑,所以先关着挂载再打开
     w = mount(RemoteParamsModal, {
       props: { visible: false, serverId: 's1', serverLabel: '0.0.0.0:2404' },
@@ -209,15 +212,22 @@ describe('RemoteParamsModal 二次打开重载', () => {
       (w!.find('.rp-conn-grid input[type="number"]').element as HTMLInputElement).value
     expect(portValue()).toBe('2404') // 后端值
 
-    await w.find('.rp-conn-grid input[type="number"]').setValue(2410) // 改端口但没保存
+    await w.find('.rp-conn-grid input[type="number"]').setValue(2410) // 改端口但点了取消
     await w.setProps({ visible: false })
     await w.setProps({ visible: true })
     await flushPromises()
 
-    expect(portValue()).toBe('2410') // 草稿保留,没被后端值覆盖
+    expect(portValue()).toBe('2404') // 草稿被丢弃,回到后端值
+
+    // 关键回归:此时为改别的设置而点保存,不能把已放弃的 2410 写进后端
+    await spSwitch(w).setValue(true)
+    await w.find('.btn-primary').trigger('click')
+    await flushPromises()
+    const transportCalls = invokeMock.mock.calls.filter(c => c[0] === 'update_server_transport')
+    expect(transportCalls).toHaveLength(0)
   })
 
-  it('保存成功后基线跟上:下次打开重新回读后端', async () => {
+  it('保存成功后再打开:仍会回读后端最新值', async () => {
     w = mount(RemoteParamsModal, {
       props: { visible: true, serverId: 's1', serverLabel: '0.0.0.0:2404' },
       global: { stubs: { teleport: true } },
@@ -229,7 +239,7 @@ describe('RemoteParamsModal 二次打开重载', () => {
     await flushPromises()
     expect(w.emitted('saved')).toHaveLength(1)
 
-    // 保存已落库(后端也随之为 true),重开必须回读而不是被当成草稿
+    // 保存已落库(后端也随之为 true),重开必须回读后端
     backendOps.sync_tb_by_category.sp = true
     const before = opsCalls()
     await w.setProps({ visible: false })

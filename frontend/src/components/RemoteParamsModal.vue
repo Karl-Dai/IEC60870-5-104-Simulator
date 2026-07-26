@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from '@shared/i18n'
 import { useRemoteParams } from '../composables/useRemoteParams'
 import RemoteParamsForm from './RemoteParamsForm.vue'
-import type { ProtocolTimingConfig, RemoteOperationConfig, ServerInfo } from '../types'
+import type { ServerInfo } from '../types'
 
 const { t } = useI18n()
 
@@ -34,20 +34,6 @@ watch(() => props.serverId, v => {
 const { timing, ops, loading, lastError, load, applyTiming, applyOps } =
   useRemoteParams(localServerId)
 
-function snapshot(t: ProtocolTimingConfig, o: RemoteOperationConfig): string {
-  return JSON.stringify({ t, o })
-}
-
-// 未保存编辑的判定基线。load() 期间置空(此时表单值无意义),加载完成后取快照。
-const baselineKey = ref<string>('')
-watch(loading, (l) => {
-  baselineKey.value = l ? '' : snapshot(timing.value, ops.value)
-}, { immediate: true })
-
-const formDirty = computed(() =>
-  baselineKey.value !== '' && snapshot(timing.value, ops.value) !== baselineKey.value
-)
-
 // —— 连接参数(监听地址 / 端口)——
 // 传输配置原本仅创建时可设;这里允许停止状态下直接改端口,免去删除重建。
 const transport = reactive({ bindAddress: '', port: 0 })
@@ -65,13 +51,14 @@ async function loadTransport() {
     const servers = await invoke<ServerInfo[]>('list_servers')
     const s = servers.find(x => x.id === id)
     if (s) {
-      // 运行状态始终取最新(决定连接参数能否编辑);地址/端口有草稿时保留
+      // 每次打开都取后端最新值。本弹窗是「取消 / 保存」语义(没有 Discard、
+      // 也没有 dirty 指示),保留草稿会让「取消」不再取消 —— 用户放弃的端口改动
+      // 会在下次保存时被静默写回后端(issue #28 审查)。抽屉那侧有显式 Discard,
+      // 才按「关闭保留草稿」处理。
       serverState.value = s.state
-      if (!transportDirty.value) {
-        transport.bindAddress = s.bind_address
-        transport.port = s.port
-        transportBaseline.value = `${s.bind_address}:${s.port}`
-      }
+      transport.bindAddress = s.bind_address
+      transport.port = s.port
+      transportBaseline.value = `${s.bind_address}:${s.port}`
     }
   } catch (e) {
     lastError.value = String(e)
@@ -110,8 +97,6 @@ async function handleSave() {
     if (lastError.value) return
     await applyOps()
     if (lastError.value) return
-    // 已落库 → 基线跟上,下次打开才会重新回读后端(否则被误判成有草稿)
-    baselineKey.value = snapshot(timing.value, ops.value)
     emit('saved')
     emit('close')
   } finally {
@@ -133,9 +118,8 @@ watch(() => props.visible, (v) => {
   if (v) {
     loadTransport()
     // 同一服务器二次打开时 localServerId 不变,composable 的 watch 不会重载;
-    // 期间参数可能已被抽屉(RemoteParamsDrawer)改过,回读后端(issue #28)。
-    // 但【有未保存编辑时不重载】—— 取消/Esc 关掉再打开不该静默丢弃用户的编辑。
-    if (!formDirty.value) load()
+    // 期间参数可能已被抽屉(RemoteParamsDrawer)改过,故每次打开都回读后端(issue #28)。
+    load()
     window.addEventListener('keydown', handleEsc)
   } else {
     window.removeEventListener('keydown', handleEsc)
