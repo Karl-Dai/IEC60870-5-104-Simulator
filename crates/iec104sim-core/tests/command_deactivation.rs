@@ -932,7 +932,9 @@ async fn master_emits_cot8_broadcast_gi_deactivation() {
 // issue #28:时钟同步应答开关(answer_clock_sync)与 Actterm 开关(send_act_term)
 // =========================================================================
 
-/// answer_clock_sync=false:合法激活对时也应按未知类型拒收(COT=44 + P/N),不执行对时。
+/// answer_clock_sync=false:合法激活对时应回【否定激活确认】COT=7 + P/N,不执行对时。
+/// 不是 COT=44 —— 类型 103 识别得了、COT=6 也能理解,这是"结构合法、仅因配置拒绝执行",
+/// 正是 ACT_CON 带 P/N 的语义(报告人在 issue #28 用另一款模拟器的抓包对比后确认)。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn clock_sync_rejected_when_answer_disabled() {
     let (mut slave, port) = spawn_slave().await;
@@ -946,8 +948,8 @@ async fn clock_sync_rejected_when_answer_disabled() {
     let resp = first_iframe(&mut stream);
     assert_eq!(
         iframe_cot(&resp) & 0x3F,
-        44,
-        "禁用后 103 应回 COT=44(UNKNOWN_TYPE),实际 COT 字节={:#04X}",
+        7,
+        "禁用后 103 应回 COT=7(ACT_CON)+P/N,实际 COT 字节={:#04X}",
         resp[8]
     );
     assert!(
@@ -1061,10 +1063,10 @@ async fn remote_ops_switches_apply_on_live_connection() {
     send(&mut stream, &build_clock_sync_frame(1, 6));
     let resp = iframe_of_type(&mut stream, 103);
     assert_eq!(
-        iframe_cot(&resp) & 0x3F, 44,
-        "运行中关闭后同一连接上应立即回 COT=44,实际 COT 字节={:#04X}", resp[8]
+        iframe_cot(&resp) & 0x3F, 7,
+        "运行中关闭后同一连接上应立即回 COT=7+P/N,实际 COT 字节={:#04X}", resp[8]
     );
-    assert!(iframe_negative(&resp), "COT=44 拒收应带 negative 位");
+    assert!(iframe_negative(&resp), "COT=7 拒收应带 negative 位");
 
     // --- 3. 同一连接上先确认默认会发 ACT_TERM ---
     send(&mut stream, &build_sc_execute_frame(1));
@@ -1148,10 +1150,10 @@ async fn clock_sync_rejected_when_answer_disabled_over_tls() {
 
     assert_eq!(resp[6], 103, "应答应回显 type=103");
     assert_eq!(
-        iframe_cot(&resp) & 0x3F, 44,
-        "TLS 路径关闭后 103 应回 COT=44,实际 COT 字节={:#04X}", resp[8]
+        iframe_cot(&resp) & 0x3F, 7,
+        "TLS 路径关闭后 103 应回 COT=7+P/N,实际 COT 字节={:#04X}", resp[8]
     );
-    assert!(iframe_negative(&resp), "TLS 路径 COT=44 拒收应带 negative 位");
+    assert!(iframe_negative(&resp), "TLS 路径 COT=7 拒收应带 negative 位");
 
     let _ = slave.stop().await;
 }

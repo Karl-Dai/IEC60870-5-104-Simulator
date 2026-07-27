@@ -1876,20 +1876,24 @@ async fn handle_client_read_loop(
                             // 短于 22 视为畸形,按未知类型拒收回 COT=44(UNKNOWN_TYPE)+negative,不当合法对时处理。
                             if data.len() >= 22 {
                                 let cot_in = cause & 0x3F;
-                                // 时间同步应答开关(issue #28):关闭后按未知类型拒收
-                                // (COT=44 + P/N),与不支持该类型的装置行为一致。
+                                // 时间同步应答开关(issue #28)。关闭后回【否定激活确认】
+                                // COT=7 + P/N,而不是 COT=44:类型 103 本身是识别得了的,
+                                // COT=6 也是能理解的原因,这是"结构合法、仅因配置拒绝执行",
+                                // 正对应 IEC 60870-5-101/104 里 ACT_CON 带 P/N 的语义
+                                // (与本文件既有的 SBO 违规 / 未映射控制点拒收同一约定)。
+                                // 优先级:非激活 COT 属协议错误,与开关无关,仍回 COT=45 + P/N。
                                 // ⚠ 同步锚点:阻塞(TLS)收包路径有同一份门控 —— 见
                                 // handle_client_blocking 的 `103 =>` 分支(搜索
                                 // "同步锚点:异步(明文 TCP)收包路径")。任何改动必须两处同改,
                                 // 本文件历史上正是靠"两条路径各自复制粘贴"踩过坑。
                                 let enabled = ops_snapshot.answer_clock_sync;
                                 let is_activation = enabled && cot_in == 6;
-                                let ack_cot = if !enabled {
-                                    44 | 0x40
-                                } else if is_activation {
+                                let ack_cot = if cot_in != 6 {
+                                    45 | 0x40
+                                } else if enabled {
                                     7u8
                                 } else {
-                                    45 | 0x40
+                                    7 | 0x40
                                 };
                                 let ack = { let mut s = seq.lock().await; build_response_frame(&data[..n], ack_cot, &mut s)
                                 };
@@ -2228,14 +2232,16 @@ fn handle_client_blocking(
                             // "同步锚点:阻塞(TLS)收包路径")。任何改动必须两处同改。
                             // 覆盖:tests/command_deactivation.rs
                             // `clock_sync_rejected_when_answer_disabled_over_tls`。
+                            // 关闭后回否定激活确认 COT=7 + P/N(非 COT=44),
+                            // 理由见异步路径同位置注释。
                             let enabled = ops_snapshot.answer_clock_sync;
                             let is_activation = enabled && cot_in == 6;
-                            let ack_cot = if !enabled {
-                                44 | 0x40
-                            } else if is_activation {
+                            let ack_cot = if cot_in != 6 {
+                                45 | 0x40
+                            } else if enabled {
                                 7u8
                             } else {
-                                45 | 0x40
+                                7 | 0x40
                             };
                             let ack = rt.block_on(async { let mut s = seq.lock().await; build_response_frame(&data[..n], ack_cot, &mut s)
                             });
