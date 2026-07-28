@@ -109,16 +109,18 @@ function handleServerSelect(id: string, state: string) {
   selectedPoints.value = []
 }
 
-function handleStationSelect(serverId: string, ca: number) {
+function handleStationSelect(serverId: string, ca: number, state: string) {
   selectedServerId.value = serverId
+  selectedServerState.value = state
   selectedCA.value = ca
   selectedCategory.value = null
   selectedPoints.value = []
   dataPointTableRef.value?.loadData()
 }
 
-function handleCategorySelect(serverId: string, ca: number, category: string) {
+function handleCategorySelect(serverId: string, ca: number, category: string, state: string) {
   selectedServerId.value = serverId
+  selectedServerState.value = state
   selectedCA.value = ca
   selectedCategory.value = category
   selectedPoints.value = []

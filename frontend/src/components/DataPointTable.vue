@@ -296,17 +296,23 @@ const SYNC_TB_DERIVE: Record<string, [string, string, number]> = {
   'M_ME_NC_1': ['me_nc', 'M_ME_TF_1', 36],
 }
 const syncTbFlags = ref<Record<string, boolean>>({})
+let syncTbLoadEpoch = 0
 
 async function refreshSyncTbFlags() {
   const srvId = selectedServerId.value
+  const epoch = ++syncTbLoadEpoch
   if (!srvId) { syncTbFlags.value = {}; return }
   try {
     const ops = await invoke<{ sync_tb_by_category?: Record<string, boolean> }>(
       'get_remote_operation_config', { serverId: srvId },
     )
-    syncTbFlags.value = ops?.sync_tb_by_category ?? {}
+    if (epoch === syncTbLoadEpoch && selectedServerId.value === srvId) {
+      syncTbFlags.value = ops?.sync_tb_by_category ?? {}
+    }
   } catch {
-    syncTbFlags.value = {}
+    if (epoch === syncTbLoadEpoch && selectedServerId.value === srvId) {
+      syncTbFlags.value = {}
+    }
   }
 }
 

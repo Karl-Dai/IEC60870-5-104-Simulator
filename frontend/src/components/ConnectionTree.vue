@@ -65,8 +65,8 @@ interface TreeStation {
 
 const emit = defineEmits<{
   (e: 'server-select', id: string, state: string): void
-  (e: 'station-select', serverId: string, ca: number): void
-  (e: 'category-select', serverId: string, ca: number, category: string): void
+  (e: 'station-select', serverId: string, ca: number, state: string): void
+  (e: 'category-select', serverId: string, ca: number, category: string, state: string): void
   (e: 'edit-runtime-params', serverId: string, label: string): void
 }>()
 
@@ -126,11 +126,11 @@ function selectServer(ts: TreeServer) {
 }
 
 function selectStation(ts: TreeServer, tst: TreeStation) {
-  emit('station-select', ts.server.id, tst.station.common_address)
+  emit('station-select', ts.server.id, tst.station.common_address, ts.server.state)
 }
 
 function selectCategory(ts: TreeServer, tst: TreeStation, category: string) {
-  emit('category-select', ts.server.id, tst.station.common_address, category)
+  emit('category-select', ts.server.id, tst.station.common_address, category, ts.server.state)
 }
 
 function showContextMenuForServer(e: MouseEvent, ts: TreeServer) {
@@ -155,7 +155,7 @@ function showContextMenuForStation(e: MouseEvent, ts: TreeServer, tst: TreeStati
     type: 'station',
     serverId: ts.server.id,
     ca: tst.station.common_address,
-    serverState: '',
+    serverState: ts.server.state,
   }
 }
 
@@ -234,7 +234,7 @@ function ctxEditRuntimeParams() {
     // 保存后当前点表直接能看到 +TB 徽标)。服务器本已一致时不动用户当前查看的站 ——
     // 右键看一眼服务器级参数不该把点表切到别的站。
     if (selectedServerId.value !== serverId) {
-      emit('station-select', serverId, ca)
+      emit('station-select', serverId, ca, ts ? ts.server.state : serverState)
     }
   } else if (selectedServerId.value !== serverId) {
     emit('server-select', serverId, ts ? ts.server.state : serverState)

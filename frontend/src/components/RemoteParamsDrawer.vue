@@ -28,20 +28,41 @@ function snapshot(t: ProtocolTimingConfig, o: RemoteOperationConfig): string {
   return JSON.stringify({ t, o })
 }
 
-const baselineKey = ref<string>('')
+function cloneTiming(value: ProtocolTimingConfig): ProtocolTimingConfig {
+  return { ...value }
+}
+
+function cloneOps(value: RemoteOperationConfig): RemoteOperationConfig {
+  return JSON.parse(JSON.stringify(value))
+}
+
+const baseline = ref<{ serverId: string | null; key: string }>({
+  serverId: null,
+  key: '',
+})
 watch(loading, (l) => {
-  baselineKey.value = l ? '' : snapshot(timing.value, ops.value)
+  if (l) {
+    baseline.value = { serverId: selectedServerId.value, key: '' }
+  } else if (!lastError.value) {
+    baseline.value = {
+      serverId: selectedServerId.value,
+      key: snapshot(timing.value, ops.value),
+    }
+  }
 }, { immediate: true })
 
-// selectedServerId 变成 null 时 useRemoteParams.load() 会早退、不翻转 loading,
-// 上面的 watch 不会触发 → 基线残留上一台服务器的快照,dirty 永久为真,
-// 留下一个点了也没用的"幽灵 Discard 按钮"。这里兜底重置。
 watch(selectedServerId, (id) => {
-  if (!id) baselineKey.value = snapshot(timing.value, ops.value)
+  // 基线不仅属于一份值，也属于一台服务器。切换目标时立刻让旧基线失效；
+  // null 分支的 load() 同步恢复默认值且不会翻转 loading，因此在这里落新基线。
+  baseline.value = id
+    ? { serverId: id, key: '' }
+    : { serverId: null, key: snapshot(timing.value, ops.value) }
 })
 
 const dirty = computed(() =>
-  baselineKey.value !== '' && snapshot(timing.value, ops.value) !== baselineKey.value
+  baseline.value.serverId === selectedServerId.value
+  && baseline.value.key !== ''
+  && snapshot(timing.value, ops.value) !== baseline.value.key
 )
 
 const saveLabel = computed(() =>
@@ -59,15 +80,22 @@ onBeforeUnmount(clearFlashTimer)
 
 async function saveAll() {
   if (!selectedServerId.value || saving.value || !dirty.value) return
+  const serverId = selectedServerId.value
+  const timingToSave = cloneTiming(timing.value)
+  const opsToSave = cloneOps(ops.value)
   saving.value = true
   clearFlashTimer()
   savedFlash.value = false
   try {
-    await applyTiming()
-    if (lastError.value) return
-    await applyOps()
-    if (lastError.value) return
-    baselineKey.value = snapshot(timing.value, ops.value)
+    if (!(await applyTiming(serverId, timingToSave))) return
+    if (!(await applyOps(serverId, opsToSave))) return
+    // 保存期间即使外部代码切换了选择，也不能把旧服务器的快照登记成新服务器基线。
+    if (selectedServerId.value === serverId) {
+      baseline.value = {
+        serverId,
+        key: snapshot(timingToSave, opsToSave),
+      }
+    }
     emit('saved')
     savedFlash.value = true
     flashTimer = setTimeout(() => {
@@ -82,7 +110,6 @@ async function saveAll() {
 async function discardChanges() {
   if (saving.value) return
   await load()
-  baselineKey.value = snapshot(timing.value, ops.value)
 }
 
 function close() {

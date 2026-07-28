@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from '@shared/i18n'
 import { useRemoteParams } from '../composables/useRemoteParams'
 import RemoteParamsForm from './RemoteParamsForm.vue'
-import type { ServerInfo } from '../types'
+import type { ProtocolTimingConfig, RemoteOperationConfig, ServerInfo } from '../types'
 
 const { t } = useI18n()
 
@@ -20,12 +20,25 @@ const emit = defineEmits<{
   saved: []
 }>()
 
+function cloneTiming(value: ProtocolTimingConfig): ProtocolTimingConfig {
+  return { ...value }
+}
+
+function cloneOps(value: RemoteOperationConfig): RemoteOperationConfig {
+  return JSON.parse(JSON.stringify(value))
+}
+
 // 连接参数(地址:端口)的已保存快照,空串表示"还没回读过" —— 见下方 transportDirty
 const transportBaseline = ref('')
+const transportLoading = ref(false)
+let transportLoadEpoch = 0
+let modalSession = 0
 
 // 独立的 serverId ref —— 不污染 App 的全局 selectedServerId
 const localServerId = ref<string | null>(props.serverId)
 watch(() => props.serverId, v => {
+  modalSession++
+  transportLoadEpoch++
   localServerId.value = v
   // 换服务器:上一台的传输快照失效,清空基线让 loadTransport 必定回读
   transportBaseline.value = ''
@@ -46,11 +59,18 @@ const transportDirty = computed(() =>
 
 async function loadTransport() {
   const id = props.serverId
-  if (!id) return
+  const epoch = ++transportLoadEpoch
+  if (!id) {
+    transportLoading.value = false
+    return false
+  }
+  transportLoading.value = true
   try {
     const servers = await invoke<ServerInfo[]>('list_servers')
     const s = servers.find(x => x.id === id)
-    if (s) {
+    if (epoch !== transportLoadEpoch || props.serverId !== id) return false
+    if (!s) return false
+    {
       // 每次打开都取后端最新值。本弹窗是「取消 / 保存」语义(没有 Discard、
       // 也没有 dirty 指示),保留草稿会让「取消」不再取消 —— 用户放弃的端口改动
       // 会在下次保存时被静默写回后端(issue #28 审查)。抽屉那侧有显式 Discard,
@@ -60,8 +80,16 @@ async function loadTransport() {
       transport.port = s.port
       transportBaseline.value = `${s.bind_address}:${s.port}`
     }
+    return true
   } catch (e) {
-    lastError.value = String(e)
+    if (epoch === transportLoadEpoch && props.serverId === id) {
+      lastError.value = String(e)
+    }
+    return false
+  } finally {
+    if (epoch === transportLoadEpoch && props.serverId === id) {
+      transportLoading.value = false
+    }
   }
 }
 
@@ -69,12 +97,20 @@ const isSaving = ref(false)
 
 async function handleSave() {
   if (!localServerId.value) return
+  const session = modalSession
+  const serverId = localServerId.value
+  const timingToSave = cloneTiming(timing.value)
+  const opsToSave = cloneOps(ops.value)
+  const transportToSave = {
+    bindAddress: transport.bindAddress,
+    port: transport.port,
+  }
+  const transportChanged = transportDirty.value
   isSaving.value = true
   lastError.value = null
   try {
     // 先落地传输配置改动(仅当确有改动)。运行中由后端拒绝,前端也提前拦一次。
-    const changed = transportDirty.value
-    if (changed) {
+    if (transportChanged) {
       if (isRunning.value) {
         lastError.value = t('remoteParams.stopBeforeEdit')
         return
@@ -82,21 +118,24 @@ async function handleSave() {
       try {
         await invoke('update_server_transport', {
           request: {
-            server_id: localServerId.value,
-            bind_address: transport.bindAddress,
-            port: transport.port,
+            server_id: serverId,
+            bind_address: transportToSave.bindAddress,
+            port: transportToSave.port,
           },
         })
-        transportBaseline.value = `${transport.bindAddress}:${transport.port}`
+        if (session === modalSession && localServerId.value === serverId) {
+          transportBaseline.value = `${transportToSave.bindAddress}:${transportToSave.port}`
+        }
       } catch (e) {
         lastError.value = String(e)
         return
       }
     }
-    await applyTiming()
-    if (lastError.value) return
-    await applyOps()
-    if (lastError.value) return
+    if (!(await applyTiming(serverId, timingToSave))) return
+    if (!(await applyOps(serverId, opsToSave))) return
+    // 父组件仍可能在保存期间强制隐藏/换目标。旧保存会话可以完成自己的落库，
+    // 但绝不能关闭或刷新后来打开的另一台服务器弹窗。
+    if (session !== modalSession || !props.visible || localServerId.value !== serverId) return
     emit('saved')
     emit('close')
   } finally {
@@ -104,17 +143,23 @@ async function handleSave() {
   }
 }
 
+function close() {
+  if (isSaving.value) return
+  emit('close')
+}
+
 function handleBackdropClick(e: MouseEvent) {
   if ((e.target as HTMLElement).classList.contains('modal-backdrop')) {
-    emit('close')
+    close()
   }
 }
 
 function handleEsc(e: KeyboardEvent) {
-  if (e.key === 'Escape' && props.visible) emit('close')
+  if (e.key === 'Escape' && props.visible) close()
 }
 
 watch(() => props.visible, (v) => {
+  modalSession++
   if (v) {
     loadTransport()
     // 同一服务器二次打开时 localServerId 不变,composable 的 watch 不会重载;
@@ -122,8 +167,9 @@ watch(() => props.visible, (v) => {
     load()
     window.addEventListener('keydown', handleEsc)
   } else {
+    transportLoadEpoch++
+    transportLoading.value = false
     window.removeEventListener('keydown', handleEsc)
-    isSaving.value = false
   }
 })
 </script>
@@ -138,7 +184,7 @@ watch(() => props.visible, (v) => {
               {{ t('runtimeParams.title') }}
               <span v-if="serverLabel" class="modal-subtitle">— {{ serverLabel }}</span>
             </span>
-            <button class="btn-close" @click="emit('close')">×</button>
+            <button class="btn-close" :disabled="isSaving" @click="close">×</button>
           </div>
 
           <div class="modal-body">
@@ -150,11 +196,11 @@ watch(() => props.visible, (v) => {
               <div class="rp-conn-grid">
                 <label class="rp-conn-field">
                   <span>{{ t('remoteParams.bindAddress') }}</span>
-                  <input v-model="transport.bindAddress" :disabled="isRunning" placeholder="0.0.0.0" />
+                  <input v-model="transport.bindAddress" :disabled="isRunning || isSaving || transportLoading" placeholder="0.0.0.0" />
                 </label>
                 <label class="rp-conn-field">
                   <span>{{ t('remoteParams.port') }}</span>
-                  <input type="number" min="1" max="65535" v-model.number="transport.port" :disabled="isRunning" />
+                  <input type="number" min="1" max="65535" v-model.number="transport.port" :disabled="isRunning || isSaving || transportLoading" />
                 </label>
               </div>
               <p v-if="isRunning" class="rp-conn-hint">{{ t('remoteParams.runningHint') }}</p>
@@ -166,10 +212,10 @@ watch(() => props.visible, (v) => {
           </div>
 
           <div class="modal-footer">
-            <button class="btn btn-secondary" @click="emit('close')" :disabled="isSaving">
+            <button class="btn btn-secondary" @click="close" :disabled="isSaving">
               {{ t('runtimeParams.cancel') }}
             </button>
-            <button class="btn btn-primary" @click="handleSave" :disabled="isSaving || loading">
+            <button class="btn btn-primary" @click="handleSave" :disabled="isSaving || loading || transportLoading">
               {{ isSaving ? t('runtimeParams.saving') : t('runtimeParams.save') }}
             </button>
           </div>

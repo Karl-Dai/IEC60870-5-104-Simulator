@@ -14,7 +14,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: () => Promise.resolve(() => {}
 
 // 两台服务器:s1 未开 sync-TB,s2 开了 sp —— 用勾选状态区分抽屉到底读了谁
 const SERVERS = [
-  { id: 's1', bind_address: '0.0.0.0', port: 2404, state: 'Stopped' },
+  { id: 's1', bind_address: '0.0.0.0', port: 2404, state: 'Running' },
   { id: 's2', bind_address: '0.0.0.0', port: 2405, state: 'Stopped' },
 ]
 let opsByServer: Record<string, RemoteOperationConfig>
@@ -44,6 +44,7 @@ function setupInvokeMock() {
 
 type AppVm = {
   selectedServerId: string | null
+  selectedServerState: string
   selectedCA: number | null
   selectedCategory: string | null
   openRuntimeParamsDrawer: () => void
@@ -66,6 +67,15 @@ async function ctxEditRuntimeParams(root: VueWrapper, idx: number) {
   const items = root.findAll('.context-menu-item')
   expect(items).toHaveLength(3)
   await items[1].trigger('click')
+  await flushPromises()
+}
+
+// 右键第 idx 个站节点 → 点站菜单第一项「运行参数」
+async function ctxEditStationRuntimeParams(root: VueWrapper, idx: number) {
+  await root.findAll('.station-node')[idx].trigger('contextmenu')
+  const items = root.findAll('.context-menu-item')
+  expect(items).toHaveLength(2)
+  await items[0].trigger('click')
   await flushPromises()
 }
 
@@ -148,5 +158,21 @@ describe('右键「运行参数」与工具栏抽屉指向同一台服务器', (
 
     expect(vm.selectedServerId).toBe('s1')
     expect(vm.selectedCA).toBe(1) // 视图不该被无谓地重置
+  })
+
+  it('右键另一台服务器的站节点:serverId 与运行状态一起切换', async () => {
+    const app = await mountApp()
+    const vm = app.vm as unknown as AppVm
+
+    await app.findAll('.server-node')[0].trigger('click') // s1 = Running
+    expect(vm.selectedServerId).toBe('s1')
+    expect(vm.selectedServerState).toBe('Running')
+
+    await ctxEditStationRuntimeParams(app, 1) // s2 的站，s2 = Stopped
+
+    expect(vm.selectedServerId).toBe('s2')
+    expect(vm.selectedServerState).toBe('Stopped')
+    expect(vm.selectedCA).toBe(1)
+    expect(vm.selectedCategory).toBe(null)
   })
 })
