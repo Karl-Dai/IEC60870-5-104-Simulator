@@ -197,6 +197,7 @@ watch([selectedServerId, selectedCA], async ([, ], [, ]) => {
     dataMap = new Map()
     lastSeq = 0
     displayPoints.value = []
+    categoryCounts.value = new Map()
     currentServerId = null
     currentCA = null
     changedKeys.value.clear()
@@ -211,6 +212,7 @@ watch([selectedServerId, selectedCA], async ([, ], [, ]) => {
     dataMap = new Map()
     lastSeq = 0
     displayPoints.value = []
+    categoryCounts.value = new Map()
     currentServerId = srvId
     currentCA = ca
     changedKeys.value.clear()

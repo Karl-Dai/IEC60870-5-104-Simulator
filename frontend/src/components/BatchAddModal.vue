@@ -395,20 +395,26 @@ function handleBackdropClick(e: MouseEvent) {
                 {{ opt.label }} · {{ opt.typeId }}
               </option>
             </select>
-            <div v-if="existingSameTypeIoas.length > 0" class="summary-card">
-              <div class="summary-card__title">
-                <span class="summary-card__type">{{ formAsduType }}</span>
-                <span class="summary-card__sep">·</span>
-                <span class="summary-card__count">
-                  {{ t('batchModal.existingSameType', { count: existingSameTypeIoas.length }) }}
-                </span>
-              </div>
-              <div class="summary-card__ranges">
-                <span class="summary-card__ranges-label">IOA</span>
-                <span class="summary-card__ranges-value">{{ existingRangesText }}</span>
-              </div>
-              <div v-if="ioaMode === 'range'" class="summary-card__actions">
+            <div
+              v-if="existingSameTypeIoas.length > 0 || crossTypeDupIoas.length > 0"
+              class="summary-card"
+            >
+              <template v-if="existingSameTypeIoas.length > 0">
+                <div class="summary-card__title">
+                  <span class="summary-card__type">{{ formAsduType }}</span>
+                  <span class="summary-card__sep">·</span>
+                  <span class="summary-card__count">
+                    {{ t('batchModal.existingSameType', { count: existingSameTypeIoas.length }) }}
+                  </span>
+                </div>
+                <div class="summary-card__ranges">
+                  <span class="summary-card__ranges-label">IOA</span>
+                  <span class="summary-card__ranges-value">{{ existingRangesText }}</span>
+                </div>
+              </template>
+              <div v-if="ioaMode === 'range' && occupiedIoas.length > 0" class="summary-card__actions">
                 <button
+                  v-if="existingSameTypeIoas.length > 0"
                   type="button"
                   class="summary-card__btn"
                   :disabled="!canApplyNextIoa"

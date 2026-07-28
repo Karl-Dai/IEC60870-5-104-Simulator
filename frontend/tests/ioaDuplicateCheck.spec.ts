@@ -81,9 +81,11 @@ describe('DataPointModal 跨类型重复 IOA 警告', () => {
 })
 
 describe('BatchAddModal 跨类型重复 IOA 警告', () => {
-  function mountBatch(): VueWrapper {
+  function mountBatch(
+    existingPoints: Array<{ ioa: number; asdu_type: string; category: string }> = existing,
+  ): VueWrapper {
     w = mount(BatchAddModal, {
-      props: { visible: true, serverId: 's1', commonAddress: 1, existingPoints: existing },
+      props: { visible: true, serverId: 's1', commonAddress: 1, existingPoints },
       global: {
         stubs: { teleport: true },
         provide: { [dialogKey as symbol]: { showAlert: () => Promise.resolve() } },
@@ -104,6 +106,24 @@ describe('BatchAddModal 跨类型重复 IOA 警告', () => {
     expect(warn.text()).toContain('1')
     const confirm = ww.find('.btn-primary').element as HTMLButtonElement
     expect(confirm.disabled).toBe(false)
+  })
+
+  it('仅有跨类型点位时仍显示警示与跨分类空隙按钮', async () => {
+    const ww = mountBatch([
+      { ioa: 1, asdu_type: 'M_DP_NA_1', category: 'double_point' },
+    ])
+    await ww.find('select.form-select').setValue('MSpNa1')
+    // 默认起始地址会避让到 2；手动改回 0 制造 SP 目标段与 DP@1 的跨类型冲突。
+    await ww.findAll('.form-row input')[0].setValue(0)
+    await flushPromises()
+
+    expect(ww.find('.summary-card__ranges-value').exists()).toBe(false)
+    const warn = ww.find('.summary-card__conflict--warn')
+    expect(warn.exists()).toBe(true)
+    expect(warn.text()).toContain('1')
+    expect(ww.findAll('.summary-card__btn').length).toBe(1)
+    expect((ww.find('.summary-card__btn').element as HTMLButtonElement).disabled).toBe(false)
+    expect((ww.find('.btn-primary').element as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('表达式模式命中跨类型 IOA:警示', async () => {
@@ -347,5 +367,46 @@ describe('DataPointTable 冲突行标记(含选中态)', () => {
     // jsdom 不套用 scoped CSS,读不到计算色值:直接守住样式表里的覆盖规则本身。
     // 真实浏览器下的颜色由 Playwright 实测(见报告)。
     expect(dataPointTableSrc).toMatch(/tr\.selected\s+\.col-ioa\.ioa-dup\s*\{/)
+  })
+
+  it('从有点位站切换到空站时清空分类数量', async () => {
+    const refs = {
+      selectedServerId: ref<string | null>(null),
+      selectedCA: ref<number | null>(null),
+      selectedCategory: ref<string | null>(null),
+      dataRefreshKey: ref(0),
+      categoryCounts: ref(new Map<string, number>()),
+    }
+    invokeMock.mockImplementation((command: string, args?: { serverId?: string }) => {
+      if (command === 'list_data_points_since' && args?.serverId === 's1') {
+        return Promise.resolve({
+          points: [dp(1, 'M_SP_NA_1', 'single_point')],
+          seq: 1,
+          total_count: 1,
+        })
+      }
+      if (command === 'list_data_points_since' && args?.serverId === 's2') {
+        return Promise.resolve({ points: [], seq: 0, total_count: 0 })
+      }
+      if (command === 'get_remote_operation_config') return Promise.resolve({})
+      return Promise.resolve([])
+    })
+    w = mount(DataPointTable, {
+      global: {
+        provide: { ...refs, [dialogKey as symbol]: { showAlert: () => Promise.resolve() } },
+        stubs: { DataPointModal: true, BatchAddModal: true, BatchWriteModal: true, BatchControlOptionsModal: true },
+      },
+    })
+
+    refs.selectedServerId.value = 's1'
+    refs.selectedCA.value = 1
+    await flushPromises()
+    await nextTick()
+    expect(refs.categoryCounts.value.get('single_point')).toBe(1)
+
+    refs.selectedServerId.value = 's2'
+    await flushPromises()
+    await nextTick()
+    expect(refs.categoryCounts.value.size).toBe(0)
   })
 })
