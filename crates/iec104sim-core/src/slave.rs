@@ -1174,6 +1174,12 @@ pub type SharedStations = Arc<RwLock<HashMap<u16, Station>>>;
 pub type SharedRemoteOps = Arc<RwLock<RemoteOperationConfig>>;
 pub type SharedProtocolTiming = Arc<RwLock<ProtocolTimingConfig>>;
 
+struct PointMutationTask {
+    handle: tokio::task::JoinHandle<()>,
+    mode: MutationMode,
+    period_ms: u32,
+}
+
 pub struct SlaveServer {
     pub transport: SlaveTransportConfig,
     pub stations: SharedStations,
@@ -1192,7 +1198,7 @@ pub struct SlaveServer {
     /// 按 (ca, ioa, asdu_type) 维护的周期变位任务句柄。每个点位独立启停;
     /// `start_point_mutation` 对同一 key 重复调用会先 abort 旧任务。
     point_mutation_handles:
-        tokio::sync::Mutex<HashMap<(u16, u32, AsduTypeId), (tokio::task::JoinHandle<()>, MutationMode)>>,
+        tokio::sync::Mutex<HashMap<(u16, u32, AsduTypeId), PointMutationTask>>,
     connections: SharedConnections,
 }
 
@@ -1285,16 +1291,21 @@ impl SlaveServer {
     ) {
         let key = (ca, ioa, asdu_type);
         let mut guard = self.point_mutation_handles.lock().await;
-        if let Some((h, _)) = guard.remove(&key) { h.abort(); }
+        if let Some(task) = guard.remove(&key) { task.handle.abort(); }
 
         let stations = self.stations.clone();
         let connections = self.connections.clone();
         let remote_ops = self.remote_ops.clone();
         let log_collector = self.log_collector.clone();
         let shutdown_flag = self.shutdown_flag.clone();
+        let period_ms = period_ms.max(50);
         let handle = tokio::spawn(async move {
-            let period = std::time::Duration::from_millis(period_ms.max(50) as u64);
+            let period = std::time::Duration::from_millis(period_ms as u64);
             let mut interval = tokio::time::interval(period);
+            // A delayed spontaneous-send path must not replay every missed
+            // deadline in a burst. Resume with one overdue tick, then keep the
+            // configured spacing from that point onward.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval.tick().await; // 跳过 immediate first tick
             let mut dir = params.mode.initial_dir();
             loop {
@@ -1318,6 +1329,11 @@ impl SlaveServer {
                         false
                     }
                 };
+                // The tick may have fired before a contended station lock was
+                // acquired. Base the next deadline on the completed mutation
+                // attempt so two value changes cannot run back-to-back after
+                // that lock (or another pre-mutation delay) is released.
+                interval.reset_after(period);
                 if mutated {
                     do_queue_spontaneous(
                         &stations, &connections, &remote_ops, &log_collector,
@@ -1326,22 +1342,33 @@ impl SlaveServer {
                 }
             }
         });
-        guard.insert(key, (handle, params.mode));
+        guard.insert(key, PointMutationTask { handle, mode: params.mode, period_ms });
     }
 
     /// 停止单个点位的周期变位。
     pub async fn stop_point_mutation(&self, ca: u16, ioa: u32, asdu_type: AsduTypeId) {
         let mut guard = self.point_mutation_handles.lock().await;
-        if let Some((h, _)) = guard.remove(&(ca, ioa, asdu_type)) { h.abort(); }
+        if let Some(task) = guard.remove(&(ca, ioa, asdu_type)) { task.handle.abort(); }
     }
 
     /// 返回当前活跃的周期变位点位 (ca, ioa, asdu_type, mode)。
     pub async fn list_point_mutations(&self) -> Vec<(u16, u32, AsduTypeId, MutationMode)> {
+        self.list_point_mutations_with_period()
+            .await
+            .into_iter()
+            .map(|(ca, ioa, asdu_type, mode, _period_ms)| (ca, ioa, asdu_type, mode))
+            .collect()
+    }
+
+    /// 返回当前活跃的周期变位点位及归一化后的实际周期。
+    pub async fn list_point_mutations_with_period(
+        &self,
+    ) -> Vec<(u16, u32, AsduTypeId, MutationMode, u32)> {
         self.point_mutation_handles
             .lock()
             .await
             .iter()
-            .map(|(&(ca, ioa, t), &(_, mode))| (ca, ioa, t, mode))
+            .map(|(&(ca, ioa, t), task)| (ca, ioa, t, task.mode, task.period_ms))
             .collect()
     }
 
@@ -1679,7 +1706,7 @@ impl SlaveServer {
         if let Some(h) = self.cyclic_handle.take() { let _ = h.await; }
         {
             let mut handles = self.point_mutation_handles.lock().await;
-            for (_k, (h, _mode)) in handles.drain() { h.abort(); }
+            for (_key, task) in handles.drain() { task.handle.abort(); }
         }
         self.state = ServerState::Stopped;
         if let Some(ref lc) = self.log_collector {
@@ -3064,6 +3091,133 @@ mod tests {
         frame[10..12].copy_from_slice(&ca.to_le_bytes());
         frame[12..15].copy_from_slice(&ioa.to_le_bytes()[..3]);
         frame
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn point_mutation_delays_instead_of_bursting_missed_ticks() {
+        let server = SlaveServer::new(SlaveTransportConfig::default());
+        let mut station = Station::new(1, "test");
+        station.add_point(InformationObjectDef {
+            ioa: 1,
+            asdu_type: AsduTypeId::MSpNa1,
+            category: DataCategory::SinglePoint,
+            name: String::new(),
+            comment: String::new(),
+            mapping: None,
+            command_qualifier: None,
+            select_before_operate: None,
+        }).unwrap();
+        server.add_station(station).await.unwrap();
+
+        let initial_seq = server.stations.read().await
+            .get(&1).unwrap().data_points.current_seq();
+        // Block the spontaneous-send phase after the first mutation. Advancing
+        // across two more deadlines reproduces a temporarily delayed task.
+        let remote_ops_guard = server.remote_ops.write().await;
+        server.start_point_mutation(
+            1,
+            1,
+            AsduTypeId::MSpNa1,
+            100,
+            MutationParams::default(),
+        ).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            server.list_point_mutations_with_period().await,
+            vec![(1, 1, AsduTypeId::MSpNa1, MutationMode::Flip, 100)],
+        );
+
+        tokio::time::advance(std::time::Duration::from_millis(100)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            server.stations.read().await.get(&1).unwrap().data_points.current_seq(),
+            initial_seq + 1,
+            "the first scheduled mutation should run",
+        );
+
+        tokio::time::advance(std::time::Duration::from_millis(250)).await;
+        drop(remote_ops_guard);
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            server.stations.read().await.get(&1).unwrap().data_points.current_seq(),
+            initial_seq + 2,
+            "a delayed task should run one overdue mutation, not replay every missed tick",
+        );
+
+        tokio::time::advance(std::time::Duration::from_millis(99)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            server.stations.read().await.get(&1).unwrap().data_points.current_seq(),
+            initial_seq + 2,
+            "Delay should preserve a full interval after recovery",
+        );
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            server.stations.read().await.get(&1).unwrap().data_points.current_seq(),
+            initial_seq + 3,
+        );
+
+        server.stop_point_mutation(1, 1, AsduTypeId::MSpNa1).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn point_mutation_resets_deadline_after_station_lock_delay() {
+        let server = SlaveServer::new(SlaveTransportConfig::default());
+        let mut station = Station::new(1, "test");
+        station.add_point(InformationObjectDef {
+            ioa: 1,
+            asdu_type: AsduTypeId::MSpNa1,
+            category: DataCategory::SinglePoint,
+            name: String::new(),
+            comment: String::new(),
+            mapping: None,
+            command_qualifier: None,
+            select_before_operate: None,
+        }).unwrap();
+        server.add_station(station).await.unwrap();
+
+        let initial_seq = server.stations.read().await
+            .get(&1).unwrap().data_points.current_seq();
+        let stations_guard = server.stations.write().await;
+        server.start_point_mutation(
+            1,
+            1,
+            AsduTypeId::MSpNa1,
+            100,
+            MutationParams::default(),
+        ).await;
+        tokio::task::yield_now().await;
+
+        // The first tick is consumed at 100ms, then waits on stations.write()
+        // while two more deadlines pass.
+        tokio::time::advance(std::time::Duration::from_millis(350)).await;
+        drop(stations_guard);
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            server.stations.read().await.get(&1).unwrap().data_points.current_seq(),
+            initial_seq + 1,
+            "unlocking the station must not trigger a back-to-back overdue mutation",
+        );
+
+        tokio::time::advance(std::time::Duration::from_millis(99)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            server.stations.read().await.get(&1).unwrap().data_points.current_seq(),
+            initial_seq + 1,
+        );
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            server.stations.read().await.get(&1).unwrap().data_points.current_seq(),
+            initial_seq + 2,
+        );
+
+        server.stop_point_mutation(1, 1, AsduTypeId::MSpNa1).await;
     }
 
     #[test]

@@ -3,7 +3,13 @@ import { ref, inject, watch, computed, nextTick, onMounted, onUnmounted, shallow
 import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
-import type { DataPointInfo, IncrementalDataResponse, PointMutationInfo, MutationMode } from '../types'
+import type {
+  DataPointInfo,
+  DataPointValueSnapshot,
+  IncrementalDataResponse,
+  PointMutationInfo,
+  MutationMode,
+} from '../types'
 import DataPointModal from './DataPointModal.vue'
 import BatchAddModal from './BatchAddModal.vue'
 import BatchWriteModal from './BatchWriteModal.vue'
@@ -33,6 +39,10 @@ const displayPoints = shallowRef<DataPointInfo[]>([])
 const categoryCounts = inject<Ref<Map<string, number>>>('categoryCounts')!
 let currentServerId: string | null = null
 let currentCA: number | null = null
+// 每次切换 server / CA 都递增。所有异步轮询响应必须携带并核对该 epoch，
+// 防止旧站点的迟到响应污染新站点。
+let selectionEpoch = 0
+let componentUnmounted = false
 // Incremental polling cursor: list_data_points_since returns only points
 // whose update_seq exceeds this. Reset to 0 on station switch.
 let lastSeq = 0
@@ -123,28 +133,55 @@ function markChanged(key: string) {
 
 // 用后端返回的完整列表替换 dataMap，避免删除/重建 server 等场景下
 // 旧条目残留累加（前端 server_id 复用时 watcher 不触发 reset）。
-// Merge one incremental point into dataMap, flashing it if the value moved.
+// Merge one slow-poll point into a target map, flashing it if the value moved.
 // `flashNew` 控制"首次出现的点"是否高亮:切站后的首批加载,全部点都是新点
 // 但并非值变化,不应逐点挂 3s setTimeout(2000 点/类型时会瞬时数千个定时器,
 // 拖垮前端)。增量轮询中 flashNew=true,新增点仍会闪。
-function mergePoint(p: DataPointInfo, flashNew: boolean) {
+//
+// 活动变位点的 value / quality / timestamp 由更快的 targeted poll 持有；
+// 2s 慢响应即使后到也只能刷新 name/category/mapping 等静态定义，不能回滚动态值。
+function mergeSlowPoint(
+  target: Map<string, DataPointInfo>,
+  p: DataPointInfo,
+  old: DataPointInfo | undefined,
+  flashNew: boolean,
+) {
   const key = pointKey(p.ioa, p.asdu_type)
-  const old = dataMap.get(key)
+  if (old && activeMutations.value.has(key)) {
+    target.set(key, {
+      ...p,
+      value: old.value,
+      quality_ov: old.quality_ov,
+      quality_bl: old.quality_bl,
+      quality_sb: old.quality_sb,
+      quality_nt: old.quality_nt,
+      quality_iv: old.quality_iv,
+      timestamp: old.timestamp,
+    })
+    return
+  }
   if (old ? old.value !== p.value : flashNew) markChanged(key)
-  dataMap.set(key, p)
+  target.set(key, p)
 }
 
 let loadInFlight = false
+let loadPending = false
 // Incremental fetch: pulls only points changed since `lastSeq` instead of the
 // whole (up to 80k-row) table every tick. `changed_since` cannot express
 // deletions, so a `total_count` mismatch triggers one full resync from seq 0.
 async function loadDataPoints() {
   const srvId = selectedServerId.value
   const ca = selectedCA.value
-  if (!srvId || ca === null) return
+  const epoch = selectionEpoch
+  if (!srvId || ca === null || !isCurrentSelection(srvId, ca, epoch)) return
   // Guard against overlapping polls: a slow IPC round-trip must not let the
-  // 2s timer (or a watcher) stack a second concurrent fetch.
-  if (loadInFlight) return
+  // 2s timer (or a watcher) stack a second concurrent fetch. A trigger that
+  // arrives while busy is remembered: after the current request settles we
+  // always reload whichever server / CA is current at that moment.
+  if (loadInFlight) {
+    loadPending = true
+    return
+  }
   loadInFlight = true
   try {
     // 首批加载(切站后 dataMap 空)不给新点挂高亮,避免定时器风暴。
@@ -154,7 +191,11 @@ async function loadDataPoints() {
       commonAddress: ca,
       sinceSeq: lastSeq,
     })
-    for (const p of resp.points) mergePoint(p, !initialLoad)
+    if (!isCurrentSelection(srvId, ca, epoch)) return
+    for (const p of resp.points) {
+      const key = pointKey(p.ioa, p.asdu_type)
+      mergeSlowPoint(dataMap, p, dataMap.get(key), !initialLoad)
+    }
     lastSeq = resp.seq
     let changed = resp.points.length > 0
 
@@ -164,27 +205,35 @@ async function loadDataPoints() {
       const prev = dataMap
       // 若上一份缓存本就为空(首批即走 resync),新点同样不闪。
       const flashNew = prev.size > 0
-      dataMap = new Map()
       const full = await invoke<IncrementalDataResponse>('list_data_points_since', {
         serverId: srvId,
         commonAddress: ca,
         sinceSeq: 0,
       })
+      if (!isCurrentSelection(srvId, ca, epoch)) return
+      const next = new Map<string, DataPointInfo>()
       for (const p of full.points) {
         const key = pointKey(p.ioa, p.asdu_type)
-        const old = prev.get(key)
-        if (old ? old.value !== p.value : flashNew) markChanged(key)
-        dataMap.set(key, p)
+        // prev 在 full await 期间仍是当前 dataMap；targeted poll 若先返回，
+        // 会把最新动态字段写进这里，重建时据此保留。
+        mergeSlowPoint(next, p, prev.get(key), flashNew)
       }
+      dataMap = next
       lastSeq = full.seq
       changed = true
     }
 
     if (changed) updateDisplay()
   } catch (e) {
-    console.error('Failed to load data points:', e)
+    if (isCurrentSelection(srvId, ca, epoch)) {
+      console.error('Failed to load data points:', e)
+    }
   } finally {
     loadInFlight = false
+    if (loadPending) {
+      loadPending = false
+      void loadDataPoints()
+    }
   }
 }
 
@@ -194,6 +243,8 @@ watch([selectedServerId, selectedCA], async ([, ], [, ]) => {
   const ca = selectedCA.value
   if (!srvId || ca === null) {
     // Cleared selection
+    selectionEpoch++
+    clearActiveMutationState()
     dataMap = new Map()
     lastSeq = 0
     displayPoints.value = []
@@ -209,6 +260,8 @@ watch([selectedServerId, selectedCA], async ([, ], [, ]) => {
   }
   // Only reset if server or CA actually changed
   if (srvId !== currentServerId || ca !== currentCA) {
+    selectionEpoch++
+    clearActiveMutationState()
     dataMap = new Map()
     lastSeq = 0
     displayPoints.value = []
@@ -258,7 +311,10 @@ function stopPolling() {
 onMounted(() => { startPolling() })
 
 onUnmounted(() => {
+  componentUnmounted = true
+  selectionEpoch++
   stopPolling()
+  clearActiveMutationState()
   for (const t of changeTimers.values()) clearTimeout(t)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
 })
@@ -626,19 +682,171 @@ async function deleteSelectedPoints() {
   }
 }
 
+interface ActiveValuePollConfig {
+  serverId: string
+  commonAddress: number
+  selectionEpoch: number
+  delayMs: number
+  signature: string
+  points: Array<{ ioa: number; asdu_type: string }>
+  keys: Set<string>
+}
+
+let activeValuePollTimer: ReturnType<typeof setTimeout> | null = null
+let activeValuePollEpoch = 0
+let activeValueInFlightEpoch: number | null = null
+let activeValuePollConfig: ActiveValuePollConfig | null = null
+let activeMutationListRequest = 0
+
+function isCurrentSelection(serverId: string, commonAddress: number, epoch: number) {
+  return !componentUnmounted
+    && epoch === selectionEpoch
+    && selectedServerId.value === serverId
+    && selectedCA.value === commonAddress
+    && currentServerId === serverId
+    && currentCA === commonAddress
+}
+
+function stopActiveValuePolling() {
+  activeValuePollEpoch++
+  if (activeValuePollTimer !== null) {
+    clearTimeout(activeValuePollTimer)
+    activeValuePollTimer = null
+  }
+  activeValuePollConfig = null
+}
+
+function clearActiveMutationState() {
+  // 让已经发出的 list_point_mutations 响应失效。
+  activeMutationListRequest++
+  activeMutations.value = new Map()
+  stopActiveValuePolling()
+}
+
+function activeValuePollIsCurrent(config: ActiveValuePollConfig, pollEpoch: number) {
+  return pollEpoch === activeValuePollEpoch
+    && activeValuePollConfig === config
+    && isCurrentSelection(config.serverId, config.commonAddress, config.selectionEpoch)
+}
+
+function scheduleActiveValuePoll(pollEpoch: number) {
+  const config = activeValuePollConfig
+  if (!config || !activeValuePollIsCurrent(config, pollEpoch) || activeValuePollTimer !== null) return
+  activeValuePollTimer = setTimeout(() => {
+    activeValuePollTimer = null
+    void pollActivePointValues(pollEpoch)
+  }, config.delayMs)
+}
+
+function snapshotDiffers(old: DataPointInfo, next: DataPointValueSnapshot) {
+  return old.value !== next.value
+    || old.quality_ov !== next.quality_ov
+    || old.quality_bl !== next.quality_bl
+    || old.quality_sb !== next.quality_sb
+    || old.quality_nt !== next.quality_nt
+    || old.quality_iv !== next.quality_iv
+    || old.timestamp !== next.timestamp
+}
+
+async function pollActivePointValues(pollEpoch: number) {
+  const config = activeValuePollConfig
+  if (!config || !activeValuePollIsCurrent(config, pollEpoch)) return
+  // 递归 setTimeout 本身已避免重叠；该 guard 也覆盖未来的手动触发。
+  if (activeValueInFlightEpoch === pollEpoch) return
+  activeValueInFlightEpoch = pollEpoch
+  try {
+    const snapshots = await invoke<DataPointValueSnapshot[]>('get_data_point_values', {
+      serverId: config.serverId,
+      commonAddress: config.commonAddress,
+      points: config.points,
+    })
+    if (!activeValuePollIsCurrent(config, pollEpoch)) return
+
+    let changed = false
+    for (const snapshot of Array.isArray(snapshots) ? snapshots : []) {
+      const key = pointKey(snapshot.ioa, snapshot.asdu_type)
+      if (!config.keys.has(key)) continue
+      const old = dataMap.get(key)
+      if (!old || !snapshotDiffers(old, snapshot)) continue
+      if (old.value !== snapshot.value) markChanged(key)
+      // 轻量快照只覆盖动态字段，点名、分类、映射和遥控参数等静态定义沿用缓存。
+      dataMap.set(key, { ...old, ...snapshot })
+      changed = true
+    }
+    if (changed) updateDisplay()
+  } catch (e) {
+    if (activeValuePollIsCurrent(config, pollEpoch)) {
+      console.error('Failed to load active point values:', e)
+    }
+  } finally {
+    if (activeValueInFlightEpoch === pollEpoch) activeValueInFlightEpoch = null
+    if (activeValuePollIsCurrent(config, pollEpoch)) scheduleActiveValuePoll(pollEpoch)
+  }
+}
+
+function configureActiveValuePolling(
+  serverId: string,
+  commonAddress: number,
+  epoch: number,
+  list: PointMutationInfo[],
+) {
+  if (!isCurrentSelection(serverId, commonAddress, epoch)) return
+  const byKey = new Map<string, PointMutationInfo>()
+  for (const item of list) byKey.set(pointKey(item.ioa, item.asdu_type), item)
+  const items = Array.from(byKey.values()).sort((a, b) =>
+    pointKey(a.ioa, a.asdu_type).localeCompare(pointKey(b.ioa, b.asdu_type)),
+  )
+  if (items.length === 0) {
+    if (activeValuePollConfig || activeValuePollTimer !== null || activeValueInFlightEpoch !== null) {
+      stopActiveValuePolling()
+    }
+    return
+  }
+
+  const minPeriod = Math.min(...items.map((item) =>
+    Number.isFinite(item.period_ms) ? Math.max(50, item.period_ms) : 2000,
+  ))
+  const delayMs = Math.min(500, Math.max(50, minPeriod / 4))
+  const signature = `${serverId}:${commonAddress}:${epoch}:`
+    + items.map((item) => `${pointKey(item.ioa, item.asdu_type)}@${item.period_ms}`).join('|')
+  if (activeValuePollConfig?.signature === signature) return
+
+  stopActiveValuePolling()
+  activeValuePollConfig = {
+    serverId,
+    commonAddress,
+    selectionEpoch: epoch,
+    delayMs,
+    signature,
+    points: items.map(({ ioa, asdu_type }) => ({ ioa, asdu_type })),
+    keys: new Set(items.map((item) => pointKey(item.ioa, item.asdu_type))),
+  }
+  scheduleActiveValuePoll(activeValuePollEpoch)
+}
+
 // 拉取当前 (server, CA) 的活跃周期变位集合。
 async function refreshActiveMutations() {
   const srvId = selectedServerId.value
   const ca = selectedCA.value
-  if (!srvId || ca === null) { activeMutations.value = new Map(); return }
+  const epoch = selectionEpoch
+  if (!srvId || ca === null || !isCurrentSelection(srvId, ca, epoch)) {
+    clearActiveMutationState()
+    return
+  }
+  const request = ++activeMutationListRequest
   try {
-    const list = await invoke<PointMutationInfo[]>('list_point_mutations', {
+    const response = await invoke<PointMutationInfo[]>('list_point_mutations', {
       serverId: srvId,
       commonAddress: ca,
     })
+    if (request !== activeMutationListRequest || !isCurrentSelection(srvId, ca, epoch)) return
+    const list = Array.isArray(response) ? response : []
     activeMutations.value = new Map(list.map(m => [pointKey(m.ioa, m.asdu_type), m.mode]))
+    configureActiveValuePolling(srvId, ca, epoch, list)
   } catch (e) {
-    console.error('Failed to load point mutations:', e)
+    if (request === activeMutationListRequest && isCurrentSelection(srvId, ca, epoch)) {
+      console.error('Failed to load point mutations:', e)
+    }
   }
 }
 

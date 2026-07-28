@@ -1,4 +1,4 @@
-use crate::state::{AppState, DataPointInfo, IncrementalDataResponse, ServerInfo, SlaveServerState, StationInfo};
+use crate::state::{AppState, DataPointInfo, DataPointValueSnapshot, IncrementalDataResponse, ServerInfo, SlaveServerState, StationInfo};
 use iec104sim_core::data_point::{ControlTarget, DataPoint, DataPointValue, InformationObjectDef};
 use iec104sim_core::log_collector::LogCollector;
 use iec104sim_core::log_entry::LogEntry;
@@ -1222,6 +1222,19 @@ fn normalized_raw_string(value: f32) -> String {
     ((value * 32767.0).round() as i16).to_string()
 }
 
+fn data_point_value_string(p: &DataPoint) -> String {
+    match &p.value {
+        DataPointValue::Normalized { value } => normalized_raw_string(*value),
+        _ => p.value.display(),
+    }
+}
+
+fn data_point_timestamp_string(p: &DataPoint) -> Option<String> {
+    // DataPoint.timestamp 内部存 UTC 便于无歧义比较；展示给用户时转为
+    // 本地时区,这样 UI 看到的"时间戳"和系统挂钟一致。
+    p.timestamp.map(|t| t.with_timezone(&chrono::Local).format("%H:%M:%S%.3f").to_string())
+}
+
 /// Map a core `DataPoint` to the serialisable `DataPointInfo` the UI consumes.
 fn data_point_to_info(
     p: &DataPoint,
@@ -1239,18 +1252,27 @@ fn data_point_to_info(
         mapping_asdu_type: def.and_then(|d| d.mapping.map(|m| m.asdu_type.name().to_string())),
         command_qualifier: def.and_then(|d| d.command_qualifier),
         select_before_operate: def.and_then(|d| d.select_before_operate),
-        value: match &p.value {
-            DataPointValue::Normalized { value } => normalized_raw_string(*value),
-            _ => p.value.display(),
-        },
+        value: data_point_value_string(p),
         quality_ov: p.quality.ov,
         quality_bl: p.quality.bl,
         quality_sb: p.quality.sb,
         quality_nt: p.quality.nt,
         quality_iv: p.quality.iv,
-        // DataPoint.timestamp 内部存 UTC 便于无歧义比较；展示给用户时转为
-        // 本地时区,这样 UI 看到的"时间戳"和系统挂钟一致。
-        timestamp: p.timestamp.map(|t| t.with_timezone(&chrono::Local).format("%H:%M:%S%.3f").to_string()),
+        timestamp: data_point_timestamp_string(p),
+    }
+}
+
+fn data_point_to_value_snapshot(p: &DataPoint) -> DataPointValueSnapshot {
+    DataPointValueSnapshot {
+        ioa: p.ioa,
+        asdu_type: p.asdu_type.name().to_string(),
+        value: data_point_value_string(p),
+        quality_ov: p.quality.ov,
+        quality_bl: p.quality.bl,
+        quality_sb: p.quality.sb,
+        quality_nt: p.quality.nt,
+        quality_iv: p.quality.iv,
+        timestamp: data_point_timestamp_string(p),
     }
 }
 
@@ -1327,6 +1349,55 @@ pub async fn get_data_point(
             .map(|d| ((d.ioa, d.asdu_type), d))
             .collect();
     Ok(Some(data_point_to_info(p, &def_map)))
+}
+
+/// Fetch only the mutable runtime fields for an explicit set of point keys.
+///
+/// This is the fast path used while periodic mutations are active. It performs
+/// O(k) hash lookups and deliberately avoids building the O(N) definition map
+/// used by the full/incremental table queries.
+pub(crate) async fn get_data_point_values_impl(
+    state: &AppState,
+    server_id: &str,
+    common_address: u16,
+    points: Vec<RemovePointTarget>,
+) -> Result<Vec<DataPointValueSnapshot>, String> {
+    let mut targets = Vec::with_capacity(points.len());
+    let mut seen = std::collections::HashSet::with_capacity(points.len());
+    for point in points {
+        let key = (point.ioa, parse_asdu_type(&point.asdu_type)?);
+        if seen.insert(key) {
+            targets.push(key);
+        }
+    }
+
+    let stations_arc = {
+        let servers = state.servers.read().await;
+        let srv = servers
+            .get(server_id)
+            .ok_or_else(|| format!("server {} not found", server_id))?;
+        srv.server.stations.clone()
+    };
+    let stations = stations_arc.read().await;
+    let station = stations
+        .get(&common_address)
+        .ok_or_else(|| format!("station CA={} not found", common_address))?;
+
+    Ok(targets
+        .into_iter()
+        .filter_map(|(ioa, asdu_type)| station.data_points.get(ioa, asdu_type))
+        .map(data_point_to_value_snapshot)
+        .collect())
+}
+
+#[tauri::command]
+pub async fn get_data_point_values(
+    state: State<'_, AppState>,
+    server_id: String,
+    common_address: u16,
+    points: Vec<RemovePointTarget>,
+) -> Result<Vec<DataPointValueSnapshot>, String> {
+    get_data_point_values_impl(state.inner(), &server_id, common_address, points).await
 }
 
 /// Incremental variant of `list_data_points`: returns only points whose
@@ -1708,6 +1779,7 @@ pub struct PointMutationInfo {
     pub ioa: u32,
     pub asdu_type: String,
     pub mode: String,
+    pub period_ms: u32,
 }
 
 fn mutation_mode_str(mode: MutationMode) -> &'static str {
@@ -1728,14 +1800,15 @@ pub async fn list_point_mutations(
     let srv = servers
         .get(&server_id)
         .ok_or_else(|| format!("server {} not found", server_id))?;
-    let active = srv.server.list_point_mutations().await;
+    let active = srv.server.list_point_mutations_with_period().await;
     Ok(active
         .into_iter()
-        .filter(|(ca, _, _, _)| *ca == common_address)
-        .map(|(_, ioa, t, mode)| PointMutationInfo {
+        .filter(|(ca, _, _, _, _)| *ca == common_address)
+        .map(|(_, ioa, t, mode, period_ms)| PointMutationInfo {
             ioa,
             asdu_type: t.name().to_string(),
             mode: mutation_mode_str(mode).to_string(),
+            period_ms,
         })
         .collect())
 }
@@ -1918,6 +1991,42 @@ mod tests {
             },
         );
         state
+    }
+
+    #[tokio::test]
+    async fn get_data_point_values_fetches_only_requested_runtime_snapshots() {
+        let server = SlaveServer::new(test_transport(free_port()));
+        let mut station = Station::new(1, "st");
+        station.add_point(ctl_def(1, AsduTypeId::MSpNa1)).unwrap();
+        station.add_point(ctl_def(2, AsduTypeId::MMeNc1)).unwrap();
+        {
+            let point = station.data_points.get_mut(1, AsduTypeId::MSpNa1).unwrap();
+            point.value = DataPointValue::SinglePoint { value: true };
+            point.quality = QualityFlags { iv: true, sb: true, ..Default::default() };
+            point.timestamp = Some(chrono::Utc::now());
+        }
+        server.add_station(station).await.unwrap();
+        let state = state_with_server(server, "s1").await;
+
+        let snapshots = get_data_point_values_impl(
+            &state,
+            "s1",
+            1,
+            vec![
+                RemovePointTarget { ioa: 1, asdu_type: "M_SP_NA_1".to_string() },
+                RemovePointTarget { ioa: 1, asdu_type: "MSpNa1".to_string() },
+                RemovePointTarget { ioa: 999, asdu_type: "M_SP_NA_1".to_string() },
+            ],
+        ).await.unwrap();
+
+        assert_eq!(snapshots.len(), 1, "duplicate keys are collapsed and unknown points skipped");
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.ioa, 1);
+        assert_eq!(snapshot.asdu_type, "M_SP_NA_1");
+        assert_eq!(snapshot.value, "ON");
+        assert!(snapshot.quality_iv && snapshot.quality_sb);
+        assert!(!snapshot.quality_ov && !snapshot.quality_bl && !snapshot.quality_nt);
+        assert!(snapshot.timestamp.is_some());
     }
 
     // issue #28 复现:运行中直接删除服务器后,同端口必须能立即重建。

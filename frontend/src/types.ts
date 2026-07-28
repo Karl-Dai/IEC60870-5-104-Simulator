@@ -120,11 +120,25 @@ export interface RemoteOperationConfig {
 export type MutationMode = 'flip' | 'increment' | 'decrement'
 
 /** list_point_mutations 返回项。asdu_type 为大写显示名（与 DataPointInfo.asdu_type 一致）。
- *  mode 为当前变位方式,供数据表显示。 */
+ *  mode 为当前变位方式,供数据表显示；period_ms 驱动活动点的动态刷新频率。 */
 export interface PointMutationInfo {
   ioa: number
   asdu_type: string
   mode: MutationMode
+  period_ms: number
+}
+
+/** 活动变位点的轻量动态快照。静态定义字段继续沿用 DataPointInfo 缓存。 */
+export interface DataPointValueSnapshot {
+  ioa: number
+  asdu_type: string
+  value: string
+  quality_ov: boolean
+  quality_bl: boolean
+  quality_sb: boolean
+  quality_nt: boolean
+  quality_iv: boolean
+  timestamp: string | null
 }
 
 export const DEFAULT_PROTOCOL_TIMING: ProtocolTimingConfig = {
