@@ -8,6 +8,7 @@ import type {
   DataPointValueSnapshot,
   IncrementalDataResponse,
   PointMutationInfo,
+  PointMutationRow,
   MutationMode,
 } from '../types'
 import { formatDataPointValue } from '../utils/dataPointValue'
@@ -15,6 +16,7 @@ import DataPointModal from './DataPointModal.vue'
 import BatchAddModal from './BatchAddModal.vue'
 import BatchWriteModal from './BatchWriteModal.vue'
 import BatchControlOptionsModal from './BatchControlOptionsModal.vue'
+import SimulationSettingsDrawer from './SimulationSettingsDrawer.vue'
 import { formatAsduTypeWithId } from '../constants/asduTypes'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
 import EmptyState from '@shared/components/EmptyState.vue'
@@ -61,6 +63,7 @@ const editingPointDefinition = ref<DataPointInfo | null>(null)
 const showBatchModal = ref(false)
 const showBatchWriteModal = ref(false)
 const showBatchControlModal = ref(false)
+const showSimulationDrawer = ref(false)
 // 默认写值类型：取当前分类过滤命中的首个点的 asdu_type；无过滤则空（弹窗回退首个可用类型）。
 const batchWriteDefaultType = computed(() => {
   if (!selectedCategory.value) return ''
@@ -71,14 +74,9 @@ const batchWriteDefaultType = computed(() => {
 // an IOA-only key would flash every type on that IOA when only one changed.
 const changedKeys = ref<Set<string>>(new Set())
 const changeTimers = new Map<string, number>()
-// 当前 (server, CA) 下正在周期变位的点位 → 变位方式（key=`ioa:asdu_type`）。
+// 当前 (server, CA) 下正在周期变位的点位 → 变位方式及完整任务参数。
 const activeMutations = ref<Map<string, MutationMode>>(new Map())
-// 右键菜单内的周期/变位参数，组件内记住上次值。
-const mutationPeriod = ref(1000)
-const mutationMode = ref<MutationMode>('flip')
-const mutationStep = ref(1)
-const mutationMin = ref(0)
-const mutationMax = ref(100)
+const activeMutationDetails = ref<Map<string, PointMutationInfo>>(new Map())
 
 // 变位方式的图标 / 本地化标签（数据表行内显示）。
 function mutationGlyph(mode: MutationMode | undefined) {
@@ -88,19 +86,6 @@ function mutationModeLabel(mode: MutationMode | undefined) {
   if (mode === 'increment') return t('table.modeIncrement')
   if (mode === 'decrement') return t('table.modeDecrement')
   return t('table.modeFlip')
-}
-// 仅模拟量 (M_ME_*) 与累计量 (M_IT_*) 支持递增/递减;离散量只翻转。
-function pointSupportsStep(asduType: string) {
-  return /^M_(ME|IT)_/.test(asduType)
-}
-// 右键点位时按其类型预填步长/上下限默认值(浮点以当前值为中心 ±100)。
-function applyMutationDefaults(point: DataPointInfo) {
-  const ty = point.asdu_type
-  const v0 = Number.parseFloat(point.value) || 0
-  if (ty.startsWith('M_ME_NA')) { mutationStep.value = 0.05; mutationMin.value = -1; mutationMax.value = 1 }
-  else if (ty.startsWith('M_ME_NB')) { mutationStep.value = 100; mutationMin.value = -10000; mutationMax.value = 10000 }
-  else if (ty.startsWith('M_ME_NC')) { mutationStep.value = 1; mutationMin.value = Math.round((v0 - 100) * 1e3) / 1e3; mutationMax.value = Math.round((v0 + 100) * 1e3) / 1e3 }
-  else if (ty.startsWith('M_IT')) { mutationStep.value = 1; mutationMin.value = 0; mutationMax.value = 10000 }
 }
 
 // === Virtual scroll (same pattern as master DataTable) ===
@@ -256,6 +241,7 @@ watch([selectedServerId, selectedCA], async ([, ], [, ]) => {
     for (const t of changeTimers.values()) clearTimeout(t)
     changeTimers.clear()
     selectedRows.value = []
+    showSimulationDrawer.value = false
     emitSelection()
     return
   }
@@ -273,6 +259,7 @@ watch([selectedServerId, selectedCA], async ([, ], [, ]) => {
     for (const t of changeTimers.values()) clearTimeout(t)
     changeTimers.clear()
     selectedRows.value = []
+    showSimulationDrawer.value = false
     emitSelection()
   }
   await loadDataPoints()
@@ -623,10 +610,6 @@ function showContextMenu(e: MouseEvent, point: DataPointInfo) {
     emitSelection()
   }
   contextMenu.value = { show: true, x: e.clientX, y: e.clientY }
-  // 按右键点位类型预填步长/上下限,并对离散量强制翻转模式。
-  applyMutationDefaults(point)
-  if (!pointSupportsStep(point.asdu_type)) mutationMode.value = 'flip'
-  refreshActiveMutations()
 }
 
 function closeContextMenu() {
@@ -721,6 +704,7 @@ function clearActiveMutationState() {
   // 让已经发出的 list_point_mutations 响应失效。
   activeMutationListRequest++
   activeMutations.value = new Map()
+  activeMutationDetails.value = new Map()
   stopActiveValuePolling()
 }
 
@@ -842,6 +826,9 @@ async function refreshActiveMutations() {
     })
     if (request !== activeMutationListRequest || !isCurrentSelection(srvId, ca, epoch)) return
     const list = Array.isArray(response) ? response : []
+    activeMutationDetails.value = new Map(
+      list.map(m => [pointKey(m.ioa, m.asdu_type), m]),
+    )
     activeMutations.value = new Map(list.map(m => [pointKey(m.ioa, m.asdu_type), m.mode]))
     configureActiveValuePolling(srvId, ca, epoch, list)
   } catch (e) {
@@ -851,65 +838,22 @@ async function refreshActiveMutations() {
   }
 }
 
-// 选中点位里是否有正在变位的（决定是否显示「停止」项）。
-const anySelectedMutating = computed(() =>
-  selectedRows.value.some(r => activeMutations.value.has(pointKey(r.ioa, r.asdu_type)))
-)
+const activeMutationRows = computed<PointMutationRow[]>(() => {
+  // displayPoints 的引用随 targeted poll 更新；读取它让当前值变化触发本 computed。
+  void displayPoints.value
+  return Array.from(activeMutationDetails.value.values())
+    .map(info => ({
+      ...info,
+      value: dataMap.get(pointKey(info.ioa, info.asdu_type))?.value ?? '-',
+    }))
+    .sort((a, b) => a.ioa - b.ioa || a.asdu_type.localeCompare(b.asdu_type))
+})
 
-// 选区里是否有支持递增/递减的点(决定是否在菜单显示变位方式与步长/上下限)。
-const selectionSupportsStep = computed(() =>
-  selectedRows.value.some(r => pointSupportsStep(r.asdu_type))
-)
-
-async function startMutationForSelection() {
+async function openSimulationSettings() {
   contextMenu.value.show = false
-  const srvId = selectedServerId.value
-  if (!srvId || currentCA === null) return
-  const period = Math.min(60000, Math.max(50, mutationPeriod.value || 1000))
-  const targets = selectedRows.value.map(r => ({ ioa: r.ioa, asdu_type: r.asdu_type }))
-  // 离散量不支持递增/递减,后端会回退翻转;此处按各点类型决定实际传入的模式。
-  const step = mutationStep.value || 1
-  const min = mutationMin.value
-  const max = mutationMax.value
-  try {
-    for (const tgt of targets) {
-      const mode: MutationMode = pointSupportsStep(tgt.asdu_type) ? mutationMode.value : 'flip'
-      await invoke('start_point_mutation', {
-        serverId: srvId,
-        commonAddress: currentCA,
-        ioa: tgt.ioa,
-        asduType: tgt.asdu_type,
-        periodMs: period,
-        mode,
-        step,
-        min,
-        max,
-      })
-    }
-    await refreshActiveMutations()
-  } catch (e) {
-    await showAlert(String(e))
-  }
-}
-
-async function stopMutationForSelection() {
-  contextMenu.value.show = false
-  const srvId = selectedServerId.value
-  if (!srvId || currentCA === null) return
-  const targets = selectedRows.value.map(r => ({ ioa: r.ioa, asdu_type: r.asdu_type }))
-  try {
-    for (const tgt of targets) {
-      await invoke('stop_point_mutation', {
-        serverId: srvId,
-        commonAddress: currentCA,
-        ioa: tgt.ioa,
-        asduType: tgt.asdu_type,
-      })
-    }
-    await refreshActiveMutations()
-  } catch (e) {
-    await showAlert(String(e))
-  }
+  if (!selectedServerId.value || currentCA === null) return
+  await refreshActiveMutations()
+  showSimulationDrawer.value = true
 }
 
 // Allow parent to directly trigger data load (bypasses async watch timing issues)
@@ -946,6 +890,12 @@ defineExpose({ loadData: loadDataPoints })
         @click="showBatchWriteModal = true"
         :title="t('batchWrite.title')"
       >{{ t('table.batchWrite') }}</button>
+      <button
+        class="add-btn batch simulation"
+        :disabled="!selectedServerId || currentCA === null"
+        @click="openSimulationSettings"
+        :title="t('simulationSettings.title')"
+      >{{ t('simulationSettings.open') }}</button>
       <span class="table-count">{{ filteredPoints.length }} {{ t('table.countSuffix') }}</span>
     </div>
 
@@ -1068,43 +1018,8 @@ defineExpose({ loadData: loadDataPoints })
       :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
       @click.stop
     >
-      <label class="context-menu-period" @click.stop>
-        <span>{{ t('table.mutationPeriod') }}</span>
-        <input
-          type="number"
-          min="50"
-          max="60000"
-          v-model.number="mutationPeriod"
-          @keydown.enter="startMutationForSelection"
-          @click.stop
-        />
-        <span class="cm-unit">ms</span>
-      </label>
-      <div v-if="selectionSupportsStep" class="context-menu-mode" @click.stop>
-        <span class="cm-mode-label">{{ t('table.mutationMode') }}</span>
-        <button :class="{ active: mutationMode === 'flip' }" @click.stop="mutationMode = 'flip'">{{ t('table.modeFlip') }}</button>
-        <button :class="{ active: mutationMode === 'increment' }" @click.stop="mutationMode = 'increment'">{{ t('table.modeIncrement') }}</button>
-        <button :class="{ active: mutationMode === 'decrement' }" @click.stop="mutationMode = 'decrement'">{{ t('table.modeDecrement') }}</button>
-      </div>
-      <template v-if="selectionSupportsStep && mutationMode !== 'flip'">
-        <label class="context-menu-period" @click.stop>
-          <span>{{ t('table.mutationStep') }}</span>
-          <input type="number" v-model.number="mutationStep" @keydown.enter="startMutationForSelection" @click.stop />
-        </label>
-        <label class="context-menu-period" @click.stop>
-          <span>{{ t('table.mutationMin') }}</span>
-          <input type="number" v-model.number="mutationMin" @keydown.enter="startMutationForSelection" @click.stop />
-        </label>
-        <label class="context-menu-period" @click.stop>
-          <span>{{ t('table.mutationMax') }}</span>
-          <input type="number" v-model.number="mutationMax" @keydown.enter="startMutationForSelection" @click.stop />
-        </label>
-      </template>
-      <div class="context-menu-item" @click="startMutationForSelection">
-        {{ selectedCount > 1 ? `${t('table.startMutation')} (${selectedCount})` : t('table.startMutation') }}
-      </div>
-      <div v-if="anySelectedMutating" class="context-menu-item" @click="stopMutationForSelection">
-        {{ t('table.stopMutation') }}
+      <div class="context-menu-item" @click="openSimulationSettings">
+        {{ t('simulationSettings.title') }}
       </div>
       <div class="context-menu-sep" />
       <div v-if="selectedCount === 1" class="context-menu-item" @click="editSelectedPoint">
@@ -1117,6 +1032,16 @@ defineExpose({ loadData: loadDataPoints })
         {{ selectedCount > 1 ? `${t('table.deletePoint')} (${selectedCount})` : t('table.deletePoint') }}
       </div>
     </div>
+
+    <SimulationSettingsDrawer
+      :visible="showSimulationDrawer"
+      :server-id="selectedServerId ?? ''"
+      :common-address="currentCA ?? 0"
+      :selected-points="selectedRows"
+      :active-rows="activeMutationRows"
+      @close="showSimulationDrawer = false"
+      @changed="refreshActiveMutations"
+    />
 
     <!-- Add Data Point Modal -->
     <DataPointModal
@@ -1233,6 +1158,10 @@ defineExpose({ loadData: loadDataPoints })
 .add-btn.batch {
   font-size: 11px;
   font-weight: 400;
+}
+
+.add-btn.simulation {
+  color: var(--c-sapphire);
 }
 
 .add-btn:hover:not(:disabled) {
@@ -1436,33 +1365,6 @@ defineExpose({ loadData: loadDataPoints })
   background: #3d2a30;
 }
 
-.context-menu-period {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  color: var(--c-subtext0);
-}
-.context-menu-period input {
-  width: 64px;
-  height: 22px;
-  padding: 0 6px;
-  background: var(--c-base);
-  border: 1px solid var(--c-surface0);
-  border-radius: 4px;
-  color: var(--c-text);
-  font: 500 12px/1 ui-monospace, "SF Mono", Menlo, monospace;
-  text-align: right;
-}
-.context-menu-period input:focus {
-  outline: none;
-  border-color: var(--c-blue);
-}
-.cm-unit {
-  color: var(--c-overlay0);
-  font-size: 11px;
-}
 .context-menu-sep {
   height: 1px;
   margin: 4px 0;
@@ -1490,37 +1392,5 @@ defineExpose({ loadData: loadDataPoints })
   font-weight: 700;
   color: var(--c-green);
   vertical-align: middle;
-}
-/* 右键菜单内的变位方式切换。 */
-.context-menu-mode {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
-  font-size: 12px;
-}
-.cm-mode-label {
-  margin-right: 2px;
-  color: var(--c-subtext0);
-}
-.context-menu-mode button {
-  flex: 1;
-  height: 22px;
-  padding: 0 4px;
-  background: var(--c-base);
-  border: 1px solid var(--c-surface0);
-  border-radius: 4px;
-  color: var(--c-subtext0);
-  font-size: 11px;
-  cursor: pointer;
-}
-.context-menu-mode button:hover {
-  border-color: var(--c-blue);
-}
-.context-menu-mode button.active {
-  background: var(--c-blue);
-  border-color: var(--c-blue);
-  color: var(--c-base);
-  font-weight: 600;
 }
 </style>

@@ -1776,7 +1776,7 @@ pub async fn stop_point_mutation(
 
 /// list_point_mutations 返回项。asdu_type 用 .name() 大写显示名,
 /// 与 list_data_points 的 DataPointInfo.asdu_type 一致,前端可直接拼 key。
-/// mode 为 flip/increment/decrement,供前端在数据表显示当前变位方式。
+/// 返回完整任务参数，供模拟设置面板回显和更新。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PointMutationInfo {
@@ -1784,6 +1784,9 @@ pub struct PointMutationInfo {
     pub asdu_type: String,
     pub mode: String,
     pub period_ms: u32,
+    pub step: f64,
+    pub min: f64,
+    pub max: f64,
 }
 
 fn mutation_mode_str(mode: MutationMode) -> &'static str {
@@ -1804,15 +1807,18 @@ pub async fn list_point_mutations(
     let srv = servers
         .get(&server_id)
         .ok_or_else(|| format!("server {} not found", server_id))?;
-    let active = srv.server.list_point_mutations_with_period().await;
+    let active = srv.server.list_point_mutations_with_params().await;
     Ok(active
         .into_iter()
         .filter(|(ca, _, _, _, _)| *ca == common_address)
-        .map(|(_, ioa, t, mode, period_ms)| PointMutationInfo {
+        .map(|(_, ioa, t, params, period_ms)| PointMutationInfo {
             ioa,
             asdu_type: t.name().to_string(),
-            mode: mutation_mode_str(mode).to_string(),
+            mode: mutation_mode_str(params.mode).to_string(),
             period_ms,
+            step: params.step,
+            min: params.min,
+            max: params.max,
         })
         .collect())
 }

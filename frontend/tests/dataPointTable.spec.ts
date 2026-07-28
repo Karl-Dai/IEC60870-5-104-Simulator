@@ -190,4 +190,43 @@ describe('DataPointTable 子站数据表', () => {
       .toEqual(['中间', 'OFF', 'ON', '不确定'])
     wrapper.unmount()
   })
+
+  it('工具栏模拟入口使用当前选区打开统一设置抽屉', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_remote_operation_config') {
+        return Promise.resolve({ sync_tb_by_category: {} })
+      }
+      if (command === 'list_point_mutations') {
+        return Promise.resolve([{
+          ioa: 3,
+          asdu_type: 'M_ME_NC_1',
+          mode: 'increment',
+          period_ms: 500,
+          step: 1,
+          min: -100,
+          max: 100,
+        }])
+      }
+      return Promise.resolve({ points: [C], seq: 1, total_count: 1 })
+    })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+
+    await wrapper.find('tbody tr').trigger('click')
+    await wrapper.find('.add-btn.simulation').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const drawer = document.body.querySelector('.sim-drawer')
+    expect(drawer).not.toBeNull()
+    expect(drawer?.textContent).toContain('Point Simulation Settings')
+    expect(drawer?.textContent).toContain('1.5')
+
+    refs.selectedServerId.value = 's2'
+    refs.selectedCA.value = 2
+    await flushPromises()
+    await nextTick()
+    expect(document.body.querySelector('.sim-drawer')).toBeNull()
+    wrapper.unmount()
+  })
 })

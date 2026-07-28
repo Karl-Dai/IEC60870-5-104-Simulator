@@ -190,6 +190,22 @@ export type DictShape = {
     dupIoaTitle: string
     batchControlOptions: string
   }
+  simulationSettings: {
+    open: string
+    title: string
+    selectionHint: string
+    noSelection: string
+    mixedValues: string
+    activeTitle: string
+    noActive: string
+    currentValue: string
+    apply: string
+    stopSelected: string
+    stop: string
+    periodRange: string
+    stepInvalid: string
+    boundsInvalid: string
+  }
   pointModal: {
     title: string
     editTitle: string
@@ -662,6 +678,22 @@ const dict: DictShape = {
     derivedTbTitle: '变位时将追加派生帧 {tb}（「变位同步上送 TB」已开启；点位自身 Type ID 不变）',
     dupIoaTitle: 'IOA {ioa} 与本站其他类型共用：{types}。同一 CASDU 内 IOA 应唯一，请编辑该点修改 IOA。',
     batchControlOptions: '批量设置控制参数',
+  },
+  simulationSettings: {
+    open: '模拟设置',
+    title: '点位模拟设置',
+    selectionHint: '已选择 {count} 个点位',
+    noSelection: '先在点表中选择一个或多个点位；下方仍可查看和停止活动模拟。',
+    mixedValues: '所选点位的活动参数不一致；应用后将使用下方参数统一更新。',
+    activeTitle: '活动模拟',
+    noActive: '当前站没有活动模拟。',
+    currentValue: '当前值',
+    apply: '启动 / 更新',
+    stopSelected: '停止选中点',
+    stop: '停止',
+    periodRange: '周期必须在 50–60000 ms 之间。',
+    stepInvalid: '步长必须是非零数值。',
+    boundsInvalid: '下限必须小于或等于上限。',
   },
   pointModal: {
     title: '添加数据点',

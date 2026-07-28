@@ -119,13 +119,20 @@ export interface RemoteOperationConfig {
 /** 周期变位方式:翻转(两态振荡)/ 递增 / 递减(三角波)。 */
 export type MutationMode = 'flip' | 'increment' | 'decrement'
 
-/** list_point_mutations 返回项。asdu_type 为大写显示名（与 DataPointInfo.asdu_type 一致）。
- *  mode 为当前变位方式,供数据表显示；period_ms 驱动活动点的动态刷新频率。 */
+/** list_point_mutations 返回项。用于数据表状态标记、动态刷新和模拟参数回显。 */
 export interface PointMutationInfo {
   ioa: number
   asdu_type: string
   mode: MutationMode
   period_ms: number
+  step: number
+  min: number
+  max: number
+}
+
+/** 模拟设置面板中的活动点；value 复用点表当前最新值。 */
+export interface PointMutationRow extends PointMutationInfo {
+  value: string
 }
 
 /** 活动变位点的轻量动态快照。静态定义字段继续沿用 DataPointInfo 缓存。 */

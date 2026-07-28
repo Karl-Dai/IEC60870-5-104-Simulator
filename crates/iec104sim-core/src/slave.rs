@@ -1176,7 +1176,7 @@ pub type SharedProtocolTiming = Arc<RwLock<ProtocolTimingConfig>>;
 
 struct PointMutationTask {
     handle: tokio::task::JoinHandle<()>,
-    mode: MutationMode,
+    params: MutationParams,
     period_ms: u32,
 }
 
@@ -1293,6 +1293,7 @@ impl SlaveServer {
         let mut guard = self.point_mutation_handles.lock().await;
         if let Some(task) = guard.remove(&key) { task.handle.abort(); }
 
+        let params = normalize_mutation_params(asdu_type, params);
         let stations = self.stations.clone();
         let connections = self.connections.clone();
         let remote_ops = self.remote_ops.clone();
@@ -1342,7 +1343,7 @@ impl SlaveServer {
                 }
             }
         });
-        guard.insert(key, PointMutationTask { handle, mode: params.mode, period_ms });
+        guard.insert(key, PointMutationTask { handle, params, period_ms });
     }
 
     /// 停止单个点位的周期变位。
@@ -1364,11 +1365,24 @@ impl SlaveServer {
     pub async fn list_point_mutations_with_period(
         &self,
     ) -> Vec<(u16, u32, AsduTypeId, MutationMode, u32)> {
+        self.list_point_mutations_with_params()
+            .await
+            .into_iter()
+            .map(|(ca, ioa, asdu_type, params, period_ms)| {
+                (ca, ioa, asdu_type, params.mode, period_ms)
+            })
+            .collect()
+    }
+
+    /// 返回当前活跃的周期变位点位及完整、实际生效的任务参数。
+    pub async fn list_point_mutations_with_params(
+        &self,
+    ) -> Vec<(u16, u32, AsduTypeId, MutationParams, u32)> {
         self.point_mutation_handles
             .lock()
             .await
             .iter()
-            .map(|(&(ca, ioa, t), task)| (ca, ioa, t, task.mode, task.period_ms))
+            .map(|(&(ca, ioa, t), task)| (ca, ioa, t, task.params, task.period_ms))
             .collect()
     }
 
@@ -2851,12 +2865,57 @@ impl MutationMode {
 
 /// 周期变位参数。step/min/max 仅 Increment/Decrement 使用(统一以 f64 传递,
 /// 应用到具体类型时按需 round/clamp);Flip 时忽略。
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct MutationParams {
     pub mode: MutationMode,
     pub step: f64,
     pub min: f64,
     pub max: f64,
+}
+
+fn normalize_mutation_params(
+    asdu_type: AsduTypeId,
+    mut params: MutationParams,
+) -> MutationParams {
+    let category = asdu_type.category();
+    if !matches!(
+        category,
+        DataCategory::NormalizedMeasured
+            | DataCategory::ScaledMeasured
+            | DataCategory::FloatMeasured
+            | DataCategory::IntegratedTotals
+    ) {
+        params.mode = MutationMode::Flip;
+    }
+
+    params.step = if params.step.is_finite() {
+        params.step.abs()
+    } else {
+        0.0
+    };
+    if !params.min.is_finite() {
+        params.min = 0.0;
+    }
+    if !params.max.is_finite() {
+        params.max = params.min;
+    }
+    (params.min, params.max) = (
+        params.min.min(params.max),
+        params.min.max(params.max),
+    );
+
+    let limits = match category {
+        DataCategory::NormalizedMeasured => Some((-1.0, 1.0)),
+        DataCategory::ScaledMeasured => Some((i16::MIN as f64, i16::MAX as f64)),
+        DataCategory::FloatMeasured => Some((f32::MIN as f64, f32::MAX as f64)),
+        DataCategory::IntegratedTotals => Some((i32::MIN as f64, i32::MAX as f64)),
+        _ => None,
+    };
+    if let Some((lo, hi)) = limits {
+        params.min = params.min.clamp(lo, hi);
+        params.max = params.max.clamp(lo, hi);
+    }
+    params
 }
 
 /// 按变位模式计算下一个值与方向。`dir` 为递增/递减的当前方向(+1 向上 / -1 向下),
@@ -3126,6 +3185,16 @@ mod tests {
             server.list_point_mutations_with_period().await,
             vec![(1, 1, AsduTypeId::MSpNa1, MutationMode::Flip, 100)],
         );
+        assert_eq!(
+            server.list_point_mutations_with_params().await,
+            vec![(
+                1,
+                1,
+                AsduTypeId::MSpNa1,
+                MutationParams::default(),
+                100,
+            )],
+        );
 
         tokio::time::advance(std::time::Duration::from_millis(100)).await;
         tokio::task::yield_now().await;
@@ -3161,6 +3230,59 @@ mod tests {
         );
 
         server.stop_point_mutation(1, 1, AsduTypeId::MSpNa1).await;
+    }
+
+    #[tokio::test]
+    async fn point_mutation_reports_effective_parameters() {
+        let server = SlaveServer::new(SlaveTransportConfig::default());
+        server
+            .start_point_mutation(
+                1,
+                9,
+                AsduTypeId::MMeNa1,
+                20,
+                MutationParams {
+                    mode: MutationMode::Increment,
+                    step: -0.25,
+                    min: 5.0,
+                    max: -5.0,
+                },
+            )
+            .await;
+        assert_eq!(
+            server.list_point_mutations_with_params().await,
+            vec![(
+                1,
+                9,
+                AsduTypeId::MMeNa1,
+                MutationParams {
+                    mode: MutationMode::Increment,
+                    step: 0.25,
+                    min: -1.0,
+                    max: 1.0,
+                },
+                50,
+            )],
+        );
+
+        server
+            .start_point_mutation(
+                1,
+                1,
+                AsduTypeId::MSpNa1,
+                1000,
+                MutationParams {
+                    mode: MutationMode::Decrement,
+                    step: -2.0,
+                    min: 0.0,
+                    max: 1.0,
+                },
+            )
+            .await;
+        let mut active = server.list_point_mutations_with_params().await;
+        active.sort_by_key(|(_, ioa, _, _, _)| *ioa);
+        assert_eq!(active[0].3.mode, MutationMode::Flip);
+        assert_eq!(active[0].3.step, 2.0);
     }
 
     #[tokio::test(start_paused = true)]
