@@ -18,7 +18,10 @@ use std::time::Duration;
 use iec104sim_core::log_collector::LogCollector;
 use iec104sim_core::log_entry::Direction;
 use iec104sim_core::master::{MasterConfig, MasterConnection};
-use iec104sim_core::slave::{SlaveServer, SlaveTransportConfig, Station};
+use iec104sim_core::slave::{SlaveServer, SlaveTlsConfig, SlaveTransportConfig, Station};
+
+mod common;
+use common::cert_gen;
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -46,7 +49,8 @@ fn iframe_negative(frame: &[u8]) -> bool {
 }
 
 /// 读一条完整 104 帧,返回 (整帧字节, ctrl1)。帧不完整或读到 EOF 返回 None。
-fn read_one_frame(stream: &mut TcpStream) -> Option<(Vec<u8>, u8)> {
+/// 泛型于 `Read`,明文 TcpStream 与 TLS 流复用同一份读帧逻辑。
+fn read_one_frame<S: Read>(stream: &mut S) -> Option<(Vec<u8>, u8)> {
     let mut hdr = [0u8; 2];
     if stream.read_exact(&mut hdr).is_err() {
         return None;
@@ -83,20 +87,15 @@ async fn spawn_slave() -> (SlaveServer, u16) {
     (slave, port)
 }
 
-/// 连接 + STARTDT,返回已就绪的 TcpStream。
-fn connect_and_startdt(port: u16) -> TcpStream {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
-    stream
-        .write_all(&[0x68, 0x04, 0x07, 0x00, 0x00, 0x00])
-        .unwrap();
+/// 在已建立的流上发 STARTDT ACT 并等到 STARTDT CON。明文与 TLS 共用。
+fn startdt<S: Read + Write>(stream: &mut S) {
+    send(stream, &[0x68, 0x04, 0x07, 0x00, 0x00, 0x00]);
     // 读到 STARTDT CON (U-frame, ctrl1=0x0B)。
     loop {
-        match read_one_frame(&mut stream) {
+        match read_one_frame(stream) {
             Some((_frame, ctrl1)) if ctrl1 & 0x03 == 0x03 => {
                 assert_eq!(ctrl1, 0x0B, "expected STARTDT CON (0x0B)");
-                return stream;
+                return;
             }
             Some(_) => continue,
             None => panic!("EOF before STARTDT CON"),
@@ -104,8 +103,17 @@ fn connect_and_startdt(port: u16) -> TcpStream {
     }
 }
 
+/// 连接 + STARTDT,返回已就绪的 TcpStream。
+fn connect_and_startdt(port: u16) -> TcpStream {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+    startdt(&mut stream);
+    stream
+}
+
 /// 读到第一条 I 帧(跳过中间的 S 帧),返回整帧字节。
-fn first_iframe(stream: &mut TcpStream) -> Vec<u8> {
+fn first_iframe<S: Read>(stream: &mut S) -> Vec<u8> {
     loop {
         match read_one_frame(stream) {
             Some((frame, ctrl1)) if ctrl1 & 0x01 == 0 => return frame,
@@ -116,8 +124,9 @@ fn first_iframe(stream: &mut TcpStream) -> Vec<u8> {
 }
 
 /// 发送一帧裸 APDU。
-fn send(stream: &mut TcpStream, frame: &[u8]) {
+fn send<S: Write>(stream: &mut S, frame: &[u8]) {
     stream.write_all(frame).unwrap();
+    stream.flush().unwrap();
 }
 
 // =========================================================================
@@ -794,12 +803,13 @@ async fn slave_echoes_test_bit_in_gi_activation_ack() {
 }
 
 // =========================================================================
-// 103 短帧守卫:帧长 < 22(CP56Time2a 不完整)应按畸形拒收回 COT=44(unknown-type)+negative,
-// 而非当合法对时处理回 COT=7。
+// 103 结构守卫:畸形/截断 ASDU 无法安全回显,应丢弃并记录,不能冒充
+// UNKNOWN_TYPE(COT=44)。随后合法帧仍可在同一连接上正常处理。
 // =========================================================================
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn slave_rejects_short_clock_sync_frame() {
-    let (mut slave, port) = spawn_slave().await;
+async fn slave_drops_short_clock_sync_frame_and_keeps_connection() {
+    let port = free_port();
+    let (mut slave, lc) = spawn_slave_with_log(port).await;
     let mut stream = connect_and_startdt(port);
     let ca_bytes = 1u16.to_le_bytes();
     // 构造一条短 103 帧:声明 body 长度=14(0x0E),内容含 ASDU 头+CA+部分 IOA 但无完整 CP56(完整 103 帧 body=20/总 22)。
@@ -826,17 +836,89 @@ async fn slave_rejects_short_clock_sync_frame() {
         ],
     );
 
-    let resp = first_iframe(&mut stream);
-    assert_eq!(
-        iframe_cot(&resp) & 0x3F,
-        44,
-        "103 短帧(无 CP56)应按畸形回 COT=44(UNKNOWN_TYPE),实际 COT 字节={:#04X}",
-        resp[8]
-    );
+    stream
+        .set_read_timeout(Some(Duration::from_millis(300)))
+        .ok();
     assert!(
-        iframe_negative(&resp),
-        "103 短帧拒收应带 negative-confirm(bit6),COT 字节={:#04X}",
-        resp[8]
+        read_one_frame(&mut stream).is_none(),
+        "截断 C_CS_NA_1 应被丢弃,不能回 COT=44 或其它伪响应"
+    );
+
+    let entries = lc.get_all().await;
+    let malformed = entries
+        .iter()
+        .filter_map(|entry| entry.detail_event.as_ref())
+        .find(|event| event.kind == "clockSyncMalformed")
+        .expect("短 C_CS_NA_1 应记录 clockSyncMalformed");
+    assert_eq!(malformed.payload["reason"], "cp56_length");
+    assert_eq!(malformed.payload["len"], 16);
+
+    // 丢弃畸形 ASDU 不能破坏连接；下一条完整 C_CS_NA_1 仍应正常确认。
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    send(&mut stream, &build_clock_sync_frame(1, 6));
+    let resp = first_iframe(&mut stream);
+    assert_eq!(iframe_cot(&resp) & 0x3F, 7);
+    assert!(!iframe_negative(&resp));
+
+    let _ = slave.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slave_drops_clock_sync_with_invalid_vsq() {
+    let port = free_port();
+    let (mut slave, lc) = spawn_slave_with_log(port).await;
+    let mut stream = connect_and_startdt(port);
+
+    let mut malformed = build_clock_sync_frame(1, 6);
+    malformed[7] = 0x81; // SQ=1、对象数=1；C_CS_NA_1 仅允许 SQ=0/单对象。
+    send(&mut stream, &malformed);
+
+    stream
+        .set_read_timeout(Some(Duration::from_millis(300)))
+        .ok();
+    assert!(read_one_frame(&mut stream).is_none());
+
+    let entries = lc.get_all().await;
+    let event = entries
+        .iter()
+        .filter_map(|entry| entry.detail_event.as_ref())
+        .find(|event| event.kind == "clockSyncMalformed")
+        .expect("非法 VSQ 应记录 clockSyncMalformed");
+    assert_eq!(event.payload["reason"], "vsq");
+
+    let _ = slave.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slave_rejects_clock_sync_with_nonzero_ioa_before_disabled_policy() {
+    let port = free_port();
+    let (mut slave, lc) = spawn_slave_with_log(port).await;
+    let mut ops = slave.get_remote_ops().await;
+    ops.answer_clock_sync = false;
+    slave.set_remote_ops(ops).await;
+    let mut stream = connect_and_startdt(port);
+
+    let mut frame = build_clock_sync_frame(1, 6);
+    frame[12] = 1; // C_CS_NA_1 系统命令固定 IOA=0。
+    send(&mut stream, &frame);
+
+    let resp = first_iframe(&mut stream);
+    assert_eq!(iframe_cot(&resp) & 0x3F, 47);
+    assert!(iframe_negative(&resp));
+
+    let entries = lc.get_all().await;
+    let event = entries
+        .iter()
+        .filter_map(|entry| entry.detail_event.as_ref())
+        .find(|event| event.kind == "clockSyncInvalidIoa")
+        .expect("IOA!=0 应记录 clockSyncInvalidIoa");
+    assert_eq!(event.payload["ioa"], 1);
+    assert!(
+        entries
+            .iter()
+            .filter_map(|entry| entry.detail_event.as_ref())
+            .all(|event| event.kind != "clockSyncDisabled"),
+        "结构错误不得被应答开关掩盖"
     );
 
     let _ = slave.stop().await;
@@ -916,5 +998,329 @@ async fn master_emits_cot8_broadcast_gi_deactivation() {
     assert!(found, "slave 未收到 type=100 的广播去激活帧");
 
     master.disconnect().await.unwrap();
+    let _ = slave.stop().await;
+}
+
+// =========================================================================
+// issue #28:时钟同步应答开关(answer_clock_sync)与 Actterm 开关(send_act_term)
+// =========================================================================
+
+/// answer_clock_sync=false:合法激活对时应回【否定激活确认】COT=7 + P/N,不执行对时。
+/// 不是 COT=44 —— 类型 103 识别得了、COT=6 也能理解,这是"结构合法、仅因配置拒绝执行",
+/// 正是 ACT_CON 带 P/N 的语义(报告人在 issue #28 用另一款模拟器的抓包对比后确认)。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clock_sync_rejected_when_answer_disabled() {
+    let (mut slave, port) = spawn_slave().await;
+    let mut ops = slave.get_remote_ops().await;
+    ops.answer_clock_sync = false;
+    slave.set_remote_ops(ops).await;
+
+    let mut stream = connect_and_startdt(port);
+    send(&mut stream, &build_clock_sync_frame(1, 6));
+
+    let resp = first_iframe(&mut stream);
+    assert_eq!(
+        iframe_cot(&resp) & 0x3F,
+        7,
+        "禁用后 103 应回 COT=7(ACT_CON)+P/N,实际 COT 字节={:#04X}",
+        resp[8]
+    );
+    assert!(
+        iframe_negative(&resp),
+        "禁用后 103 拒收应带 negative-confirm(bit6),COT 字节={:#04X}",
+        resp[8]
+    );
+
+    let _ = slave.stop().await;
+}
+
+/// 非激活 COT 的协议错误优先于应答开关：即使 answer_clock_sync=false，
+/// COT=8 也必须回 45+P/N，日志不得误报成 disabled/COT=7。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disabled_clock_sync_with_cot8_logs_actual_unknown_cot_reply() {
+    let port = free_port();
+    let (mut slave, lc) = spawn_slave_with_log(port).await;
+    let mut ops = slave.get_remote_ops().await;
+    ops.answer_clock_sync = false;
+    slave.set_remote_ops(ops).await;
+
+    let mut stream = connect_and_startdt(port);
+    send(&mut stream, &build_clock_sync_frame(1, 8));
+
+    let resp = first_iframe(&mut stream);
+    assert_eq!(iframe_cot(&resp) & 0x3F, 45);
+    assert!(iframe_negative(&resp));
+
+    let entries = lc.get_all().await;
+    let event = entries
+        .iter()
+        .filter_map(|entry| entry.detail_event.as_ref())
+        .find(|event| event.kind == "clockSyncInvalidCot")
+        .expect("COT=8 应记录 clockSyncInvalidCot");
+    assert_eq!(event.payload["cot"], 8);
+    assert!(
+        entries
+            .iter()
+            .filter_map(|entry| entry.detail_event.as_ref())
+            .all(|event| event.kind != "clockSyncDisabled"),
+        "线上回 COT=45 时日志不得显示 disabled/COT=7"
+    );
+
+    let _ = slave.stop().await;
+}
+
+/// 构造 C_SC_NA_1(45) 执行帧:COT=6,IOA=1,SCO=ON(0x01)。
+fn build_sc_execute_frame(ca: u16) -> Vec<u8> {
+    let ca_bytes = ca.to_le_bytes();
+    vec![
+        0x68, 0x0E, 0x00, 0x00, 0x00, 0x00,
+        45, 0x01, 6, 0x00,
+        ca_bytes[0], ca_bytes[1],
+        0x01, 0x00, 0x00, // IOA=1
+        0x01, // SCO: execute, ON
+    ]
+}
+
+/// send_act_term=true(默认):执行应答 ACT_CON(7) 后应跟随 ACT_TERM(10)。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_sends_act_term_by_default() {
+    let (mut slave, port) = spawn_slave().await;
+    let mut stream = connect_and_startdt(port);
+
+    send(&mut stream, &build_sc_execute_frame(1));
+
+    let first = first_iframe(&mut stream);
+    assert_eq!(first[6], 45, "首帧应为 type=45 回显");
+    assert_eq!(iframe_cot(&first) & 0x3F, 7, "首帧应为 ACT_CON(7)");
+
+    let mut got_term = false;
+    while let Some((frame, ctrl1)) = read_one_frame(&mut stream) {
+        if ctrl1 & 0x01 != 0 { continue; }
+        if frame.len() > 8 && frame[6] == 45 && iframe_cot(&frame) & 0x3F == 10 {
+            got_term = true;
+            break;
+        }
+    }
+    assert!(got_term, "默认应追加 ACT_TERM(COT=10)");
+
+    let _ = slave.stop().await;
+}
+
+/// send_act_term=false(Actterm 关):仅回 ACT_CON(7),不再追加 ACT_TERM。
+/// 自动映射产生的突发上送(COT=3,监视类型)不受影响。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_without_act_term_when_disabled() {
+    let (mut slave, port) = spawn_slave().await;
+    let mut ops = slave.get_remote_ops().await;
+    ops.send_act_term = false;
+    slave.set_remote_ops(ops).await;
+
+    let mut stream = connect_and_startdt(port);
+    send(&mut stream, &build_sc_execute_frame(1));
+
+    let first = first_iframe(&mut stream);
+    assert_eq!(first[6], 45, "首帧应为 type=45 回显");
+    assert_eq!(iframe_cot(&first) & 0x3F, 7, "首帧应为 ACT_CON(7)");
+
+    // 后续帧(直到 2s 读超时)不得再出现 type=45 的 ACT_TERM(10)。
+    while let Some((frame, ctrl1)) = read_one_frame(&mut stream) {
+        if ctrl1 & 0x01 != 0 { continue; }
+        assert!(
+            !(frame.len() > 8 && frame[6] == 45 && iframe_cot(&frame) & 0x3F == 10),
+            "Actterm 关闭后不应出现 ACT_TERM 帧: {:02X?}",
+            frame
+        );
+    }
+
+    let _ = slave.stop().await;
+}
+
+/// 读到指定 ASDU type 的 I 帧(跳过 S 帧与其它类型,例如控制写回产生的 COT=3 突发),
+/// 读超时/EOF 则 panic。
+fn iframe_of_type<S: Read>(stream: &mut S, asdu_type: u8) -> Vec<u8> {
+    loop {
+        match read_one_frame(stream) {
+            Some((frame, ctrl1)) => {
+                if ctrl1 & 0x01 != 0 { continue; } // S/U 帧
+                if frame.len() > 8 && frame[6] == asdu_type { return frame; }
+            }
+            None => panic!("读超时/EOF,未收到 type={} 的 I 帧", asdu_type),
+        }
+    }
+}
+
+/// 运行中(连接不断开)切换 answer_clock_sync 与 send_act_term:两个开关都按帧现读
+/// ops 快照,因此对同一条已建立的连接立即生效。这条路径才是用户实际操作方式
+/// (先连上主站,再在界面上拨开关),其余用例都是 connect 前就设好开关。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_ops_switches_apply_on_live_connection() {
+    let (mut slave, port) = spawn_slave().await;
+    let mut stream = connect_and_startdt(port);
+
+    // --- 1. 默认开启:对时回 ACT_CON(7) ---
+    send(&mut stream, &build_clock_sync_frame(1, 6));
+    let resp = iframe_of_type(&mut stream, 103);
+    assert_eq!(iframe_cot(&resp) & 0x3F, 7, "默认应回 ACT_CON(7)");
+    assert!(!iframe_negative(&resp), "ACT_CON 不应带 negative 位");
+
+    // --- 2. 连接保持不断,运行中关掉时钟同步应答 ---
+    let mut ops = slave.get_remote_ops().await;
+    ops.answer_clock_sync = false;
+    slave.set_remote_ops(ops).await;
+
+    send(&mut stream, &build_clock_sync_frame(1, 6));
+    let resp = iframe_of_type(&mut stream, 103);
+    assert_eq!(
+        iframe_cot(&resp) & 0x3F, 7,
+        "运行中关闭后同一连接上应立即回 COT=7+P/N,实际 COT 字节={:#04X}", resp[8]
+    );
+    assert!(iframe_negative(&resp), "COT=7 拒收应带 negative 位");
+
+    // --- 3. 同一连接上先确认默认会发 ACT_TERM ---
+    send(&mut stream, &build_sc_execute_frame(1));
+    let con = iframe_of_type(&mut stream, 45);
+    assert_eq!(iframe_cot(&con) & 0x3F, 7, "执行首帧应为 ACT_CON(7)");
+    let term = iframe_of_type(&mut stream, 45);
+    assert_eq!(iframe_cot(&term) & 0x3F, 10, "默认应追加 ACT_TERM(10)");
+
+    // --- 4. 连接保持不断,运行中关掉 Actterm ---
+    let mut ops = slave.get_remote_ops().await;
+    ops.send_act_term = false;
+    slave.set_remote_ops(ops).await;
+
+    send(&mut stream, &build_sc_execute_frame(1));
+    let con = iframe_of_type(&mut stream, 45);
+    assert_eq!(iframe_cot(&con) & 0x3F, 7, "执行首帧应为 ACT_CON(7)");
+    while let Some((frame, ctrl1)) = read_one_frame(&mut stream) {
+        if ctrl1 & 0x01 != 0 { continue; }
+        assert!(
+            !(frame.len() > 8 && frame[6] == 45 && iframe_cot(&frame) & 0x3F == 10),
+            "运行中关闭 Actterm 后同一连接上不应再出现 ACT_TERM: {:02X?}",
+            frame
+        );
+    }
+
+    let _ = slave.stop().await;
+}
+
+async fn spawn_tls_clock_slave(
+    answer_clock_sync: bool,
+) -> (SlaveServer, u16, tempfile::TempDir) {
+    let certs = cert_gen::generate();
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = cert_gen::write_to_dir(&certs, tmp.path());
+
+    let port = free_port();
+    let transport = SlaveTransportConfig {
+        bind_address: "127.0.0.1".to_string(),
+        port,
+        tls: SlaveTlsConfig {
+            enabled: true,
+            cert_file: String::new(),
+            key_file: String::new(),
+            ca_file: String::new(),
+            require_client_cert: false,
+            pkcs12_file: paths.server_pkcs12.to_str().unwrap().to_string(),
+            pkcs12_password: cert_gen::PKCS12_PASS.to_string(),
+        },
+    };
+    let mut slave = SlaveServer::new(transport);
+    slave
+        .add_station(Station::with_default_points(1, "TLS Test", 2))
+        .await
+        .unwrap();
+    let mut ops = slave.get_remote_ops().await;
+    ops.answer_clock_sync = answer_clock_sync;
+    slave.set_remote_ops(ops).await;
+    slave.start().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    (slave, port, tmp)
+}
+
+fn connect_tls_and_startdt(port: u16) -> native_tls::TlsStream<TcpStream> {
+    let connector = native_tls::TlsConnector::builder()
+        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_hostnames(true)
+        .build()
+        .unwrap();
+    let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    tcp.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    tcp.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    let mut stream = connector.connect("localhost", tcp).expect("TLS 握手失败");
+    startdt(&mut stream);
+    stream
+}
+
+/// TLS(阻塞收包路径 handle_client_blocking)上的时钟同步门控。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clock_sync_rejected_when_answer_disabled_over_tls() {
+    let (mut slave, port, _tmp) = spawn_tls_clock_slave(false).await;
+
+    let resp = tokio::task::spawn_blocking(move || {
+        let mut stream = connect_tls_and_startdt(port);
+        send(&mut stream, &build_clock_sync_frame(1, 6));
+        first_iframe(&mut stream)
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(resp[6], 103, "应答应回显 type=103");
+    assert_eq!(
+        iframe_cot(&resp) & 0x3F, 7,
+        "TLS 路径关闭后 103 应回 COT=7+P/N,实际 COT 字节={:#04X}", resp[8]
+    );
+    assert!(iframe_negative(&resp), "TLS 路径 COT=7 拒收应带 negative 位");
+
+    let _ = slave.stop().await;
+}
+
+/// TLS/TCP 都是字节流；完整 22 字节 C_CS_NA_1 被拆成 12+10 字节后仍须
+/// 只处理一次，不能把首片误判为短 ASDU 或发出截断响应。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clock_sync_tls_reassembles_split_12_plus_10() {
+    let (mut slave, port, _tmp) = spawn_tls_clock_slave(false).await;
+
+    let resp = tokio::task::spawn_blocking(move || {
+        let mut stream = connect_tls_and_startdt(port);
+        let frame = build_clock_sync_frame(1, 6);
+        stream.write_all(&frame[..12]).unwrap();
+        stream.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        stream.write_all(&frame[12..]).unwrap();
+        stream.flush().unwrap();
+        first_iframe(&mut stream)
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(resp.len(), 22, "重组后的响应必须是一条完整 APDU");
+    assert_eq!(resp[6], 103);
+    assert_eq!(iframe_cot(&resp) & 0x3F, 7);
+    assert!(iframe_negative(&resp));
+
+    let _ = slave.stop().await;
+}
+
+/// 一次 TLS write 中粘连两条 APDU 时，两条都必须被独立处理；第二条非法
+/// COT 仍按协议优先级回 45+P/N，不能被 disabled 策略覆盖。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clock_sync_tls_processes_two_coalesced_apdus() {
+    let (mut slave, port, _tmp) = spawn_tls_clock_slave(false).await;
+
+    let (first, second) = tokio::task::spawn_blocking(move || {
+        let mut stream = connect_tls_and_startdt(port);
+        let mut batch = build_clock_sync_frame(1, 6);
+        batch.extend_from_slice(&build_clock_sync_frame(1, 8));
+        send(&mut stream, &batch);
+        (first_iframe(&mut stream), first_iframe(&mut stream))
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(iframe_cot(&first) & 0x3F, 7);
+    assert!(iframe_negative(&first));
+    assert_eq!(iframe_cot(&second) & 0x3F, 45);
+    assert!(iframe_negative(&second));
+
     let _ = slave.stop().await;
 }

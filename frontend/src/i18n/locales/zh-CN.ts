@@ -330,6 +330,11 @@ export type DictShape = {
     titleRefresh: string
     titleClear: string
     titleExport: string
+    /** 后端 detail_event 键:时钟同步应答开关关闭导致的拒收(payload: ca)。 */
+    clockSyncDisabled: string
+    clockSyncInvalidCot: string
+    clockSyncInvalidIoa: string
+    clockSyncMalformed: string
   }
   about: {
     whatsNew: string
@@ -411,6 +416,12 @@ export type DictShape = {
     gi: string
     counterInterrogation: string
     commands: string
+    clockSync: string
+    clockSyncHint: string
+    sendActTerm: string
+    sendActTermHint: string
+    executeCotDisabledHint: string
+    appLayerNote: string
     controlMappingHint: string
     autoMapCommands: string
     ackUnmappedCommands: string
@@ -796,6 +807,10 @@ const dict: DictShape = {
     titleRefresh: '刷新',
     titleClear: '清除',
     titleExport: '导出CSV',
+    clockSyncDisabled: '时钟同步 拒收（应答已禁用，COT=7 + P/N） CA={ca}',
+    clockSyncInvalidCot: '时钟同步 拒收（非法 COT={cot}，回 COT=45 + P/N） CA={ca}',
+    clockSyncInvalidIoa: '时钟同步 拒收（IOA={ioa}，应为 0；回 COT=47 + P/N） CA={ca}',
+    clockSyncMalformed: '时钟同步畸形 ASDU 已丢弃（原因={reason}，长度={len}） CA={ca}',
   },
   about: {
     whatsNew: '本次更新',
@@ -877,6 +892,12 @@ const dict: DictShape = {
     gi: '总召唤',
     counterInterrogation: '累积量召唤',
     commands: '遥控、遥调',
+    clockSync: '时钟同步（对时）',
+    clockSyncHint: '关闭不是静默不应答：收到 C_CS_NA_1 会回 COT=7（激活确认）并置 P/N 否定确认位——类型识别得了、请求结构也合法，只是按配置拒绝执行。抓包上每条请求仍能看到一帧应答。无论开关开或关，模拟器都不会调整本机时钟——该开关只决定如何应答。',
+    sendActTerm: '执行后追加 ACT_TERM（激活终止帧）',
+    sendActTermHint: '仅作用于遥控、遥调的执行应答。总召唤与累积量召唤的结束帧按 IEC 60870-5-104 要求仍为 COT=10，不受此开关影响。',
+    executeCotDisabledHint: 'Execute COT 仅在 ACT_TERM 开启时生效；ACT_TERM 关闭后完全不发终止帧，子站只回 ACT_CON（COT=7）。',
+    appLayerNote: '应用层字节数由 IEC 60870-5-104 固定：CA=2、IOA=3、COT=2（原因字节 + 源发地址 ORG）。应答帧回显主站发来的 ORG 字节；子站自发帧（突发上送、召唤数据、周期上送）ORG 固定为 0。',
     controlMappingHint: '控制点可在点位编辑器中独立映射到任意兼容的监视点。',
     autoMapCommands: '兼容模式：未显式映射时按相同 CA + IOA 自动映射',
     ackUnmappedCommands: '已声明但未映射的控制点仍正常应答 COT 7 → 10',
