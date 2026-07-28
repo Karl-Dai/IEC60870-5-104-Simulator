@@ -451,11 +451,15 @@ function handleBackdropClick(e: MouseEvent) {
   width: 420px;
   max-width: 90vw;
   max-height: 90vh;
-  overflow-y: auto;
+  /* issue #28:长表单时标题/按钮不随内容滚走 —— 滚动收进 .modal-body */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
 .modal-header {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -485,6 +489,9 @@ function handleBackdropClick(e: MouseEvent) {
 
 .modal-body {
   padding: 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .form-row {
@@ -699,6 +706,7 @@ function handleBackdropClick(e: MouseEvent) {
 }
 
 .modal-footer {
+  flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
   gap: 8px;

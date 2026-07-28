@@ -176,10 +176,17 @@ function handleKeydown(e: KeyboardEvent) {
   padding: 20px;
   min-width: 480px;
   max-width: 90vw;
+  /* issue #28:模板按钮换行 + 长报文回显时对话框很高,小视口下标题/按钮必须常驻,
+     滚动收进 .modal-body —— 之前连 max-height 都没有,超高内容直接被裁。 */
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
 .modal-title {
+  flex-shrink: 0;
   font-size: 15px;
   font-weight: 600;
   color: var(--c-text);
@@ -190,9 +197,13 @@ function handleKeydown(e: KeyboardEvent) {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .modal-footer {
+  flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
   gap: 8px;
