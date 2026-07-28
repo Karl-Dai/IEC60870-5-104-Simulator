@@ -7,6 +7,11 @@ import {
   DEFAULT_REMOTE_OPS,
 } from '../types'
 
+export interface RemoteParamsApplyResult {
+  ok: boolean
+  error: string | null
+}
+
 /**
  * 与当前选中的从站服务器联动:加载/应用协议时序与远动运行参数,
  * 启停固定变位后台任务。所有命令对接 commands.rs 中的 Tauri 命令。
@@ -56,34 +61,33 @@ export function useRemoteParams(selectedServerId: Ref<string | null>) {
   async function applyTiming(
     targetServerId: string | null = selectedServerId.value,
     value: ProtocolTimingConfig = timing.value,
-  ): Promise<boolean> {
-    if (!targetServerId) return false
-    lastError.value = null
+  ): Promise<RemoteParamsApplyResult> {
+    if (!targetServerId) return { ok: false, error: null }
     try {
       await invoke('set_protocol_timing', {
         request: { server_id: targetServerId, timing: value },
       })
-      return true
+      return { ok: true, error: null }
     } catch (e) {
-      lastError.value = String(e)
-      return false
+      // 保存可能跨越服务器选择/弹窗会话。错误必须作为本次调用的局部结果
+      // 返回，由持有会话 epoch 的组件决定是否仍可显示，不能在这里污染
+      // 当前服务器的共享加载错误。
+      return { ok: false, error: String(e) }
     }
   }
 
   async function applyOps(
     targetServerId: string | null = selectedServerId.value,
     value: RemoteOperationConfig = ops.value,
-  ): Promise<boolean> {
-    if (!targetServerId) return false
-    lastError.value = null
+  ): Promise<RemoteParamsApplyResult> {
+    if (!targetServerId) return { ok: false, error: null }
     try {
       await invoke('set_remote_operation_config', {
         request: { server_id: targetServerId, ops: value },
       })
-      return true
+      return { ok: true, error: null }
     } catch (e) {
-      lastError.value = String(e)
-      return false
+      return { ok: false, error: String(e) }
     }
   }
 

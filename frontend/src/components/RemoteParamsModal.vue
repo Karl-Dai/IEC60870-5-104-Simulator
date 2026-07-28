@@ -33,11 +33,18 @@ const transportBaseline = ref('')
 const transportLoading = ref(false)
 let transportLoadEpoch = 0
 let modalSession = 0
+const actionError = ref<string | null>(null)
+
+watch([() => props.visible, () => props.serverId], () => {
+  // 同 serverId 重开也属于新会话。同步递增可保证父组件强制换目标后，
+  // 旧 Promise 的 continuation 在任何时序下都无法写入新弹窗错误。
+  modalSession++
+  actionError.value = null
+}, { flush: 'sync' })
 
 // 独立的 serverId ref —— 不污染 App 的全局 selectedServerId
 const localServerId = ref<string | null>(props.serverId)
 watch(() => props.serverId, v => {
-  modalSession++
   transportLoadEpoch++
   localServerId.value = v
   // 换服务器:上一台的传输快照失效,清空基线让 loadTransport 必定回读
@@ -46,6 +53,7 @@ watch(() => props.serverId, v => {
 
 const { timing, ops, loading, lastError, load, applyTiming, applyOps } =
   useRemoteParams(localServerId)
+const displayError = computed(() => actionError.value ?? lastError.value)
 
 // —— 连接参数(监听地址 / 端口)——
 // 传输配置原本仅创建时可设;这里允许停止状态下直接改端口,免去删除重建。
@@ -60,6 +68,7 @@ const transportDirty = computed(() =>
 async function loadTransport() {
   const id = props.serverId
   const epoch = ++transportLoadEpoch
+  const session = modalSession
   if (!id) {
     transportLoading.value = false
     return false
@@ -82,8 +91,13 @@ async function loadTransport() {
     }
     return true
   } catch (e) {
-    if (epoch === transportLoadEpoch && props.serverId === id) {
-      lastError.value = String(e)
+    if (
+      epoch === transportLoadEpoch
+      && session === modalSession
+      && props.visible
+      && props.serverId === id
+    ) {
+      actionError.value = String(e)
     }
     return false
   } finally {
@@ -107,12 +121,24 @@ async function handleSave() {
   }
   const transportChanged = transportDirty.value
   isSaving.value = true
-  lastError.value = null
+  actionError.value = null
+
+  const reportSaveError = (error: string | null) => {
+    if (
+      error
+      && session === modalSession
+      && props.visible
+      && localServerId.value === serverId
+    ) {
+      actionError.value = error
+    }
+  }
+
   try {
     // 先落地传输配置改动(仅当确有改动)。运行中由后端拒绝,前端也提前拦一次。
     if (transportChanged) {
       if (isRunning.value) {
-        lastError.value = t('remoteParams.stopBeforeEdit')
+        reportSaveError(t('remoteParams.stopBeforeEdit'))
         return
       }
       try {
@@ -127,12 +153,20 @@ async function handleSave() {
           transportBaseline.value = `${transportToSave.bindAddress}:${transportToSave.port}`
         }
       } catch (e) {
-        lastError.value = String(e)
+        reportSaveError(String(e))
         return
       }
     }
-    if (!(await applyTiming(serverId, timingToSave))) return
-    if (!(await applyOps(serverId, opsToSave))) return
+    const timingResult = await applyTiming(serverId, timingToSave)
+    if (!timingResult.ok) {
+      reportSaveError(timingResult.error)
+      return
+    }
+    const opsResult = await applyOps(serverId, opsToSave)
+    if (!opsResult.ok) {
+      reportSaveError(opsResult.error)
+      return
+    }
     // 父组件仍可能在保存期间强制隐藏/换目标。旧保存会话可以完成自己的落库，
     // 但绝不能关闭或刷新后来打开的另一台服务器弹窗。
     if (session !== modalSession || !props.visible || localServerId.value !== serverId) return
@@ -159,7 +193,6 @@ function handleEsc(e: KeyboardEvent) {
 }
 
 watch(() => props.visible, (v) => {
-  modalSession++
   if (v) {
     loadTransport()
     // 同一服务器二次打开时 localServerId 不变,composable 的 watch 不会重载;
@@ -208,7 +241,7 @@ watch(() => props.visible, (v) => {
 
             <div v-if="loading" class="muted">{{ t('runtimeParams.loading') }}</div>
             <RemoteParamsForm v-else :timing="timing" :ops="ops" />
-            <p v-if="lastError" class="error">{{ lastError }}</p>
+            <p v-if="displayError" class="error">{{ displayError }}</p>
           </div>
 
           <div class="modal-footer">

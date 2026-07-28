@@ -22,6 +22,10 @@ const { timing, ops, loading, lastError, load, applyTiming, applyOps } =
 
 const saving = ref(false)
 const savedFlash = ref(false)
+const saveError = ref<string | null>(null)
+const displayError = computed(() => saveError.value ?? lastError.value)
+let selectionEpoch = 0
+let drawerSession = 0
 let flashTimer: ReturnType<typeof setTimeout> | null = null
 
 function snapshot(t: ProtocolTimingConfig, o: RemoteOperationConfig): string {
@@ -50,6 +54,11 @@ watch(loading, (l) => {
     }
   }
 }, { immediate: true })
+
+watch(selectedServerId, () => {
+  selectionEpoch++
+  saveError.value = null
+}, { flush: 'sync' })
 
 watch(selectedServerId, (id) => {
   // 基线不仅属于一份值，也属于一台服务器。切换目标时立刻让旧基线失效；
@@ -81,14 +90,37 @@ onBeforeUnmount(clearFlashTimer)
 async function saveAll() {
   if (!selectedServerId.value || saving.value || !dirty.value) return
   const serverId = selectedServerId.value
+  const session = drawerSession
+  const selectedEpoch = selectionEpoch
   const timingToSave = cloneTiming(timing.value)
   const opsToSave = cloneOps(ops.value)
   saving.value = true
   clearFlashTimer()
   savedFlash.value = false
+  saveError.value = null
+
+  const reportSaveError = (error: string | null) => {
+    if (
+      error
+      && session === drawerSession
+      && selectedEpoch === selectionEpoch
+      && selectedServerId.value === serverId
+    ) {
+      saveError.value = error
+    }
+  }
+
   try {
-    if (!(await applyTiming(serverId, timingToSave))) return
-    if (!(await applyOps(serverId, opsToSave))) return
+    const timingResult = await applyTiming(serverId, timingToSave)
+    if (!timingResult.ok) {
+      reportSaveError(timingResult.error)
+      return
+    }
+    const opsResult = await applyOps(serverId, opsToSave)
+    if (!opsResult.ok) {
+      reportSaveError(opsResult.error)
+      return
+    }
     // 保存期间即使外部代码切换了选择，也不能把旧服务器的快照登记成新服务器基线。
     if (selectedServerId.value === serverId) {
       baseline.value = {
@@ -126,6 +158,11 @@ function handleBackdrop(e: MouseEvent) {
 function handleEsc(e: KeyboardEvent) {
   if (e.key === 'Escape' && props.visible) close()
 }
+
+watch(() => props.visible, () => {
+  drawerSession++
+  saveError.value = null
+}, { flush: 'sync' })
 
 watch(() => props.visible, (v) => {
   if (v) {
@@ -197,7 +234,7 @@ watch(() => props.visible, (v) => {
             <template v-else>
               <RemoteParamsForm :timing="timing" :ops="ops" />
 
-              <p v-if="lastError" class="rp-error">{{ lastError }}</p>
+              <p v-if="displayError" class="rp-error">{{ displayError }}</p>
               <p v-if="loading" class="rp-muted">{{ t('remoteParams.loadingText') }}</p>
               <p class="rp-foot-note">{{ t('remoteParams.footNote') }}</p>
             </template>

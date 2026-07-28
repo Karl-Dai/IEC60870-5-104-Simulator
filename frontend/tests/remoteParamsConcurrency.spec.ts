@@ -17,8 +17,12 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invokeM
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((r) => { resolve = r })
-  return { promise, resolve }
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((r, j) => {
+    resolve = r
+    reject = j
+  })
+  return { promise, resolve, reject }
 }
 
 function cloneOps(sp: boolean): RemoteOperationConfig {
@@ -71,6 +75,60 @@ describe('运行参数异步竞态保护', () => {
       .find((label) => label.text().includes('M_SP_NA_1'))!
     expect((spLabel.find('input').element as HTMLInputElement).checked).toBe(true)
     expect(wrapper.find('.rp-btn-ghost').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('an old drawer save cannot clear or overwrite the current server load error', async () => {
+    const timingWrite = deferred<null>()
+    const opsWrite = deferred<null>()
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      const id = String(args?.serverId ?? '')
+      if (cmd === 'get_protocol_timing') {
+        return id === 's2'
+          ? Promise.reject(new Error('s2 load failed'))
+          : Promise.resolve({ ...DEFAULT_PROTOCOL_TIMING })
+      }
+      if (cmd === 'get_remote_operation_config') return Promise.resolve(cloneOps(false))
+      if (cmd === 'set_protocol_timing') return timingWrite.promise
+      if (cmd === 'set_remote_operation_config') return opsWrite.promise
+      return Promise.resolve(null)
+    })
+
+    const selectedServerId = ref<string | null>('s1')
+    const wrapper = mount(RemoteParamsDrawer, {
+      props: { visible: false },
+      global: {
+        stubs: { teleport: true },
+        provide: { selectedServerId },
+      },
+    })
+    await flushPromises()
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    const spLabel = wrapper
+      .findAll('.rp-subgroup .rp-switch')
+      .find((label) => label.text().includes('M_SP_NA_1'))!
+    await spLabel.find('input').setValue(true)
+    void wrapper.find('.rp-btn-primary').trigger('click')
+    await nextTick()
+
+    selectedServerId.value = 's2'
+    await flushPromises()
+    expect(wrapper.find('.rp-error').text()).toContain('s2 load failed')
+
+    // A 的 timing 成功后会继续发起 ops。旧实现会在调用 applyOps 时清掉
+    // B 的加载错误；修复后错误通道只归当前选择/会话所有。
+    timingWrite.resolve(null)
+    await flushPromises()
+    expect(invokeMock.mock.calls.some((call) => call[0] === 'set_remote_operation_config')).toBe(true)
+    expect(wrapper.find('.rp-error').text()).toContain('s2 load failed')
+
+    // A 的 ops 最终失败也不能把错误覆盖成 A 的保存错误。
+    opsWrite.reject(new Error('s1 save failed'))
+    await flushPromises()
+    expect(wrapper.find('.rp-error').text()).toContain('s2 load failed')
+    expect(wrapper.find('.rp-error').text()).not.toContain('s1 save failed')
     wrapper.unmount()
   })
 
@@ -129,6 +187,48 @@ describe('运行参数异步竞态保护', () => {
         ops: { sync_tb_by_category: { sp: false } },
       },
     })
+    expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('an old modal save error cannot leak into a newly opened server session', async () => {
+    const timingWrite = deferred<null>()
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      const id = String(args?.serverId ?? '')
+      if (cmd === 'get_protocol_timing') {
+        return Promise.resolve({ ...DEFAULT_PROTOCOL_TIMING, t0: id === 's1' ? 11 : 22 })
+      }
+      if (cmd === 'get_remote_operation_config') {
+        return Promise.resolve(cloneOps(id === 's2'))
+      }
+      if (cmd === 'list_servers') {
+        return Promise.resolve([
+          { id: 's1', bind_address: '0.0.0.0', port: 2404, state: 'Stopped' },
+          { id: 's2', bind_address: '0.0.0.0', port: 2405, state: 'Stopped' },
+        ])
+      }
+      if (cmd === 'set_protocol_timing') return timingWrite.promise
+      return Promise.resolve(null)
+    })
+
+    const wrapper = mount(RemoteParamsModal, {
+      props: { visible: false, serverId: 's1', serverLabel: 's1' },
+      global: { stubs: { teleport: true } },
+    })
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    void wrapper.find('.btn-primary').trigger('click')
+    await nextTick()
+    await wrapper.setProps({ visible: false })
+    await wrapper.setProps({ visible: true, serverId: 's2', serverLabel: 's2' })
+    await flushPromises()
+    expect(wrapper.find('.error').exists()).toBe(false)
+
+    timingWrite.reject(new Error('s1 save failed'))
+    await flushPromises()
+
+    expect(wrapper.find('.error').exists()).toBe(false)
     expect(wrapper.emitted('close')).toBeUndefined()
     wrapper.unmount()
   })
