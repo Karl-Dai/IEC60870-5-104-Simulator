@@ -192,6 +192,27 @@ mod tests {
     }
 
     #[test]
+    fn slave_file_loads_legacy_remote_ops_without_new_clock_fields() {
+        let legacy = r#"{
+            "app": "iec104-slave",
+            "version": 1,
+            "servers": [
+                {
+                    "bind_address": "0.0.0.0",
+                    "port": 2404,
+                    "stations": [],
+                    "remote_ops": { "answer_commands": false }
+                }
+            ]
+        }"#;
+        let parsed = SlaveConfigFile::from_json(legacy).unwrap();
+        let ops = &parsed.servers[0].remote_ops;
+        assert!(!ops.answer_commands);
+        assert!(ops.answer_clock_sync);
+        assert!(ops.send_act_term);
+    }
+
+    #[test]
     fn slave_from_json_rejects_wrong_app() {
         let json = r#"{"app":"iec104-master","version":1,"servers":[]}"#;
         let err = SlaveConfigFile::from_json(json).unwrap_err();

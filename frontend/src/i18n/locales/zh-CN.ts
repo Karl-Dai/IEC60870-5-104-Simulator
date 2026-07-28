@@ -326,6 +326,9 @@ export type DictShape = {
     titleExport: string
     /** 后端 detail_event 键:时钟同步应答开关关闭导致的拒收(payload: ca)。 */
     clockSyncDisabled: string
+    clockSyncInvalidCot: string
+    clockSyncInvalidIoa: string
+    clockSyncMalformed: string
   }
   about: {
     whatsNew: string
@@ -793,6 +796,9 @@ const dict: DictShape = {
     titleClear: '清除',
     titleExport: '导出CSV',
     clockSyncDisabled: '时钟同步 拒收（应答已禁用，COT=7 + P/N） CA={ca}',
+    clockSyncInvalidCot: '时钟同步 拒收（非法 COT={cot}，回 COT=45 + P/N） CA={ca}',
+    clockSyncInvalidIoa: '时钟同步 拒收（IOA={ioa}，应为 0；回 COT=47 + P/N） CA={ca}',
+    clockSyncMalformed: '时钟同步畸形 ASDU 已丢弃（原因={reason}，长度={len}） CA={ca}',
   },
   about: {
     whatsNew: '本次更新',

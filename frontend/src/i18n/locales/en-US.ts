@@ -333,6 +333,9 @@ const dict: DictShape = {
     titleClear: 'Clear',
     titleExport: 'Export CSV',
     clockSyncDisabled: 'Clock sync rejected (replies disabled, COT=7 + P/N) CA={ca}',
+    clockSyncInvalidCot: 'Clock sync rejected (invalid COT={cot}; reply COT=45 + P/N) CA={ca}',
+    clockSyncInvalidIoa: 'Clock sync rejected (IOA={ioa}, expected 0; reply COT=47 + P/N) CA={ca}',
+    clockSyncMalformed: 'Malformed clock-sync ASDU dropped (reason={reason}, length={len}) CA={ca}',
   },
   about: {
     whatsNew: 'What\'s New',

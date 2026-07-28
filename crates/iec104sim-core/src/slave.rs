@@ -211,8 +211,8 @@ pub struct RemoteOperationConfig {
     pub sbo_enforce: bool,
     /// SBO select 的有效期(毫秒),超时后 Execute 被拒。
     pub sbo_timeout_ms: u64,
-    /// 应答主站时钟同步命令 (C_CS_NA_1, Type 103)。关闭后按未知类型拒收
-    /// (COT=44 + P/N),不执行对时(issue #28)。
+    /// 应答主站时钟同步命令 (C_CS_NA_1, Type 103)。关闭后对结构合法的
+    /// 激活请求回否定激活确认(COT=7 + P/N),不调整本机时钟(issue #28)。
     pub answer_clock_sync: bool,
     /// 命令执行后在 ACT_CON(7) 之外追加终止帧(COT 取 execute_ack_cot,默认 10)。
     /// 关闭后仅回 ACT_CON,适配不期待 ACT_TERM 的主站(issue #28 Actterm 开关)。
@@ -583,6 +583,38 @@ struct ConnectionWrite {
 
 type SharedConnections = Arc<RwLock<HashMap<SocketAddr, ConnectionWrite>>>;
 
+/// 从 TCP/TLS 字节流缓冲区中取出下一条完整 APDU。
+///
+/// TCP 与 TLS 都只提供字节流，不保证一次 `read` 对应一条 IEC 104 帧：
+/// 一条 APDU 可能被拆成多次读取，多条 APDU 也可能粘在一次读取中。两条
+/// 收包路径共用本函数，避免 TLS 把网络分片误判成协议短帧。
+fn take_next_apdu(reassembly: &mut Vec<u8>) -> Option<Vec<u8>> {
+    loop {
+        if reassembly.len() < 2 {
+            return None;
+        }
+
+        if reassembly[0] != 0x68 {
+            match reassembly.iter().position(|&byte| byte == 0x68) {
+                Some(start) => {
+                    reassembly.drain(..start);
+                }
+                None => {
+                    reassembly.clear();
+                    return None;
+                }
+            }
+            continue;
+        }
+
+        let frame_len = reassembly[1] as usize + 2;
+        if reassembly.len() < frame_len {
+            return None;
+        }
+        return Some(reassembly.drain(..frame_len).collect());
+    }
+}
+
 /// Update local N(R) from a just-received I-frame so that subsequent outgoing
 /// frames acknowledge the master's send sequence. Also picks up the peer's
 /// N(R) to advance our ack_ssn (sender-side k window) and increments
@@ -624,32 +656,114 @@ fn build_response_frame(recv: &[u8], cot: u8, seq: &mut SeqState) -> Vec<u8> {
     out
 }
 
-/// 时钟同步(C_CS_NA_1)应答日志。异步(明文 TCP)与阻塞(TLS)两条收包路径共用,
-/// 避免同一文案再分裂成两份。
+/// C_CS_NA_1 的结构/协议决策。异步明文与阻塞 TLS 路径必须共用，确保
+/// 校验优先级和响应 COT 完全一致。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClockSyncDecision {
+    Accept,
+    Disabled,
+    UnknownCot { cot: u8 },
+    UnknownIoa { ioa: u32 },
+    Malformed { reason: &'static str },
+}
+
+impl ClockSyncDecision {
+    fn response_cot(self) -> Option<u8> {
+        match self {
+            Self::Accept => Some(7),
+            Self::Disabled => Some(7 | 0x40),
+            Self::UnknownCot { .. } => Some(45 | 0x40),
+            Self::UnknownIoa { .. } => Some(47 | 0x40),
+            Self::Malformed { .. } => None,
+        }
+    }
+}
+
+/// 校验单对象 C_CS_NA_1。完整合法帧固定为 22 字节：
+/// APCI(6)+ASDU头/CA(6)+IOA(3)+CP56Time2a(7)。
 ///
-/// `enabled=false`(时钟同步应答开关关闭,issue #28)分支带 `detail_event`,
-/// 前端按 `log.clockSyncDisabled` 随界面语言渲染,不再输出硬编码中文;
-/// 另两条分支沿用既有文案(其 i18n 键缺失属先于本次改动的独立问题)。
-fn clock_sync_log_entry(is_activation: bool, enabled: bool, cot_in: u8, ca: u16) -> LogEntry {
-    if is_activation {
-        LogEntry::new(
-            Direction::Tx,
-            FrameLabel::ClockSync,
-            format!("时钟同步确认 CA={}", ca),
-        )
-    } else if !enabled {
-        LogEntry::new(
-            Direction::Tx,
-            FrameLabel::ClockSync,
-            format!("Clock sync rejected (replies disabled) CA={}", ca),
-        )
-        .with_detail_event("clockSyncDisabled", serde_json::json!({ "ca": ca }))
+/// 校验顺序与命令语义一致：先排除无法解析的结构，再判 COT；只有合法
+/// 激活(COT=6)才校验系统命令固定 IOA=0，最后才应用应答开关。
+fn decide_clock_sync(frame: &[u8], enabled: bool) -> ClockSyncDecision {
+    if frame.len() < 2
+        || frame.first() != Some(&0x68)
+        || frame[1] as usize + 2 != frame.len()
+    {
+        return ClockSyncDecision::Malformed { reason: "apdu_length" };
+    }
+    if frame.len() != 22 {
+        return ClockSyncDecision::Malformed { reason: "cp56_length" };
+    }
+    if frame[6] != 103 {
+        return ClockSyncDecision::Malformed { reason: "type_id" };
+    }
+    // VSQ:SQ(bit7)=0 且对象数=1，故完整字节必须为 0x01。
+    if frame[7] != 0x01 {
+        return ClockSyncDecision::Malformed { reason: "vsq" };
+    }
+
+    let cot = frame[8] & 0x3F;
+    if cot != 6 {
+        return ClockSyncDecision::UnknownCot { cot };
+    }
+
+    let ioa = u32::from_le_bytes([frame[12], frame[13], frame[14], 0]);
+    if ioa != 0 {
+        return ClockSyncDecision::UnknownIoa { ioa };
+    }
+
+    if enabled {
+        ClockSyncDecision::Accept
     } else {
-        LogEntry::new(
+        ClockSyncDecision::Disabled
+    }
+}
+
+/// 时钟同步应答/丢弃日志。直接按 `ClockSyncDecision` 生成，保证日志所述
+/// COT 与线上实际响应一致；畸形 ASDU 不发送伪造的 UNKNOWN_TYPE 响应。
+fn clock_sync_log_entry(decision: ClockSyncDecision, ca: u16, frame_len: usize) -> LogEntry {
+    match decision {
+        ClockSyncDecision::Accept => LogEntry::new(
             Direction::Tx,
             FrameLabel::ClockSync,
-            format!("时钟同步 拒收(非激活 COT={}) CA={}", cot_in, ca),
+            format!("Clock sync acknowledged (COT=7) CA={}", ca),
+        ),
+        ClockSyncDecision::Disabled => LogEntry::new(
+            Direction::Tx,
+            FrameLabel::ClockSync,
+            format!("Clock sync rejected (replies disabled, COT=7 + P/N) CA={}", ca),
         )
+        .with_detail_event("clockSyncDisabled", serde_json::json!({ "ca": ca })),
+        ClockSyncDecision::UnknownCot { cot } => LogEntry::new(
+            Direction::Tx,
+            FrameLabel::ClockSync,
+            format!("Clock sync rejected (unknown COT={}, COT=45 + P/N) CA={}", cot, ca),
+        )
+        .with_detail_event(
+            "clockSyncInvalidCot",
+            serde_json::json!({ "ca": ca, "cot": cot }),
+        ),
+        ClockSyncDecision::UnknownIoa { ioa } => LogEntry::new(
+            Direction::Tx,
+            FrameLabel::ClockSync,
+            format!("Clock sync rejected (unknown IOA={}, COT=47 + P/N) CA={}", ioa, ca),
+        )
+        .with_detail_event(
+            "clockSyncInvalidIoa",
+            serde_json::json!({ "ca": ca, "ioa": ioa }),
+        ),
+        ClockSyncDecision::Malformed { reason } => LogEntry::new(
+            Direction::Rx,
+            FrameLabel::ClockSync,
+            format!(
+                "Malformed clock sync ASDU dropped (reason={}, len={}) CA={}",
+                reason, frame_len, ca
+            ),
+        )
+        .with_detail_event(
+            "clockSyncMalformed",
+            serde_json::json!({ "ca": ca, "len": frame_len, "reason": reason }),
+        ),
     }
 }
 
@@ -1609,15 +1723,8 @@ async fn handle_client_read_loop(
 
         reassembly_buf.extend_from_slice(&buf[..n]);
 
-        // Extract and process complete frames from the reassembly buffer
-        while reassembly_buf.len() >= 2 {
-            if reassembly_buf[0] != 0x68 {
-                reassembly_buf.remove(0);
-                continue;
-            }
-            let frame_len = reassembly_buf[1] as usize + 2;
-            if reassembly_buf.len() < frame_len { break; }
-            let data: Vec<u8> = reassembly_buf.drain(..frame_len).collect();
+        // TCP/TLS 共用的流式 APDU 提取器同时处理分片与粘包。
+        while let Some(data) = take_next_apdu(&mut reassembly_buf) {
             let n = data.len();
 
         if let Some(ref lc) = log_collector {
@@ -1868,51 +1975,22 @@ async fn handle_client_read_loop(
                         }
                     }
                     103 => {
-                            // 时钟同步(C_CS_NA_1)规约为单次激活型命令(IEC 60870-5-101 §7.2.6.4),
-                            // 无 COT=8 去激活语义,禁止回 COT=9。仅 COT=6(激活)合法,回 COT=7(激活确认);
-                            // 非激活 COT(含 COT=8)属协议错误,按 lib60870 拒收路径回
-                            // COT=45(UNKNOWN_COT)+negative-confirm(bit6),不执行对时。
-                            // 长度守卫:103 帧 = 6 控制 + 4 ASDU + 2 CA + 3 IOA + 7 CP56 = 22 字节,
-                            // 短于 22 视为畸形,按未知类型拒收回 COT=44(UNKNOWN_TYPE)+negative,不当合法对时处理。
-                            if data.len() >= 22 {
-                                let cot_in = cause & 0x3F;
-                                // 时间同步应答开关(issue #28)。关闭后回【否定激活确认】
-                                // COT=7 + P/N,而不是 COT=44:类型 103 本身是识别得了的,
-                                // COT=6 也是能理解的原因,这是"结构合法、仅因配置拒绝执行",
-                                // 正对应 IEC 60870-5-101/104 里 ACT_CON 带 P/N 的语义
-                                // (与本文件既有的 SBO 违规 / 未映射控制点拒收同一约定)。
-                                // 优先级:非激活 COT 属协议错误,与开关无关,仍回 COT=45 + P/N。
-                                // ⚠ 同步锚点:阻塞(TLS)收包路径有同一份门控 —— 见
-                                // handle_client_blocking 的 `103 =>` 分支(搜索
-                                // "同步锚点:异步(明文 TCP)收包路径")。任何改动必须两处同改,
-                                // 本文件历史上正是靠"两条路径各自复制粘贴"踩过坑。
-                                let enabled = ops_snapshot.answer_clock_sync;
-                                let is_activation = enabled && cot_in == 6;
-                                let ack_cot = if cot_in != 6 {
-                                    45 | 0x40
-                                } else if enabled {
-                                    7u8
-                                } else {
-                                    7 | 0x40
-                                };
-                                let ack = { let mut s = seq.lock().await; build_response_frame(&data[..n], ack_cot, &mut s)
-                                };
-                                queue.lock().await.extend_from_slice(&ack);
-                                if let Some(ref lc) = log_collector {
-                                    lc.try_add(clock_sync_log_entry(is_activation, enabled, cot_in, ca));
-                                }
-                            } else {
-                                // 畸形短帧:回 unknown-type 拒收(COT=44 + negative),不执行对时。
+                            // 合法 COT=6 且开关关闭时回否定 ACT_CON(7+P/N)；
+                            // 非法 COT 回 45+P/N，IOA!=0 回 47+P/N。截断/畸形
+                            // ASDU 无法安全回显，直接丢弃并记日志。
+                            let decision = decide_clock_sync(
+                                &data[..n],
+                                ops_snapshot.answer_clock_sync,
+                            );
+                            if let Some(ack_cot) = decision.response_cot() {
                                 let ack = {
                                     let mut s = seq.lock().await;
-                                    build_response_frame(&data[..n], 44 | 0x40, &mut s) };
-                        queue.lock().await.extend_from_slice(&ack);
-                        if let Some(ref lc) = log_collector {
-                            lc.try_add(LogEntry::new(
-                                Direction::Tx, FrameLabel::ClockSync,
-                                format!("时钟同步 拒收(帧长 {}<22) CA={}", data.len(), ca),
-                            ));
-                                }
+                                    build_response_frame(&data[..n], ack_cot, &mut s)
+                                };
+                                queue.lock().await.extend_from_slice(&ack);
+                            }
+                            if let Some(ref lc) = log_collector {
+                                lc.try_add(clock_sync_log_entry(decision, ca, data.len()));
                             }
                     }
                     45..=51 | 58..=64 => {
@@ -2004,6 +2082,7 @@ fn handle_client_blocking(
 ) {
     use std::io::{Read, Write};
     let mut buf = [0u8; 512];
+    let mut reassembly_buf: Vec<u8> = Vec::with_capacity(1024);
 
     // Cache the runtime handle once — this function always runs inside spawn_blocking.
     let rt = tokio::runtime::Handle::current();
@@ -2035,10 +2114,14 @@ fn handle_client_blocking(
             Err(_) => break,
         };
 
-        let data = &buf[..n];
+        reassembly_buf.extend_from_slice(&buf[..n]);
+
+        // TLS 与明文 TCP 一样是字节流：一轮 read 可含半帧、一帧或多帧。
+        while let Some(data) = take_next_apdu(&mut reassembly_buf) {
+        let n = data.len();
 
         if let Some(ref lc) = log_collector {
-            if let Ok(frame) = crate::frame::parse_apci(data) {
+            if let Ok(frame) = crate::frame::parse_apci(&data) {
                 let summary = crate::frame::format_frame_summary(&frame);
                 lc.try_add(LogEntry::with_raw_bytes(
                     Direction::Rx, FrameLabel::IFrame(summary.clone()),
@@ -2080,7 +2163,7 @@ fn handle_client_blocking(
                     _ => {}
                 }
             } else if ctrl1 & 0x01 == 0 && data.len() >= 12 {
-                rt.block_on(async { let mut s = seq.lock().await; observe_recv_iframe(&mut s, data); });
+                rt.block_on(async { let mut s = seq.lock().await; observe_recv_iframe(&mut s, &data); });
                 let asdu_type = data[6];
                 // COT 字节布局:bit0..5=cause,bit6=negative-confirm,bit7=test(IEC 60870-5-101 §7.2.2.3)。
                 // 取低 6 位作 cause 比较,使主站叠加 T/PN 位的去激活(COT=8|0x80)仍能命中停止激活分支,
@@ -2218,49 +2301,20 @@ fn handle_client_blocking(
                         }
                     }
                     103 => {
-                        // 时钟同步(C_CS_NA_1)规约为单次激活型命令(IEC 60870-5-101 §7.2.6.4),
-                        // 无 COT=8 去激活语义,禁止回 COT=9。仅 COT=6(激活)合法,回 COT=7(激活确认);
-                        // 非激活 COT(含 COT=8)属协议错误,按 lib60870 拒收路径回
-                        // COT=45(UNKNOWN_COT)+negative-confirm(bit6),不执行对时。
-                        // 长度守卫:103 帧 = 6 控制 + 4 ASDU + 2 CA + 3 IOA + 7 CP56 = 22 字节,
-                        // 短于 22 视为畸形,按未知类型拒收回 COT=44(UNKNOWN_TYPE)+negative,不当合法对时处理。
-                        if data.len() >= 22 {
-                            let cot_in = cause & 0x3F;
-                            // 时间同步应答开关(issue #28):与明文 TCP 路径一致。
-                            // ⚠ 同步锚点:异步(明文 TCP)收包路径有同一份门控 —— 见
-                            // handle_client_read_loop 的 `103 =>` 分支(搜索
-                            // "同步锚点:阻塞(TLS)收包路径")。任何改动必须两处同改。
-                            // 覆盖:tests/command_deactivation.rs
-                            // `clock_sync_rejected_when_answer_disabled_over_tls`。
-                            // 关闭后回否定激活确认 COT=7 + P/N(非 COT=44),
-                            // 理由见异步路径同位置注释。
-                            let enabled = ops_snapshot.answer_clock_sync;
-                            let is_activation = enabled && cot_in == 6;
-                            let ack_cot = if cot_in != 6 {
-                                45 | 0x40
-                            } else if enabled {
-                                7u8
-                            } else {
-                                7 | 0x40
-                            };
-                            let ack = rt.block_on(async { let mut s = seq.lock().await; build_response_frame(&data[..n], ack_cot, &mut s)
-                            });
-                            let _ = stream.write_all(&ack);
-                            if let Some(ref lc) = log_collector {
-                                lc.try_add(clock_sync_log_entry(is_activation, enabled, cot_in, ca));
-                            }
-                        } else {
-                            // 畸形短帧:回 unknown-type 拒收(COT=44 + negative),不执行对时。
+                        // 与明文路径共用同一结构/COT/IOA/开关决策。
+                        let decision = decide_clock_sync(
+                            &data[..n],
+                            ops_snapshot.answer_clock_sync,
+                        );
+                        if let Some(ack_cot) = decision.response_cot() {
                             let ack = rt.block_on(async {
                                 let mut s = seq.lock().await;
-                                build_response_frame(&data[..n], 44 | 0x40, &mut s) });
-                        let _ = stream.write_all(&ack);
+                                build_response_frame(&data[..n], ack_cot, &mut s)
+                            });
+                            let _ = stream.write_all(&ack);
+                        }
                         if let Some(ref lc) = log_collector {
-                            lc.try_add(LogEntry::new(
-                                Direction::Tx, FrameLabel::ClockSync,
-                                format!("时钟同步 拒收(帧长 {}<22) CA={}", data.len(), ca),
-                            ));
-                            }
+                            lc.try_add(clock_sync_log_entry(decision, ca, data.len()));
                         }
                     }
                     45..=51 | 58..=64 => {
@@ -2312,6 +2366,7 @@ fn handle_client_blocking(
                 }
             }
         }
+        } // end while complete TLS APDUs
     }
     // Clean up the connection entry when the client disconnects.
     rt.block_on(async { connections.write().await.remove(&peer_addr); });
@@ -3895,6 +3950,52 @@ mod tests {
         assert_eq!(CommandAckCot::ActivationCon.as_u8(), 7);
         assert_eq!(CommandAckCot::DeactivationCon.as_u8(), 9);
         assert_eq!(CommandAckCot::ActivationTermination.as_u8(), 10);
+    }
+
+    #[test]
+    fn apdu_reassembly_handles_split_and_coalesced_frames() {
+        let first = vec![0x68, 0x04, 0x07, 0, 0, 0];
+        let second = vec![0x68, 0x04, 0x43, 0, 0, 0];
+        let mut buffer = first[..3].to_vec();
+        assert!(take_next_apdu(&mut buffer).is_none());
+
+        buffer.extend_from_slice(&first[3..]);
+        buffer.extend_from_slice(&second);
+        assert_eq!(take_next_apdu(&mut buffer), Some(first));
+        assert_eq!(take_next_apdu(&mut buffer), Some(second));
+        assert!(take_next_apdu(&mut buffer).is_none());
+    }
+
+    #[test]
+    fn clock_sync_decision_enforces_structure_before_policy() {
+        let mut frame = vec![
+            0x68, 0x14, 0, 0, 0, 0, 103, 0x01, 6, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0,
+        ];
+        assert_eq!(
+            decide_clock_sync(&frame, false),
+            ClockSyncDecision::Disabled
+        );
+
+        frame[8] = 8;
+        assert_eq!(
+            decide_clock_sync(&frame, false),
+            ClockSyncDecision::UnknownCot { cot: 8 }
+        );
+
+        frame[8] = 6;
+        frame[12] = 1;
+        assert_eq!(
+            decide_clock_sync(&frame, false),
+            ClockSyncDecision::UnknownIoa { ioa: 1 }
+        );
+
+        frame[12] = 0;
+        frame[7] = 0x81;
+        assert_eq!(
+            decide_clock_sync(&frame, false),
+            ClockSyncDecision::Malformed { reason: "vsq" }
+        );
     }
 
     #[test]
