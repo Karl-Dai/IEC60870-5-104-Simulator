@@ -184,6 +184,8 @@ export type DictShape = {
     mutationStep: string
     mutationMin: string
     mutationMax: string
+    dpIntermediate: string
+    dpIndeterminate: string
     derivedTbTitle: string
     dupIoaTitle: string
     batchControlOptions: string
@@ -655,6 +657,8 @@ const dict: DictShape = {
     mutationStep: '步长',
     mutationMin: '下限',
     mutationMax: '上限',
+    dpIntermediate: '中间',
+    dpIndeterminate: '不确定',
     derivedTbTitle: '变位时将追加派生帧 {tb}（「变位同步上送 TB」已开启；点位自身 Type ID 不变）',
     dupIoaTitle: 'IOA {ioa} 与本站其他类型共用：{types}。同一 CASDU 内 IOA 应唯一，请编辑该点修改 IOA。',
     batchControlOptions: '批量设置控制参数',

@@ -1225,6 +1225,10 @@ fn normalized_raw_string(value: f32) -> String {
 fn data_point_value_string(p: &DataPoint) -> String {
     match &p.value {
         DataPointValue::Normalized { value } => normalized_raw_string(*value),
+        // UI localization belongs to the frontend. Returning the stable DPI
+        // code also keeps inline editing numeric instead of feeding Chinese
+        // display labels back into the u8 parser.
+        DataPointValue::DoublePoint { value } => value.to_string(),
         _ => p.value.display(),
     }
 }
@@ -1991,6 +1995,19 @@ mod tests {
             },
         );
         state
+    }
+
+    #[test]
+    fn data_point_dtos_use_stable_numeric_dpi_codes() {
+        let def_map: HashMap<(u32, AsduTypeId), &InformationObjectDef> = HashMap::new();
+        let mut point = DataPoint::new(1, AsduTypeId::MDpNa1);
+
+        for dpi in [0, 1, 2, 3] {
+            point.value = DataPointValue::DoublePoint { value: dpi };
+            let expected = dpi.to_string();
+            assert_eq!(data_point_to_info(&point, &def_map).value, expected);
+            assert_eq!(data_point_to_value_snapshot(&point).value, expected);
+        }
     }
 
     #[tokio::test]

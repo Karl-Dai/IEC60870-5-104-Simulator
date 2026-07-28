@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { REPO_URL } from '@app/releaseNotes'
 import { useI18n } from '../i18n'
 import { useClipboardFlash } from '../composables/useClipboardFlash'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const { flash, copy, openOrCopy } = useClipboardFlash()
 const version = ref('')
+const documentationUrl = computed(() =>
+  `${REPO_URL}/blob/main/${locale.value === 'zh-CN' ? 'README_CN.md' : 'README.md'}`,
+)
 
 onMounted(async () => {
   try { version.value = await getVersion() } catch { version.value = '' }
@@ -26,9 +29,9 @@ onMounted(async () => {
     <button
       type="button"
       class="github-link"
-      :title="REPO_URL"
-      :aria-label="REPO_URL"
-      @click="openOrCopy(REPO_URL, 'GitHub')"
+      :title="documentationUrl"
+      :aria-label="documentationUrl"
+      @click="openOrCopy(documentationUrl, 'GitHub')"
     >
       <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38

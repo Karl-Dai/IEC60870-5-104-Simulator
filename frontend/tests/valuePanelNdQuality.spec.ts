@@ -1,8 +1,9 @@
 // add-m-me-nd-1 验证:M_ME_ND_1 无品质 —— ValuePanel 隐藏品质开关 + 类型清单含 ND。
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { dialogKey } from '@shared/composables/useDialog'
+import { useI18n } from '@shared/i18n'
 import ValuePanel from '../src/components/ValuePanel.vue'
 import { ASDU_TYPE_OPTIONS } from '../src/constants/asduTypes'
 
@@ -41,7 +42,10 @@ async function mountSingle(detail: Detail) {
 }
 
 describe('M_ME_ND_1 无品质', () => {
-  beforeEach(() => invokeMock.mockReset())
+  beforeEach(() => {
+    invokeMock.mockReset()
+    useI18n().setLocale('en-US')
+  })
 
   it('类型清单含 M_ME_ND_1 (TypeID 21)', () => {
     const nd = ASDU_TYPE_OPTIONS.find((o) => o.value === 'MMeNd1')
@@ -60,5 +64,21 @@ describe('M_ME_ND_1 无品质', () => {
     const w = await mountSingle(makeDetail('M_ME_NC_1'))
     expect(w.find('.quality-na').exists()).toBe(false)
     expect(w.findAll('.q-badge').length).toBeGreaterThan(0)
+  })
+
+  it('Point Details 本地化 DPI 3，但写值输入仍保留原始数值', async () => {
+    const detail = { ...makeDetail('M_DP_NA_1'), category: 'double_point', value: '3' }
+    const w = await mountSingle(detail)
+    const currentValue = w.find('.detail-value.editable')
+
+    expect(currentValue.text()).toBe('Indeterminate')
+    await currentValue.trigger('click')
+    expect((w.find('.write-input').element as HTMLInputElement).value).toBe('3')
+
+    useI18n().setLocale('zh-CN')
+    await nextTick()
+    expect(w.find('.detail-value.editable').text()).toBe('不确定')
+    expect((w.find('.write-input').element as HTMLInputElement).value).toBe('3')
+    w.unmount()
   })
 })

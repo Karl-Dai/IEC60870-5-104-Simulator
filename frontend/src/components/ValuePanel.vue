@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import type { DataPointInfo } from '../types'
+import { formatDataPointValue } from '../utils/dataPointValue'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
 import EmptyState from '@shared/components/EmptyState.vue'
 import QualityIndicator from '@shared/components/QualityIndicator.vue'
@@ -245,7 +246,7 @@ function handleEditKeydown(e: KeyboardEvent) {
         <div class="section-title">{{ t('valuePanel.sectionCurrent') }}</div>
         <div class="detail-row">
           <span class="detail-label">{{ t('valuePanel.value') }}</span>
-          <span class="detail-value mono editable" @click="startEdit">{{ pointDetail.value }}</span>
+          <span class="detail-value mono editable" @click="startEdit">{{ formatDataPointValue(pointDetail, t) }}</span>
         </div>
         <div class="detail-row">
           <span class="detail-label">{{ t('valuePanel.quality') }}</span>

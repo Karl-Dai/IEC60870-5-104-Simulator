@@ -10,6 +10,7 @@ import type {
   PointMutationInfo,
   MutationMode,
 } from '../types'
+import { formatDataPointValue } from '../utils/dataPointValue'
 import DataPointModal from './DataPointModal.vue'
 import BatchAddModal from './BatchAddModal.vue'
 import BatchWriteModal from './BatchWriteModal.vue'
@@ -1042,7 +1043,7 @@ defineExpose({ loadData: loadDataPoints })
                   />
                 </template>
                 <template v-else>
-                  <span class="value-text">{{ point.value }}</span>
+                  <span class="value-text">{{ formatDataPointValue(point, t) }}</span>
                 </template>
               </td>
               <td class="col-quality">

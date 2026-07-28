@@ -186,6 +186,8 @@ const dict: DictShape = {
     mutationStep: 'Step',
     mutationMin: 'Min',
     mutationMax: 'Max',
+    dpIntermediate: 'Intermediate',
+    dpIndeterminate: 'Indeterminate',
     derivedTbTitle: 'On change an extra derived {tb} frame is appended ("Sync time-tagged on change" is on; the point\'s own Type ID is unchanged)',
     dupIoaTitle: 'IOA {ioa} is shared with other types in this station: {types}. IOA should be unique within a CASDU — edit the point to change its IOA.',
     batchControlOptions: 'Batch Set Control Options',

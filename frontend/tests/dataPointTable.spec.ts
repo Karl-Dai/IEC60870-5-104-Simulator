@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref, nextTick, type Ref } from 'vue'
 import { dialogKey } from '@shared/composables/useDialog'
+import { useI18n } from '@shared/i18n'
 import DataPointTable from '../src/components/DataPointTable.vue'
 import type { DataPointInfo } from '../src/types'
 
@@ -57,7 +58,10 @@ const B = dp(2, 'M_SP_NA_1', '单点 (SP)', '0')
 const C = dp(3, 'M_ME_NC_1', '浮点 (ME_NC)', '1.5')
 
 describe('DataPointTable 子站数据表', () => {
-  beforeEach(() => invokeMock.mockReset())
+  beforeEach(() => {
+    invokeMock.mockReset()
+    useI18n().setLocale('en-US')
+  })
 
   it('8.3 categoryCounts 按分类实时派生', async () => {
     invokeMock.mockResolvedValue({ points: [A, B, C], seq: 1, total_count: 3 })
@@ -163,6 +167,27 @@ describe('DataPointTable 子站数据表', () => {
     expect(litLetters).toEqual(['NT'])
     // 正常点:紧凑模式显示 OK
     expect(wrapper.find('.q-ok').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('DPI 0/3 按当前语言显示且 1/2 保持 OFF/ON', async () => {
+    const points = [
+      dp(10, 'M_DP_NA_1', 'double_point', '0'),
+      dp(11, 'M_DP_NA_1', 'double_point', '1'),
+      dp(12, 'M_DP_NA_1', 'double_point', '2'),
+      dp(13, 'M_DP_NA_1', 'double_point', '3'),
+    ]
+    invokeMock.mockResolvedValue({ points, seq: 1, total_count: 4 })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+
+    expect(wrapper.findAll('.value-text').map((node) => node.text()))
+      .toEqual(['Intermediate', 'OFF', 'ON', 'Indeterminate'])
+
+    useI18n().setLocale('zh-CN')
+    await nextTick()
+    expect(wrapper.findAll('.value-text').map((node) => node.text()))
+      .toEqual(['中间', 'OFF', 'ON', '不确定'])
     wrapper.unmount()
   })
 })
