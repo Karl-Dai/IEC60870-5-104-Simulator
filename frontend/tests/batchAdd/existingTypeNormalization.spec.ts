@@ -32,11 +32,14 @@ describe('BatchAddModal existingSameTypeIoas 类型归一化', () => {
     expect(wrapper.find('.summary-card__ranges-value').text()).toBe('1–2')
   })
 
-  it('默认范围 0+10 与已有 IOA 重叠时出现冲突提示', () => {
+  // 起始 IOA 现在默认自动避让已占用地址(issue #28 F3),要造冲突须手动改回 0。
+  it('手动把范围改成 0+10 与已有 IOA 重叠时出现冲突提示', async () => {
     const wrapper = mountModal([
       { ioa: 1, asdu_type: 'M_SP_NA_1' },
       { ioa: 2, asdu_type: 'M_SP_NA_1' },
     ])
+    expect(wrapper.find('.summary-card__conflict').exists()).toBe(false) // 默认已避让到 3
+    await wrapper.findAll('.form-row input')[0].setValue(0)
     expect(wrapper.find('.summary-card__conflict').exists()).toBe(true)
   })
 

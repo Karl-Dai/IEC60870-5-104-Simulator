@@ -355,6 +355,23 @@ impl Station {
         station
     }
 
+    /// 严格新增点位:目标 (IOA, 类型) 已存在时报 `DuplicateIoa`,不改动已有 def。
+    /// 用户在 UI 上「添加单个点位」走这条路 —— `add_point` 的静默覆盖语义会把
+    /// 已有点的名称/备注/QU-QL/S-E/控制映射整份冲掉(仅运行值因 contains 判断
+    /// 而侥幸保留),属于不可撤销的数据损坏。
+    /// 配置导入(`load_config`)、默认站生成、批量添加仍走宽松语义的 `add_point`。
+    pub fn add_point_strict(&mut self, def: InformationObjectDef) -> Result<(), SlaveError> {
+        if self.data_points.contains(def.ioa, def.asdu_type)
+            || self.object_defs.iter().any(|d| d.ioa == def.ioa && d.asdu_type == def.asdu_type)
+        {
+            return Err(SlaveError::DuplicateIoa(def.ioa));
+        }
+        self.add_point(def)
+    }
+
+    /// 新增或**覆盖**点位定义:同 (IOA, 类型) 已存在时整份替换 def。
+    /// 覆盖语义是配置导入/默认站生成等幂等重放路径依赖的;用户手动添加请用
+    /// [`Station::add_point_strict`]。
     pub fn add_point(&mut self, def: InformationObjectDef) -> Result<(), SlaveError> {
         if !self.data_points.contains(def.ioa, def.asdu_type) {
             self.data_points.insert(DataPoint::new(def.ioa, def.asdu_type));
@@ -3549,6 +3566,73 @@ mod tests {
         assert!(station.data_points.get(100, AsduTypeId::MSpNa1).is_some());
         assert!(station.data_points.get(100, AsduTypeId::MMeNc1).is_some());
         assert_eq!(station.object_defs.len(), 2);
+    }
+
+    // issue #28:同 (IOA, 类型) 重复添加必须报错,不能静默覆盖已有定义。
+    #[test]
+    fn add_point_strict_rejects_same_ioa_and_type() {
+        let mut station = Station::new(1, "Test");
+        let def = |name: &str| InformationObjectDef {
+            ioa: 100,
+            asdu_type: AsduTypeId::MSpNa1,
+            category: DataCategory::SinglePoint,
+            name: name.to_string(),
+            comment: "原备注".to_string(),
+            mapping: None,
+            command_qualifier: None,
+            select_before_operate: None,
+        };
+        station.add_point_strict(def("原名称")).unwrap();
+
+        let err = station.add_point_strict(def("覆盖者")).unwrap_err();
+        assert!(matches!(err, SlaveError::DuplicateIoa(100)), "got {err:?}");
+        // 已有定义分毫未动
+        assert_eq!(station.object_defs.len(), 1);
+        assert_eq!(station.object_defs[0].name, "原名称");
+        assert_eq!(station.object_defs[0].comment, "原备注");
+        assert_eq!(station.data_points.len(), 1);
+    }
+
+    // 同 IOA 不同类型(含同分类 NA/TB 变体、控制↔监视配对)仍然允许共存。
+    #[test]
+    fn add_point_strict_allows_same_ioa_other_types() {
+        let mut station = Station::new(1, "Test");
+        let def = |asdu_type: AsduTypeId, category: DataCategory| InformationObjectDef {
+            ioa: 100,
+            asdu_type,
+            category,
+            name: String::new(),
+            comment: String::new(),
+            mapping: None,
+            command_qualifier: None,
+            select_before_operate: None,
+        };
+        station.add_point_strict(def(AsduTypeId::MSpNa1, DataCategory::SinglePoint)).unwrap();
+        station.add_point_strict(def(AsduTypeId::MSpTb1, DataCategory::SinglePoint)).unwrap();
+        station.add_point_strict(def(AsduTypeId::MMeNc1, DataCategory::FloatMeasured)).unwrap();
+        station.add_point_strict(def(AsduTypeId::CScNa1, DataCategory::SingleCommand)).unwrap();
+        assert_eq!(station.object_defs.len(), 4);
+        assert_eq!(station.data_points.len(), 4);
+    }
+
+    // 宽松 add_point 的覆盖语义必须保留:配置导入等幂等重放路径依赖它。
+    #[test]
+    fn add_point_keeps_overwrite_semantics_for_config_import() {
+        let mut station = Station::new(1, "Test");
+        let def = |name: &str| InformationObjectDef {
+            ioa: 7,
+            asdu_type: AsduTypeId::MSpNa1,
+            category: DataCategory::SinglePoint,
+            name: name.to_string(),
+            comment: String::new(),
+            mapping: None,
+            command_qualifier: None,
+            select_before_operate: None,
+        };
+        station.add_point(def("v1")).unwrap();
+        station.add_point(def("v2")).unwrap();
+        assert_eq!(station.object_defs.len(), 1);
+        assert_eq!(station.object_defs[0].name, "v2");
     }
 
     #[test]

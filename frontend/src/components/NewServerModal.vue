@@ -17,7 +17,9 @@ const bindAddress = ref('0.0.0.0')
 const bindSuggestions = ref<string[]>(['0.0.0.0', '127.0.0.1'])
 const port = ref('2404')
 const initMode = ref('zero')
-const count = ref(10)
+// issue #28:默认 0 = 空配置。旧默认 10 会给全部监视类型预填 IOA 1..10,
+// 制造大量同 CASDU 跨类型重复 IOA;实际站点应按需批量创建。
+const count = ref(0)
 const useTls = ref(false)
 const certFile = ref('')
 const keyFile = ref('')
@@ -28,7 +30,7 @@ function reset() {
   bindAddress.value = '0.0.0.0'
   port.value = '2404'
   initMode.value = 'zero'
-  count.value = 10
+  count.value = 0
   useTls.value = false
   certFile.value = ''
   keyFile.value = ''
@@ -60,7 +62,7 @@ async function submit() {
   try {
     const c = Number.isFinite(count.value) && count.value >= 0
       ? Math.min(65534, Math.floor(count.value))
-      : 10
+      : 0
     const info = await invoke<{ id: string }>('create_server', {
       request: {
         bind_address: bindAddress.value.trim() || undefined,
@@ -121,6 +123,7 @@ async function submit() {
           <div class="modal-field">
             <label>{{ t('newServer.countPerCategory') }}</label>
             <input v-model.number="count" type="number" min="0" max="65534" @keyup.enter="submit" />
+            <div class="field-hint">{{ t('newServer.countHint') }}</div>
           </div>
           <div class="modal-field">
             <label class="checkbox-label">
