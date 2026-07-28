@@ -31,6 +31,10 @@ function cloneOps(sp: boolean): RemoteOperationConfig {
   return value
 }
 
+const writeCalls = () => invokeMock.mock.calls.filter((call) =>
+  ['update_server_transport', 'set_protocol_timing', 'set_remote_operation_config'].includes(call[0])
+)
+
 describe('运行参数异步竞态保护', () => {
   beforeEach(() => invokeMock.mockReset())
 
@@ -230,6 +234,229 @@ describe('运行参数异步竞态保护', () => {
 
     expect(wrapper.find('.error').exists()).toBe(false)
     expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('modal blocks a rejected params snapshot and recovers on a successful reopen', async () => {
+    let rejectParamsLoad = true
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'get_protocol_timing') {
+        return rejectParamsLoad
+          ? Promise.reject(new Error('params load failed'))
+          : Promise.resolve({ ...DEFAULT_PROTOCOL_TIMING })
+      }
+      if (cmd === 'get_remote_operation_config') return Promise.resolve(cloneOps(false))
+      if (cmd === 'list_servers') {
+        return Promise.resolve([
+          { id: 's1', bind_address: '0.0.0.0', port: 2404, state: 'Stopped' },
+        ])
+      }
+      return Promise.resolve(null)
+    })
+
+    const wrapper = mount(RemoteParamsModal, {
+      props: { visible: false, serverId: 's1', serverLabel: 's1' },
+      global: { stubs: { teleport: true } },
+    })
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    const saveButton = wrapper.find('.btn-primary')
+    expect(saveButton.attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.error').text()).toContain('params load failed')
+
+    // 即使陈旧事件/程序化调用绕过 DOM disabled，handleSave 自身也必须硬阻断。
+    const saveButtonElement = saveButton.element as HTMLButtonElement
+    saveButtonElement.disabled = false
+    await saveButton.trigger('click')
+    await flushPromises()
+    expect(writeCalls()).toHaveLength(0)
+    expect(wrapper.emitted('saved')).toBeUndefined()
+
+    rejectParamsLoad = false
+    await wrapper.setProps({ visible: false })
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    expect(wrapper.find('.error').exists()).toBe(false)
+    expect(wrapper.find('.btn-primary').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('modal blocks saving after a transport load error and recovers on a successful reopen', async () => {
+    let rejectTransportLoad = true
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'get_protocol_timing') return Promise.resolve({ ...DEFAULT_PROTOCOL_TIMING })
+      if (cmd === 'get_remote_operation_config') return Promise.resolve(cloneOps(false))
+      if (cmd === 'list_servers') {
+        return rejectTransportLoad
+          ? Promise.reject(new Error('transport load failed'))
+          : Promise.resolve([
+              { id: 's1', bind_address: '0.0.0.0', port: 2404, state: 'Stopped' },
+            ])
+      }
+      return Promise.resolve(null)
+    })
+
+    const wrapper = mount(RemoteParamsModal, {
+      props: { visible: false, serverId: 's1', serverLabel: 's1' },
+      global: { stubs: { teleport: true } },
+    })
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    expect(wrapper.find('.btn-primary').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.error').text()).toContain('transport load failed')
+    const blockedSaveButton = wrapper.find('.btn-primary')
+    const blockedSaveButtonElement = blockedSaveButton.element as HTMLButtonElement
+    blockedSaveButtonElement.disabled = false
+    await blockedSaveButton.trigger('click')
+    expect(writeCalls()).toHaveLength(0)
+
+    rejectTransportLoad = false
+    await wrapper.setProps({ visible: false })
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    expect(wrapper.find('.error').exists()).toBe(false)
+    expect(wrapper.find('.btn-primary').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('modal never writes a retained transport draft when the reopened target is missing', async () => {
+    let targetMissing = false
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'get_protocol_timing') return Promise.resolve({ ...DEFAULT_PROTOCOL_TIMING })
+      if (cmd === 'get_remote_operation_config') return Promise.resolve(cloneOps(false))
+      if (cmd === 'list_servers') {
+        return Promise.resolve(targetMissing
+          ? []
+          : [{ id: 's1', bind_address: '0.0.0.0', port: 2404, state: 'Stopped' }])
+      }
+      return Promise.resolve(null)
+    })
+
+    const wrapper = mount(RemoteParamsModal, {
+      props: { visible: false, serverId: 's1', serverLabel: 's1' },
+      global: { stubs: { teleport: true } },
+    })
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    // 留下一份取消的 transport 草稿；同 serverId 重开却找不到目标时，
+    // 旧实现可能把它连同默认/旧参数重新写回。
+    await wrapper.find('.rp-conn-grid input[type="number"]').setValue(2410)
+    await wrapper.setProps({ visible: false })
+    targetMissing = true
+    await wrapper.setProps({ visible: true })
+    await flushPromises()
+
+    expect(wrapper.find('.btn-primary').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.error').text()).toContain('Server not found: s1')
+    const blockedSaveButton = wrapper.find('.btn-primary')
+    const blockedSaveButtonElement = blockedSaveButton.element as HTMLButtonElement
+    blockedSaveButtonElement.disabled = false
+    await blockedSaveButton.trigger('click')
+    expect(writeCalls()).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it.each([
+    { reloadFails: false, expectedError: null },
+    { reloadFails: true, expectedError: 'reload failed' },
+  ])('drawer Discard clears a stale save error (reloadFails=$reloadFails)', async ({
+    reloadFails,
+    expectedError,
+  }) => {
+    let discardStarted = false
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'get_protocol_timing') {
+        return discardStarted && reloadFails
+          ? Promise.reject(new Error('reload failed'))
+          : Promise.resolve({ ...DEFAULT_PROTOCOL_TIMING })
+      }
+      if (cmd === 'get_remote_operation_config') return Promise.resolve(cloneOps(false))
+      if (cmd === 'set_protocol_timing') return Promise.reject(new Error('save failed'))
+      return Promise.resolve(null)
+    })
+
+    const selectedServerId = ref<string | null>('s1')
+    const wrapper = mount(RemoteParamsDrawer, {
+      props: { visible: true },
+      global: {
+        stubs: { teleport: true },
+        provide: { selectedServerId },
+      },
+    })
+    await flushPromises()
+
+    const spLabel = wrapper
+      .findAll('.rp-subgroup .rp-switch')
+      .find((label) => label.text().includes('M_SP_NA_1'))!
+    await spLabel.find('input').setValue(true)
+    await wrapper.find('.rp-btn-primary').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.rp-error').text()).toContain('save failed')
+
+    discardStarted = true
+    await wrapper.find('.rp-btn-ghost').trigger('click')
+    await flushPromises()
+
+    if (expectedError) {
+      expect(wrapper.find('.rp-error').text()).toContain(expectedError)
+      expect(wrapper.find('.rp-error').text()).not.toContain('save failed')
+    } else {
+      expect(wrapper.find('.rp-error').exists()).toBe(false)
+      expect(wrapper.find('.rp-btn-ghost').exists()).toBe(false)
+    }
+    wrapper.unmount()
+  })
+
+  it('an old drawer save success cannot mutate a later selection session', async () => {
+    const timingWrite = deferred<null>()
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'get_protocol_timing') return Promise.resolve({ ...DEFAULT_PROTOCOL_TIMING })
+      if (cmd === 'get_remote_operation_config') return Promise.resolve(cloneOps(false))
+      if (cmd === 'set_protocol_timing') return timingWrite.promise
+      if (cmd === 'set_remote_operation_config') return Promise.resolve(null)
+      return Promise.resolve(null)
+    })
+
+    const selectedServerId = ref<string | null>('s1')
+    const wrapper = mount(RemoteParamsDrawer, {
+      props: { visible: true },
+      global: {
+        stubs: { teleport: true },
+        provide: { selectedServerId },
+      },
+    })
+    await flushPromises()
+
+    const spInput = () => wrapper
+      .findAll('.rp-subgroup .rp-switch')
+      .find((label) => label.text().includes('M_SP_NA_1'))!
+      .find('input')
+
+    // 旧 A 保存快照为 sp=true，并停在第一个写请求。
+    await spInput().setValue(true)
+    void wrapper.find('.rp-btn-primary').trigger('click')
+    await nextTick()
+
+    // A→B→A 形成新的 selection epoch；新 A 从后端重载 false 后，
+    // 用户再次编辑为 true。旧实现会把旧快照登记成新基线并误报 saved。
+    selectedServerId.value = 's2'
+    await flushPromises()
+    selectedServerId.value = 's1'
+    await flushPromises()
+    await spInput().setValue(true)
+    expect(wrapper.find('.rp-btn-ghost').exists()).toBe(true)
+
+    timingWrite.resolve(null)
+    await flushPromises()
+
+    expect(wrapper.emitted('saved')).toBeUndefined()
+    expect(wrapper.find('.rp-btn-ghost').exists()).toBe(true)
+    expect(wrapper.find('.rp-btn-primary').classes()).not.toContain('is-flash')
     wrapper.unmount()
   })
 

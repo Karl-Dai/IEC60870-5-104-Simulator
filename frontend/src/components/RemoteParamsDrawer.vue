@@ -58,6 +58,8 @@ watch(loading, (l) => {
 watch(selectedServerId, () => {
   selectionEpoch++
   saveError.value = null
+  savedFlash.value = false
+  clearFlashTimer()
 }, { flush: 'sync' })
 
 watch(selectedServerId, (id) => {
@@ -88,7 +90,13 @@ function clearFlashTimer() {
 onBeforeUnmount(clearFlashTimer)
 
 async function saveAll() {
-  if (!selectedServerId.value || saving.value || !dirty.value) return
+  if (
+    !selectedServerId.value
+    || saving.value
+    || loading.value
+    || lastError.value
+    || !dirty.value
+  ) return
   const serverId = selectedServerId.value
   const session = drawerSession
   const selectedEpoch = selectionEpoch
@@ -121,12 +129,16 @@ async function saveAll() {
       reportSaveError(opsResult.error)
       return
     }
-    // 保存期间即使外部代码切换了选择，也不能把旧服务器的快照登记成新服务器基线。
-    if (selectedServerId.value === serverId) {
-      baseline.value = {
-        serverId,
-        key: snapshot(timingToSave, opsToSave),
-      }
+    // 保存期间父组件仍可能强制换服务器、关开抽屉，甚至 A→B→A。
+    // 旧保存可以完成自己的后端写入，但其全部 UI 副作用必须属于原会话。
+    if (
+      session !== drawerSession
+      || selectedEpoch !== selectionEpoch
+      || selectedServerId.value !== serverId
+    ) return
+    baseline.value = {
+      serverId,
+      key: snapshot(timingToSave, opsToSave),
     }
     emit('saved')
     savedFlash.value = true
@@ -140,7 +152,10 @@ async function saveAll() {
 }
 
 async function discardChanges() {
-  if (saving.value) return
+  if (saving.value || loading.value) return
+  // 保存错误属于旧编辑尝试。Discard 后应显示本次 reload 的结果：
+  // 成功则无错误，失败则让 useRemoteParams.lastError 展示新的加载错误。
+  saveError.value = null
   await load()
 }
 
@@ -162,6 +177,8 @@ function handleEsc(e: KeyboardEvent) {
 watch(() => props.visible, () => {
   drawerSession++
   saveError.value = null
+  savedFlash.value = false
+  clearFlashTimer()
 }, { flush: 'sync' })
 
 watch(() => props.visible, (v) => {
@@ -202,14 +219,14 @@ watch(() => props.visible, (v) => {
               <button
                 v-if="dirty"
                 class="rp-btn rp-btn-ghost"
-                :disabled="saving"
+                :disabled="saving || loading"
                 @click="discardChanges"
                 :title="t('remoteParams.discardTitle')"
               >{{ t('remoteParams.discard') }}</button>
               <button
                 class="rp-btn rp-btn-primary"
                 :class="{ 'is-dirty': dirty, 'is-flash': savedFlash }"
-                :disabled="saving || !dirty || !selectedServerId"
+                :disabled="saving || loading || !!lastError || !dirty || !selectedServerId"
                 @click="saveAll"
               >
                 <span class="rp-btn-dot" v-if="dirty" />

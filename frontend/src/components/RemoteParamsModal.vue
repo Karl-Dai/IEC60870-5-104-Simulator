@@ -31,15 +31,21 @@ function cloneOps(value: RemoteOperationConfig): RemoteOperationConfig {
 // 连接参数(地址:端口)的已保存快照,空串表示"还没回读过" —— 见下方 transportDirty
 const transportBaseline = ref('')
 const transportLoading = ref(false)
+const transportReady = ref(false)
+const paramsReady = ref(false)
 let transportLoadEpoch = 0
 let modalSession = 0
-const actionError = ref<string | null>(null)
+const transportLoadError = ref<string | null>(null)
+const saveError = ref<string | null>(null)
 
 watch([() => props.visible, () => props.serverId], () => {
   // 同 serverId 重开也属于新会话。同步递增可保证父组件强制换目标后，
   // 旧 Promise 的 continuation 在任何时序下都无法写入新弹窗错误。
   modalSession++
-  actionError.value = null
+  paramsReady.value = false
+  transportReady.value = false
+  transportLoadError.value = null
+  saveError.value = null
 }, { flush: 'sync' })
 
 // 独立的 serverId ref —— 不污染 App 的全局 selectedServerId
@@ -49,11 +55,31 @@ watch(() => props.serverId, v => {
   localServerId.value = v
   // 换服务器:上一台的传输快照失效,清空基线让 loadTransport 必定回读
   transportBaseline.value = ''
+  if (props.visible) loadTransport()
 })
 
 const { timing, ops, loading, lastError, load, applyTiming, applyOps } =
   useRemoteParams(localServerId)
-const displayError = computed(() => actionError.value ?? lastError.value)
+const hasLoadError = computed(() =>
+  lastError.value !== null || transportLoadError.value !== null
+)
+const displayError = computed(() =>
+  saveError.value ?? transportLoadError.value ?? lastError.value
+)
+
+watch(loading, (isLoading) => {
+  if (isLoading) {
+    paramsReady.value = false
+  } else {
+    // useRemoteParams 已用 serverId + load epoch 过滤迟到响应；只有当前可见
+    // 会话的最新读取成功结束，参数快照才允许被保存。
+    paramsReady.value = Boolean(
+      props.visible
+      && localServerId.value
+      && !lastError.value
+    )
+  }
+}, { immediate: true })
 
 // —— 连接参数(监听地址 / 端口)——
 // 传输配置原本仅创建时可设;这里允许停止状态下直接改端口,免去删除重建。
@@ -69,6 +95,8 @@ async function loadTransport() {
   const id = props.serverId
   const epoch = ++transportLoadEpoch
   const session = modalSession
+  transportReady.value = false
+  transportLoadError.value = null
   if (!id) {
     transportLoading.value = false
     return false
@@ -77,8 +105,16 @@ async function loadTransport() {
   try {
     const servers = await invoke<ServerInfo[]>('list_servers')
     const s = servers.find(x => x.id === id)
-    if (epoch !== transportLoadEpoch || props.serverId !== id) return false
-    if (!s) return false
+    if (
+      epoch !== transportLoadEpoch
+      || session !== modalSession
+      || !props.visible
+      || props.serverId !== id
+    ) return false
+    if (!s) {
+      transportLoadError.value = `Server not found: ${id}`
+      return false
+    }
     {
       // 每次打开都取后端最新值。本弹窗是「取消 / 保存」语义(没有 Discard、
       // 也没有 dirty 指示),保留草稿会让「取消」不再取消 —— 用户放弃的端口改动
@@ -89,6 +125,7 @@ async function loadTransport() {
       transport.port = s.port
       transportBaseline.value = `${s.bind_address}:${s.port}`
     }
+    transportReady.value = true
     return true
   } catch (e) {
     if (
@@ -97,11 +134,15 @@ async function loadTransport() {
       && props.visible
       && props.serverId === id
     ) {
-      actionError.value = String(e)
+      transportLoadError.value = String(e)
     }
     return false
   } finally {
-    if (epoch === transportLoadEpoch && props.serverId === id) {
+    if (
+      epoch === transportLoadEpoch
+      && session === modalSession
+      && props.serverId === id
+    ) {
       transportLoading.value = false
     }
   }
@@ -110,7 +151,15 @@ async function loadTransport() {
 const isSaving = ref(false)
 
 async function handleSave() {
-  if (!localServerId.value) return
+  if (
+    !localServerId.value
+    || isSaving.value
+    || loading.value
+    || transportLoading.value
+    || !paramsReady.value
+    || !transportReady.value
+    || hasLoadError.value
+  ) return
   const session = modalSession
   const serverId = localServerId.value
   const timingToSave = cloneTiming(timing.value)
@@ -121,7 +170,7 @@ async function handleSave() {
   }
   const transportChanged = transportDirty.value
   isSaving.value = true
-  actionError.value = null
+  saveError.value = null
 
   const reportSaveError = (error: string | null) => {
     if (
@@ -130,7 +179,7 @@ async function handleSave() {
       && props.visible
       && localServerId.value === serverId
     ) {
-      actionError.value = error
+      saveError.value = error
     }
   }
 
@@ -204,7 +253,7 @@ watch(() => props.visible, (v) => {
     transportLoading.value = false
     window.removeEventListener('keydown', handleEsc)
   }
-})
+}, { immediate: true })
 </script>
 
 <template>
@@ -248,7 +297,11 @@ watch(() => props.visible, (v) => {
             <button class="btn btn-secondary" @click="close" :disabled="isSaving">
               {{ t('runtimeParams.cancel') }}
             </button>
-            <button class="btn btn-primary" @click="handleSave" :disabled="isSaving || loading || transportLoading">
+            <button
+              class="btn btn-primary"
+              @click="handleSave"
+              :disabled="isSaving || loading || transportLoading || !paramsReady || !transportReady || hasLoadError"
+            >
               {{ isSaving ? t('runtimeParams.saving') : t('runtimeParams.save') }}
             </button>
           </div>
