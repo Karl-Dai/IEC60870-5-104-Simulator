@@ -56,6 +56,7 @@ const dict: DictShape = {
     initZero: 'All Zero',
     initRandom: 'Random',
     countPerCategory: 'Points per category',
+    countHint: '0 = empty config (recommended). IOA should be unique within a CASDU; create points on demand via Batch Add.',
     enableTls: 'Enable TLS',
     serverCert: 'Server Certificate (PEM)',
     serverKey: 'Server Key (PEM)',
@@ -186,6 +187,7 @@ const dict: DictShape = {
     mutationMin: 'Min',
     mutationMax: 'Max',
     derivedTbTitle: 'On change an extra derived {tb} frame is appended ("Sync time-tagged on change" is on; the point\'s own Type ID is unchanged)',
+    dupIoaTitle: 'IOA {ioa} is shared with other types in this station: {types}. IOA should be unique within a CASDU — edit the point to change its IOA.',
     batchControlOptions: 'Batch Set Control Options',
   },
   pointModal: {
@@ -194,6 +196,8 @@ const dict: DictShape = {
     ioaLabel: 'IOA (Information Object Address)',
     ioaPlaceholder: 'e.g., 100',
     ioaEditHint: 'IOA can be changed here; value/quality are kept and control mappings referencing this point follow the new address.',
+    dupIoaWarn: 'This IOA is already used by {types} in this station. IOA should be unique within a CASDU; you can still save.',
+    dupIoaSameTypeError: 'A point of the same type ({type}) already exists at this IOA in this station. Adding it again would overwrite its name/comment/qualifier/mapping, so it is blocked. Edit that point instead, or pick another IOA.',
     asduTypeLabel: 'ASDU Type',
     nameLabel: 'Name (optional)',
     namePlaceholder: 'Leave blank if unused',
@@ -222,6 +226,7 @@ const dict: DictShape = {
   batchModal: {
     title: 'Batch Add Data Points',
     startIoa: 'Start IOA',
+    startIoaAutoHint: 'Start IOA pre-set to avoid addresses already used in this station (editable).',
     count: 'Count',
     asduTypeLabel: 'ASDU Type',
     namePrefix: 'Name Prefix (optional)',
@@ -245,6 +250,7 @@ const dict: DictShape = {
     nextGapBtn: '↦ Next fitting gap',
     capacityFullTooltip: 'IOA capacity exhausted',
     conflictDetail: 'Conflicting IOA {ranges} ({count} point(s) will be skipped)',
+    crossTypeDup: '{count} IOA(s) shared with other types in this station: {ranges}. Creation is not blocked, but IOA should be unique within a CASDU.',
   },
   batchControl: {
     title: 'Batch Set Control Options',

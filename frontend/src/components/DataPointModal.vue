@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
-import { ASDU_TYPE_OPTIONS } from '../constants/asduTypes'
+import { ASDU_TYPE_OPTIONS, findAsduTypeOption, formatAsduTypeWithId } from '../constants/asduTypes'
 import { IOA_MAX } from './batchAdd/ioaRanges'
 import type { DataPointInfo } from '../types'
 
@@ -18,6 +18,8 @@ interface Props {
   point?: DataPointInfo | null
   /** 当前左树选中的分类稳定键;提供时新增点位的类型下拉只显示该分类的类型。 */
   category?: string | null
+  /** 本站(当前 CA)已有点位,用于同 CASDU 跨类型重复 IOA 警告(issue #28)。 */
+  existingPoints?: ReadonlyArray<Pick<DataPointInfo, 'ioa' | 'asdu_type' | 'category'>>
 }
 
 const props = defineProps<Props>()
@@ -48,6 +50,45 @@ const mappingTargets = ref<MappingTarget[]>([])
 const mappingKey = ref('')
 const isSaving = ref(false)
 const isEditing = computed(() => Boolean(props.point))
+
+// 当前所选类型的显示文案:与下拉一致的「本地化名 · TypeID」。
+const currentTypeLabel = computed(() => {
+  const opt = findAsduTypeOption(formAsduType.value)
+  return opt ? `${t(opt.labelKey)} · ${opt.typeId}` : formAsduType.value
+})
+
+// 同 (IOA, 类型) 重复(issue #28):后端 add_point_strict 会拒绝(旧实现静默覆盖,
+// 名称/备注/QU-QL/S-E/映射被整份冲掉)。这里前置拦截并禁用确认按钮 —— 与下面
+// 「跨类型共用 IOA」的橙色警示区分:跨类型=允许但警示,同类型=拒绝。
+// 编辑模式类型锁定;未改址时命中的就是自身,不算重复。
+const sameTypeDupExists = computed<boolean>(() => {
+  const ioa = formIoa.value
+  if (typeof ioa !== 'number' || !Number.isInteger(ioa)) return false
+  const self = findAsduTypeOption(formAsduType.value)
+  if (!self) return false
+  if (isEditing.value && props.point && ioa === props.point.ioa) return false
+  return (props.existingPoints ?? []).some(
+    p => p.ioa === ioa && findAsduTypeOption(p.asdu_type)?.value === self.value,
+  )
+})
+
+// 同 CASDU 跨类型重复 IOA 警告(issue #28,不阻断保存)。
+// 同方向且不同分类的已有点共用该 IOA 才提示;NA/TA/TB 同分类变体与
+// 控制↔监视配对(兼容自动映射)不算。编辑时自身同分类,天然被排除。
+const dupIoaTypes = computed<string | null>(() => {
+  const ioa = formIoa.value
+  if (ioa === undefined || ioa === null) return null
+  const opt = findAsduTypeOption(formAsduType.value)
+  if (!opt) return null
+  const dir = formAsduType.value.startsWith('C') ? 'c' : 'm'
+  const clashes = (props.existingPoints ?? [])
+    .filter(p =>
+      p.ioa === ioa
+      && (p.asdu_type.startsWith('C_') ? 'c' : 'm') === dir
+      && p.category !== opt.category)
+    .map(p => formatAsduTypeWithId(p.asdu_type))
+  return clashes.length ? clashes.join(', ') : null
+})
 const isControlType = computed(() => formAsduType.value.startsWith('C'))
 const isBitstringType = computed(() => formAsduType.value.startsWith('CBo'))
 const isSetpointType = computed(() => formAsduType.value.startsWith('CSe'))
@@ -163,6 +204,11 @@ async function handleConfirm() {
     await showAlert(t('errors.invalidIoa'))
     return
   }
+  // 同 (IOA, 类型) 重复:后端会拒绝,这里先给出明确提示(enter 键也走这条路)。
+  if (sameTypeDupExists.value) {
+    await showAlert(t('pointModal.dupIoaSameTypeError', { type: currentTypeLabel.value }))
+    return
+  }
   const isCommandOptions = isControlType.value && !isBitstringType.value
   if (isCommandOptions && formQualifierChoice.value === 'custom') {
     const q = formQualifierCustom.value
@@ -221,6 +267,12 @@ async function handleConfirm() {
               @keyup.enter="handleConfirm"
             />
             <div v-if="isEditing" class="form-hint">{{ t('pointModal.ioaEditHint') }}</div>
+            <div v-if="sameTypeDupExists" class="form-hint form-hint--error">
+              ✕ {{ t('pointModal.dupIoaSameTypeError', { type: currentTypeLabel }) }}
+            </div>
+            <div v-else-if="dupIoaTypes" class="form-hint form-hint--warn">
+              ⚠ {{ t('pointModal.dupIoaWarn', { types: dupIoaTypes }) }}
+            </div>
           </div>
 
           <div class="form-group">
@@ -303,7 +355,7 @@ async function handleConfirm() {
 
         <div class="modal-footer">
           <button class="btn btn-secondary" @click="$emit('close')" :disabled="isSaving">{{ t('common.cancel') }}</button>
-          <button class="btn btn-primary" @click="handleConfirm" :disabled="isSaving">
+          <button class="btn btn-primary" @click="handleConfirm" :disabled="isSaving || sameTypeDupExists">
             {{ isSaving ? t('pointModal.saving') : (isEditing ? t('pointModal.save') : t('pointModal.add')) }}
           </button>
         </div>
@@ -408,6 +460,16 @@ async function handleConfirm() {
   color: var(--c-overlay0);
   font-size: 11px;
   line-height: 1.4;
+}
+
+/* 同 CASDU 跨类型重复 IOA 警告(不阻断保存) */
+.form-hint--warn {
+  color: var(--c-peach);
+}
+
+/* 同 (IOA, 类型) 重复:阻断保存 */
+.form-hint--error {
+  color: var(--c-red);
 }
 
 .radio-group {
