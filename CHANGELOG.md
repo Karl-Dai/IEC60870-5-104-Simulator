@@ -2,6 +2,45 @@
 
 本项目的所有重要变更记录在此文件。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.15.4] - 2026-07-29
+
+### Highlights / 亮点
+
+- 🔁 **ASDU Type 单点 / 批量原子迁移** / **Atomic single and batch ASDU Type migration**:同一数据分类内可直接修改点位 Type ID,保留运行值、品质、时标、名称、备注、显式控制映射和活动变位任务;批量操作先在克隆站点上完整校验,任一缺失、跨分类或目标冲突都会整体回滚 / Points can migrate between Type IDs in the same data category while preserving runtime value, quality, timestamp, metadata, explicit control mappings and active mutation tasks; batch operations validate on a staged station clone and roll back completely on missing sources, incompatible categories or target collisions.
+- 🧭 **点表多选、批量设置与稳定排序** / **Point-table multi-select, batch settings and stable sorting**:按 `(IOA, Type ID)` 精确选择,支持当前筛选全选 / 反选 / 清空、IOA / 类型 / 名称 / 值稳定排序,并按监视点或控制点进入对应批量设置 / Selection is exact by `(IOA, Type ID)`, with select/invert/clear for the current filter, stable sorting by IOA/type/name/value, and dedicated batch settings for monitor or control selections.
+- 🛡️ **新服务器默认显式控制映射** / **Explicit control mapping by default for new servers**:新建服务器不再自动把控制点按同 CA + IOA 推断到监视点;升级前的配置仍使用历史兼容默认值,显式开关值完整往返 / Newly created servers no longer infer control-to-monitor mappings from matching CA + IOA; pre-existing configuration files retain the historical compatibility default and explicit choices round-trip unchanged.
+- ⏱️ **独立 Channel Retry** / **Independent Channel Retry**:主站重连固定间隔与 T0 分离,T0 继续限制单次 TCP / TLS 建连,Channel Retry 默认 5 秒、0 表示立即重试,无次数上限或指数退避 / The Master's fixed reconnect delay is separated from T0: T0 still bounds one TCP/TLS connection attempt, while Channel Retry defaults to 5 seconds, accepts 0 for immediate retry, and has no retry limit or exponential backoff.
+
+### Added 新增
+
+- 点位编辑新增目标 ASDU Type;批量类型迁移面板支持同分类监视点一次迁移,并同步跨 CA 控制映射和正在运行的模拟任务 / Point editing now accepts a target ASDU Type, while the batch migration panel migrates compatible monitor points together and follows cross-CA control mappings and running simulation tasks.
+- Point Details 显示目标 Type ID、QOC 的 QU 0–3 / 保留值、设定值 QL 0 / 自定义值以及 S/E 的任意 / 直控 / 预置后执行语义;编辑完成后详情按新键立即刷新 / Point Details now shows the target Type ID, QOC QU meanings for 0–3/reserved values, setpoint QL 0/custom values, and S/E semantics for flexible/direct/select-before-operate modes; details refresh immediately under the new key after editing.
+- 主站连接表单、配置导入导出和运行态信息新增 `channel_retry_s`;缺失字段的旧配置按 5 秒加载 / Master connection forms, config import/export and runtime information now carry `channel_retry_s`; legacy files without the field load with a 5-second value.
+
+### Changed 改进
+
+- 点表工具栏统一为「批量添加点位 / 设置值 / 批量设置」工作流;上下文菜单与工具栏共享同一选择集,控制点进入 QU/QL + S/E 批量设置,监视点进入类型迁移 / The point-table toolbar now follows one Batch Add / Set Values / Batch Settings workflow; toolbar and context menu share the same selection, routing controls to QU/QL + S/E settings and monitor points to type migration.
+- 新建服务器通过 `RemoteOperationConfig::for_new_server()` 默认关闭 `auto_map_commands`;serde `Default` 继续开启该值以兼容旧文件 / New servers use `RemoteOperationConfig::for_new_server()` with `auto_map_commands` disabled, while serde `Default` deliberately keeps it enabled for legacy-file compatibility.
+- 解析报文中的 COT 名称按数字值在前端本地化,Type ID、COT、CA、IOA、QOI、QCC、S/E、QU/QL、十六进制 APDU、证书路径、IP 地址和 OS 错误码继续作为语言无关技术字段保留 / Parsed COT names are localized in the frontend from their numeric value; Type ID, COT, CA, IOA, QOI, QCC, S/E, QU/QL, hexadecimal APDUs, certificate paths, IP addresses and OS error codes remain locale-neutral technical fields.
+
+### Fixed 修复
+
+- 英文界面不再直接显示含中文的旧后端日志 / 错误;共享对话框和两端日志面板会保留地址、数字与技术错误信息并使用本地化回退,中文界面仍保留原始完整文本 / The English UI no longer exposes legacy backend log/error text containing Chinese; shared dialogs and both log panels preserve addresses, numbers and technical error details behind a localized fallback, while the Chinese UI retains the full original text.
+- 主站连接成功和从站启停日志改为结构化可本地化事件,并提供不含中文的英文原始回退 / Master-connected and Slave server start/stop logs now use structured localizable events with English-only raw fallbacks.
+- Double Point 原始值 0 / 3 由后端统一返回数字码,前端再显示 `Intermediate / Indeterminate` 或 `中间 / 不确定`,避免语言文字影响编辑写值 / Double Point values 0/3 now leave the backend as numeric wire codes and are rendered as `Intermediate / Indeterminate` or `中间 / 不确定` in the frontend, preventing localized labels from affecting value edits.
+- 编辑点位的 IOA 或 Type ID 后,详情选择、跨 CA 映射和活动变位任务一起迁移,不再残留旧键或要求用户重新选择 / Editing a point's IOA or Type ID now migrates detail selection, cross-CA mappings and active mutation tasks together without stale keys or manual reselection.
+
+### Tests 测试
+
+- `cargo test --workspace` 全量通过,覆盖新服务器默认值 / 旧配置兼容、单点与批量迁移原子性、冲突回滚、跨 CA 映射、活动任务迁移、Channel Retry 与结构化双语日志 / The full Rust workspace test suite passes, covering new-server defaults and legacy compatibility, atomic single/batch migration, collision rollback, cross-CA mappings, active-task migration, Channel Retry and structured bilingual logs.
+- Slave 前端 23 个测试文件 168 项通过;Master 前端 8 个文件 44 项通过;两端 production build 成功 / The Slave frontend passes 168 tests across 23 files, the Master frontend passes 44 tests across 8 files, and both production builds succeed.
+- PR #50 的 Slave / Master 前端与 Ubuntu / Windows Rust 四项 CI 全部通过 / All four PR #50 checks pass: Slave frontend, Master frontend, Ubuntu Rust and Windows Rust.
+
+### Notes 说明
+
+- 本版本发布 #28 拆分出的最后一组独立增强 / 设计工作 #36–#41;原 #28 修复继续包含在本版本中 / This release ships the final independently scoped enhancements/design work #36–#41 split from #28; all original #28 fixes remain included.
+- 配置格式保持向后兼容:旧从站配置继续保留自动映射,旧主站配置的 Channel Retry 默认 5 秒 / Configuration remains backward-compatible: legacy Slave configs retain automatic mapping and legacy Master configs default Channel Retry to 5 seconds.
+
 ## [1.15.3] - 2026-07-29
 
 ### Highlights / 亮点

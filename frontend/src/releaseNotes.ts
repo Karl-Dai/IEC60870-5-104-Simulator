@@ -4,6 +4,8 @@ export const RELEASES_URL = 'https://github.com/Karl-Dai/IEC60870-5-104-Simulato
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.4 点位工作流升级 (#38-#40): 支持同分类 ASDU Type 单点/批量原子迁移,保留值、品质、时标、映射与活动变位任务;点表新增精确多选、当前筛选全选/反选、稳定列排序和批量设置入口;Point Details 补齐 Type ID、QOC/QL/QU 与 S/E 解释',
+  'v1.15.4 显式映射与本地化 (#36-#37): 新建服务器默认关闭控制点自动映射,旧配置继续保持兼容;英文界面的后端日志、错误、DPI 0/3、COT 与文档入口按当前语言显示',
   'v1.15.3 本版为主站 SOCKS5 的安全与可验证性补丁: 关闭代理时隐藏认证凭据不再进入后端配置,新增仅用于真实浏览器 E2E 的 Tauri API mock 与 Playwright 回归;子站仅同步版本号,详见 CHANGELOG.md',
   'v1.15.2 本版功能集中在主站: 新增原生 SOCKS5 代理地址 / 端口、可选用户名密码认证、本地 / 远程 DNS、配置持久化及代理后 TLS 支持;子站仅同步版本号,详见 CHANGELOG.md',
   'v1.15.1 运行参数同步与会话隔离 (#28): 右键弹窗每次打开都回读当前服务器;工具栏抽屉无草稿时回读、有未保存编辑时保留草稿供继续或 Discard;保存后立即刷新树、点表与 +TB 徽标,服务器切换、迟到响应、保存中关闭、加载失败及旧错误均按 server ID / epoch / session 隔离,未成功加载时禁止保存旧快照',
