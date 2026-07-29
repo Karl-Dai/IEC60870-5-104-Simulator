@@ -165,7 +165,9 @@ export const DEFAULT_REMOTE_OPS: RemoteOperationConfig = {
   cancel_ack_cot: 'deactivation_con',
   random_pacing: { batch_size: 2000, delay_ms: 50 },
   auto_packing: false,
-  auto_map_commands: true,
+  // New servers use explicit control-to-monitor mappings. The Rust serde
+  // default remains true only for legacy config files that predate this field.
+  auto_map_commands: false,
   ack_unmapped_commands: true,
   sbo_enforce: false,
   sbo_timeout_ms: 30000,

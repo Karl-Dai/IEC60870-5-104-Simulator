@@ -83,9 +83,13 @@ pub async fn create_server(
         let _ = t.normalize();
         server.set_protocol_timing(t).await;
     }
-    if let Some(ops) = request.remote_ops {
-        server.set_remote_ops(ops).await;
-    }
+    server
+        .set_remote_ops(
+            request
+                .remote_ops
+                .unwrap_or_else(RemoteOperationConfig::for_new_server),
+        )
+        .await;
 
     // Auto-create default station (CA=1) with pre-filled data points
     let n = request.count_per_category.unwrap_or(10);
@@ -611,6 +615,10 @@ pub struct UpdateDataPointDefinitionRequest {
     /// 引用该点的控制映射(含跨 CA)同步更新。
     #[serde(default)]
     pub new_ioa: Option<u32>,
+    /// Optional target ASDU type. The original `asdu_type` remains the source
+    /// key so changing IOA and type can be one atomic operation.
+    #[serde(default)]
+    pub new_asdu_type: Option<String>,
 }
 
 /// Update point metadata and its optional explicit control mapping without
@@ -625,37 +633,52 @@ pub(crate) async fn update_data_point_definition_impl(
         .get(&request.server_id)
         .ok_or_else(|| format!("server {} not found", request.server_id))?;
     let asdu_type = parse_asdu_type(&request.asdu_type)?;
+    let target_asdu_type = match request.new_asdu_type.as_deref() {
+        Some(value) => parse_asdu_type(value)?,
+        None => asdu_type,
+    };
     validate_control_point_options(
-        asdu_type,
+        target_asdu_type,
         request.command_qualifier,
         request.select_before_operate,
     )?;
+    let active_mutation = srv
+        .server
+        .list_point_mutations_with_params()
+        .await
+        .into_iter()
+        .find(|(ca, ioa, t, _, _)| {
+            *ca == request.common_address && *ioa == request.ioa && *t == asdu_type
+        })
+        .map(|(_, _, _, params, period_ms)| (params, period_ms));
     let mut stations = srv.server.stations.write().await;
-    let mapping = resolve_control_target(&stations, asdu_type, request.mapping.as_ref())?;
+    let mapping = resolve_control_target(&stations, target_asdu_type, request.mapping.as_ref())?;
     let target_ioa = request.new_ioa.unwrap_or(request.ioa);
     {
         let station = stations
             .get_mut(&request.common_address)
             .ok_or_else(|| format!("station CA={} not found", request.common_address))?;
-        // 先做冲突/存在性校验和改址(改址失败时不写任何字段,保持全有或全无)。
-        if target_ioa != request.ioa {
-            station
-                .move_point_ioa(request.ioa, asdu_type, target_ioa)
-                .map_err(|e| format!("failed to change IOA: {}", e))?;
-        }
+        station
+            .migrate_point(request.ioa, asdu_type, target_ioa, target_asdu_type)
+            .map_err(|e| format!("failed to migrate point: {}", e))?;
         let def = station
             .object_defs
             .iter_mut()
-            .find(|d| d.ioa == target_ioa && d.asdu_type == asdu_type)
+            .find(|d| d.ioa == target_ioa && d.asdu_type == target_asdu_type)
             .ok_or_else(|| format!("point IOA={} {} not found", request.ioa, asdu_type.name()))?;
         def.name = request.name.unwrap_or_default();
         def.comment = request.comment.unwrap_or_default();
         def.mapping = mapping;
         def.command_qualifier = request.command_qualifier;
         def.select_before_operate = request.select_before_operate;
+        station
+            .data_points
+            .mark_changed(target_ioa, target_asdu_type);
     }
-    if target_ioa != request.ioa {
-        // 其它控制点若显式映射到本点旧地址(可能跨 CA),跟随改址,避免悬空映射。
+    let key_changed = target_ioa != request.ioa || target_asdu_type != asdu_type;
+    if key_changed {
+        // Other control points can reference this point from another CA.
+        // Follow both the address and type to avoid a dangling mapping.
         for st in stations.values_mut() {
             for d in st.object_defs.iter_mut() {
                 if let Some(t) = d.mapping.as_mut() {
@@ -664,19 +687,30 @@ pub(crate) async fn update_data_point_definition_impl(
                         && t.asdu_type == asdu_type
                     {
                         t.ioa = target_ioa;
+                        t.asdu_type = target_asdu_type;
                     }
                 }
             }
         }
     }
     drop(stations);
-    if target_ioa != request.ioa {
-        // 周期变位任务按 (ca, ioa, type) 键控且循环内捕获旧 IOA,改址后无法
-        // 跟随——必须停掉旧键任务,否则它变成孤儿:表面仍在 list 里、点位却
-        // 不再变位,且日后在旧 IOA 添加同类型新点会被它误改。
+    if key_changed {
+        // Mutation tasks capture their point key. Move an active task to the
+        // new key while retaining its effective period and parameters.
         srv.server
             .stop_point_mutation(request.common_address, request.ioa, asdu_type)
             .await;
+        if let Some((params, period_ms)) = active_mutation {
+            srv.server
+                .start_point_mutation(
+                    request.common_address,
+                    target_ioa,
+                    target_asdu_type,
+                    period_ms,
+                    params,
+                )
+                .await;
+        }
     }
     Ok(())
 }
@@ -849,6 +883,129 @@ pub async fn remove_data_point(
 pub struct RemovePointTarget {
     pub ioa: u32,
     pub asdu_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct BatchMigrateDataPointTypesRequest {
+    pub server_id: String,
+    pub common_address: u16,
+    pub points: Vec<RemovePointTarget>,
+    pub target_asdu_type: String,
+}
+
+/// Atomically migrate selected monitor points to a compatible ASDU type.
+/// A staged station clone ensures that a missing source, incompatible type,
+/// or target collision leaves every point and mapping untouched.
+pub(crate) async fn batch_migrate_data_point_types_impl(
+    state: &AppState,
+    request: BatchMigrateDataPointTypesRequest,
+) -> Result<usize, String> {
+    let target_type = parse_asdu_type(&request.target_asdu_type)?;
+    if target_type.is_control()
+        || target_type.category() == iec104sim_core::types::DataCategory::System
+    {
+        return Err("batch ASDU type migration supports monitor points only".to_string());
+    }
+
+    let mut sources = Vec::with_capacity(request.points.len());
+    let mut seen = std::collections::HashSet::new();
+    for point in &request.points {
+        let source_type = parse_asdu_type(&point.asdu_type)?;
+        if source_type.is_control()
+            || source_type.category() == iec104sim_core::types::DataCategory::System
+        {
+            return Err(format!(
+                "batch ASDU type migration does not support {}",
+                source_type.name()
+            ));
+        }
+        if source_type.category() != target_type.category() {
+            return Err(format!(
+                "incompatible ASDU type migration: {} to {}",
+                source_type.name(),
+                target_type.name()
+            ));
+        }
+        if seen.insert((point.ioa, source_type)) && source_type != target_type {
+            sources.push((point.ioa, source_type));
+        }
+    }
+    if sources.is_empty() {
+        return Ok(0);
+    }
+
+    let servers = state.servers.read().await;
+    let srv = servers
+        .get(&request.server_id)
+        .ok_or_else(|| format!("server {} not found", request.server_id))?;
+    let active_tasks = srv.server.list_point_mutations_with_params().await;
+    let migrations: Vec<(u32, AsduTypeId, u32, AsduTypeId)> = sources
+        .iter()
+        .map(|&(ioa, source_type)| (ioa, source_type, ioa, target_type))
+        .collect();
+
+    let mut stations = srv.server.stations.write().await;
+    let current = stations
+        .get(&request.common_address)
+        .ok_or_else(|| format!("station CA={} not found", request.common_address))?;
+    let mut staged = current.clone();
+    for &(ioa, source_type, target_ioa, target_type) in &migrations {
+        staged
+            .migrate_point(ioa, source_type, target_ioa, target_type)
+            .map_err(|e| format!("failed to migrate IOA {ioa}: {e}"))?;
+    }
+    stations.insert(request.common_address, staged);
+
+    // Update cross-CA control references only after the whole staged station
+    // has passed validation.
+    for station in stations.values_mut() {
+        for def in &mut station.object_defs {
+            if let Some(mapping) = def.mapping.as_mut() {
+                if mapping.common_address != request.common_address {
+                    continue;
+                }
+                if let Some((_, _, target_ioa, target_type)) =
+                    migrations.iter().find(|(ioa, source_type, _, _)| {
+                        mapping.ioa == *ioa && mapping.asdu_type == *source_type
+                    })
+                {
+                    mapping.ioa = *target_ioa;
+                    mapping.asdu_type = *target_type;
+                }
+            }
+        }
+    }
+    drop(stations);
+
+    for &(ioa, source_type, target_ioa, target_type) in &migrations {
+        let active = active_tasks.iter().find(|(ca, task_ioa, task_type, _, _)| {
+            *ca == request.common_address && *task_ioa == ioa && *task_type == source_type
+        });
+        srv.server
+            .stop_point_mutation(request.common_address, ioa, source_type)
+            .await;
+        if let Some((_, _, _, params, period_ms)) = active {
+            srv.server
+                .start_point_mutation(
+                    request.common_address,
+                    target_ioa,
+                    target_type,
+                    *period_ms,
+                    *params,
+                )
+                .await;
+        }
+    }
+    Ok(migrations.len())
+}
+
+#[tauri::command]
+pub async fn batch_migrate_data_point_types(
+    state: State<'_, AppState>,
+    request: BatchMigrateDataPointTypesRequest,
+) -> Result<usize, String> {
+    batch_migrate_data_point_types_impl(state.inner(), request).await
 }
 
 /// Remove several points in one locked write. Returns the count removed.
@@ -2094,6 +2251,7 @@ mod tests {
             common_address: 1,
             ioa: 2,
             new_ioa,
+            new_asdu_type: None,
             asdu_type: "MDpNa1".to_string(),
             name: None,
             comment: None,
@@ -2128,10 +2286,10 @@ mod tests {
         assert_eq!(ctrl.mapping.unwrap().ioa, 200, "遥控映射须跟随改址");
     }
 
-    // 改址须停掉旧 (ca, ioa, type) 键控的周期变位任务,否则任务成孤儿:
-    // list 里仍显示、点位却不再变位,旧 IOA 上再添同类型点会被它误改。
+    // 改址须把旧 (ca, ioa, type) 键控的周期变位任务迁到新键，既不能
+    // 留下会误改旧 IOA 的孤儿任务，也不能让正在运行的模拟静默丢失。
     #[tokio::test]
-    async fn rename_stops_stale_point_mutation() {
+    async fn rename_migrates_point_mutation_to_new_key() {
         let server = SlaveServer::new(test_transport(free_port()));
         let mut station = Station::new(1, "st");
         station.add_point(ctl_def(5, AsduTypeId::MSpNa1)).unwrap();
@@ -2152,6 +2310,7 @@ mod tests {
             common_address: 1,
             ioa: 5,
             new_ioa: Some(50),
+            new_asdu_type: None,
             asdu_type: "MSpNa1".to_string(),
             name: None,
             comment: None,
@@ -2164,7 +2323,283 @@ mod tests {
 
         let servers = state.servers.read().await;
         let mutations = servers.get("s1").unwrap().server.list_point_mutations().await;
-        assert!(mutations.is_empty(), "改址后旧键变位任务须被停止: {mutations:?}");
+        assert_eq!(mutations.len(), 1, "改址后活动任务须保留: {mutations:?}");
+        assert_eq!(mutations[0].1, 50, "活动任务须迁到新 IOA");
+        assert_eq!(mutations[0].2, AsduTypeId::MSpNa1);
+    }
+
+    #[tokio::test]
+    async fn update_definition_migrates_type_mapping_value_and_active_task() {
+        let server = SlaveServer::new(test_transport(free_port()));
+        let mut monitor_station = Station::new(1, "monitor");
+        let mut monitor = ctl_def(5, AsduTypeId::MSpNa1);
+        monitor.name = "breaker".to_string();
+        monitor.comment = "bay 1".to_string();
+        monitor_station.add_point(monitor).unwrap();
+        {
+            let point = monitor_station
+                .data_points
+                .get_mut(5, AsduTypeId::MSpNa1)
+                .unwrap();
+            point.value = DataPointValue::SinglePoint { value: true };
+            point.quality = QualityFlags {
+                iv: true,
+                ..Default::default()
+            };
+        }
+        server.add_station(monitor_station).await.unwrap();
+
+        let mut control_station = Station::new(2, "control");
+        let mut control = ctl_def(50, AsduTypeId::CScNa1);
+        control.mapping = Some(ControlTarget {
+            common_address: 1,
+            ioa: 5,
+            asdu_type: AsduTypeId::MSpNa1,
+        });
+        control_station.add_point(control).unwrap();
+        server.add_station(control_station).await.unwrap();
+        server
+            .start_point_mutation(
+                1,
+                5,
+                AsduTypeId::MSpNa1,
+                750,
+                MutationParams {
+                    mode: MutationMode::Flip,
+                    step: 1.0,
+                    min: 0.0,
+                    max: 1.0,
+                },
+            )
+            .await;
+        let state = state_with_server(server, "s1").await;
+
+        update_data_point_definition_impl(
+            &state,
+            UpdateDataPointDefinitionRequest {
+                server_id: "s1".to_string(),
+                common_address: 1,
+                ioa: 5,
+                new_ioa: None,
+                asdu_type: "MSpNa1".to_string(),
+                new_asdu_type: Some("MSpTb1".to_string()),
+                name: Some("breaker renamed".to_string()),
+                comment: Some("migrated".to_string()),
+                mapping: None,
+                command_qualifier: None,
+                select_before_operate: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let servers = state.servers.read().await;
+        let srv = &servers.get("s1").unwrap().server;
+        {
+            let stations = srv.stations.read().await;
+            let monitor_station = stations.get(&1).unwrap();
+            assert!(!monitor_station.data_points.contains(5, AsduTypeId::MSpNa1));
+            let point = monitor_station
+                .data_points
+                .get(5, AsduTypeId::MSpTb1)
+                .unwrap();
+            assert_eq!(point.value, DataPointValue::SinglePoint { value: true });
+            assert!(point.quality.iv);
+            let def = monitor_station
+                .object_defs
+                .iter()
+                .find(|d| d.ioa == 5 && d.asdu_type == AsduTypeId::MSpTb1)
+                .unwrap();
+            assert_eq!(def.name, "breaker renamed");
+            assert_eq!(def.comment, "migrated");
+
+            let control = stations
+                .get(&2)
+                .unwrap()
+                .object_defs
+                .iter()
+                .find(|d| d.asdu_type == AsduTypeId::CScNa1)
+                .unwrap();
+            assert_eq!(control.mapping.unwrap().asdu_type, AsduTypeId::MSpTb1);
+        }
+        let tasks = srv.list_point_mutations_with_params().await;
+        assert!(tasks.iter().any(|(ca, ioa, t, _, period)| {
+            *ca == 1 && *ioa == 5 && *t == AsduTypeId::MSpTb1 && *period == 750
+        }));
+        assert!(!tasks.iter().any(|(_, _, t, _, _)| *t == AsduTypeId::MSpNa1));
+    }
+
+    #[tokio::test]
+    async fn incompatible_single_type_migration_is_rejected_without_changes() {
+        let server = SlaveServer::new(test_transport(free_port()));
+        let mut station = Station::new(1, "st");
+        station.add_point(ctl_def(5, AsduTypeId::MSpNa1)).unwrap();
+        server.add_station(station).await.unwrap();
+        let state = state_with_server(server, "s1").await;
+
+        let error = update_data_point_definition_impl(
+            &state,
+            UpdateDataPointDefinitionRequest {
+                server_id: "s1".to_string(),
+                common_address: 1,
+                ioa: 5,
+                new_ioa: None,
+                asdu_type: "MSpNa1".to_string(),
+                new_asdu_type: Some("MMeNc1".to_string()),
+                name: Some("must not change".to_string()),
+                comment: None,
+                mapping: None,
+                command_qualifier: None,
+                select_before_operate: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("incompatible"), "unexpected error: {error}");
+
+        let servers = state.servers.read().await;
+        let stations = servers.get("s1").unwrap().server.stations.read().await;
+        let station = stations.get(&1).unwrap();
+        assert!(station.data_points.contains(5, AsduTypeId::MSpNa1));
+        assert!(!station.data_points.contains(5, AsduTypeId::MMeNc1));
+        assert_eq!(
+            station
+                .object_defs
+                .iter()
+                .find(|d| d.ioa == 5 && d.asdu_type == AsduTypeId::MSpNa1)
+                .unwrap()
+                .name,
+            ""
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_type_migration_rolls_back_on_collision() {
+        let server = SlaveServer::new(test_transport(free_port()));
+        let mut station = Station::new(1, "st");
+        station.add_point(ctl_def(1, AsduTypeId::MSpNa1)).unwrap();
+        station.add_point(ctl_def(2, AsduTypeId::MSpNa1)).unwrap();
+        station.add_point(ctl_def(2, AsduTypeId::MSpTb1)).unwrap();
+        server.add_station(station).await.unwrap();
+        let state = state_with_server(server, "s1").await;
+
+        let error = batch_migrate_data_point_types_impl(
+            &state,
+            BatchMigrateDataPointTypesRequest {
+                server_id: "s1".to_string(),
+                common_address: 1,
+                points: vec![
+                    RemovePointTarget {
+                        ioa: 1,
+                        asdu_type: "MSpNa1".to_string(),
+                    },
+                    RemovePointTarget {
+                        ioa: 2,
+                        asdu_type: "MSpNa1".to_string(),
+                    },
+                ],
+                target_asdu_type: "MSpTb1".to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("already exists"),
+            "unexpected error: {error}"
+        );
+        let servers = state.servers.read().await;
+        let stations = servers.get("s1").unwrap().server.stations.read().await;
+        let station = stations.get(&1).unwrap();
+        assert!(station.data_points.contains(1, AsduTypeId::MSpNa1));
+        assert!(!station.data_points.contains(1, AsduTypeId::MSpTb1));
+        assert!(station.data_points.contains(2, AsduTypeId::MSpNa1));
+        assert!(station.data_points.contains(2, AsduTypeId::MSpTb1));
+    }
+
+    #[tokio::test]
+    async fn batch_type_migration_updates_cross_ca_mapping_and_tasks() {
+        let server = SlaveServer::new(test_transport(free_port()));
+        let mut monitor_station = Station::new(1, "monitor");
+        monitor_station
+            .add_point(ctl_def(10, AsduTypeId::MMeNc1))
+            .unwrap();
+        monitor_station
+            .add_point(ctl_def(11, AsduTypeId::MMeTc1))
+            .unwrap();
+        server.add_station(monitor_station).await.unwrap();
+        let mut control_station = Station::new(2, "control");
+        let mut control = ctl_def(50, AsduTypeId::CSeNc1);
+        control.mapping = Some(ControlTarget {
+            common_address: 1,
+            ioa: 10,
+            asdu_type: AsduTypeId::MMeNc1,
+        });
+        control_station.add_point(control).unwrap();
+        server.add_station(control_station).await.unwrap();
+        server
+            .start_point_mutation(
+                1,
+                10,
+                AsduTypeId::MMeNc1,
+                900,
+                MutationParams {
+                    mode: MutationMode::Increment,
+                    step: 1.5,
+                    min: -5.0,
+                    max: 5.0,
+                },
+            )
+            .await;
+        let state = state_with_server(server, "s1").await;
+
+        let changed = batch_migrate_data_point_types_impl(
+            &state,
+            BatchMigrateDataPointTypesRequest {
+                server_id: "s1".to_string(),
+                common_address: 1,
+                points: vec![
+                    RemovePointTarget {
+                        ioa: 10,
+                        asdu_type: "MMeNc1".to_string(),
+                    },
+                    RemovePointTarget {
+                        ioa: 11,
+                        asdu_type: "MMeTc1".to_string(),
+                    },
+                ],
+                target_asdu_type: "MMeTf1".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(changed, 2);
+
+        let servers = state.servers.read().await;
+        let srv = &servers.get("s1").unwrap().server;
+        {
+            let stations = srv.stations.read().await;
+            let station = stations.get(&1).unwrap();
+            for ioa in [10, 11] {
+                assert!(station.data_points.contains(ioa, AsduTypeId::MMeTf1));
+            }
+            let control = stations
+                .get(&2)
+                .unwrap()
+                .object_defs
+                .iter()
+                .find(|d| d.asdu_type == AsduTypeId::CSeNc1)
+                .unwrap();
+            assert_eq!(control.mapping.unwrap().asdu_type, AsduTypeId::MMeTf1);
+        }
+        let tasks = srv.list_point_mutations_with_params().await;
+        assert!(tasks.iter().any(|(ca, ioa, t, params, period)| {
+            *ca == 1
+                && *ioa == 10
+                && *t == AsduTypeId::MMeTf1
+                && *period == 900
+                && params.mode == MutationMode::Increment
+                && params.step == 1.5
+        }));
     }
 
     // issue #28:批量修改遥控 QU/SE——非控制点逐点跳过,更新须对增量轮询可见。

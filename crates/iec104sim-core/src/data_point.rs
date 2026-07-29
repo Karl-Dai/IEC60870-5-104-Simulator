@@ -47,10 +47,12 @@ impl DataPointValue {
         match self {
             Self::SinglePoint { value } => if *value { "ON".to_string() } else { "OFF".to_string() },
             Self::DoublePoint { value } => match value {
-                0 => "中间".to_string(),
+                // Keep the wire-level DPI language-neutral. Frontends
+                // localize 0/3 as Intermediate/Indeterminate.
+                0 => "0".to_string(),
                 1 => "OFF".to_string(),
                 2 => "ON".to_string(),
-                3 => "不确定".to_string(),
+                3 => "3".to_string(),
                 _ => format!("{}", value),
             },
             Self::StepPosition { value, transient } => {
@@ -405,5 +407,13 @@ mod tests {
         // mark_changed_by_category resolves the point by category.
         map.mark_changed_by_category(2, DataCategory::SinglePoint);
         assert_eq!(map.changed_since(baseline).len(), 2);
+    }
+
+    #[test]
+    fn double_point_display_is_language_neutral() {
+        assert_eq!(DataPointValue::DoublePoint { value: 0 }.display(), "0");
+        assert_eq!(DataPointValue::DoublePoint { value: 1 }.display(), "OFF");
+        assert_eq!(DataPointValue::DoublePoint { value: 2 }.display(), "ON");
+        assert_eq!(DataPointValue::DoublePoint { value: 3 }.display(), "3");
     }
 }

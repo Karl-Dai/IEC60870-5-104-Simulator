@@ -30,6 +30,8 @@ export interface ConnectionInfo {
   /** IEC 60870-5-104 protocol parameters echoed back from the backend so the
    *  edit dialog can pre-fill without re-parsing local form state. */
   t0: number
+  /** Fixed delay between reconnect attempts; independent from the T0 timeout. */
+  channel_retry_s: number
   t1: number
   t2: number
   t3: number

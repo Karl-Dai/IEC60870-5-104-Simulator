@@ -25,14 +25,17 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{
   close: []
-  added: []
+  added: [point: { ioa: number; asdu_type: string }]
 }>()
 
-// 编辑模式类型锁定,列出全部以便回显;新增且有分类上下文时只列同分类类型
-// (issue #28:C_SC 分类下只出现 45/58,不再是全部 37 种)。
+// 新增和编辑都只显示当前分类内、运行值表示兼容的类型。这样修改 Type
+// 只迁移 NA/TA/TB 等传输格式，不会把 SinglePoint 误改成测量值。
 const ASDU_TYPES = computed(() => {
-  const source = !isEditing.value && props.category
-    ? ASDU_TYPE_OPTIONS.filter(o => o.category === props.category)
+  const category = isEditing.value
+    ? props.point?.category
+    : props.category
+  const source = category
+    ? ASDU_TYPE_OPTIONS.filter(o => o.category === category)
     : ASDU_TYPE_OPTIONS
   return source.map(o => ({ value: o.value, label: t(o.labelKey), typeId: o.typeId }))
 })
@@ -60,15 +63,22 @@ const currentTypeLabel = computed(() => {
 // 同 (IOA, 类型) 重复(issue #28):后端 add_point_strict 会拒绝(旧实现静默覆盖,
 // 名称/备注/QU-QL/S-E/映射被整份冲掉)。这里前置拦截并禁用确认按钮 —— 与下面
 // 「跨类型共用 IOA」的橙色警示区分:跨类型=允许但警示,同类型=拒绝。
-// 编辑模式类型锁定;未改址时命中的就是自身,不算重复。
+// 编辑模式只排除原始 `(IOA, Type)` 自身；若在相同 IOA 改成一个已经
+// 存在的目标 Type，仍必须识别并阻止覆盖。
 const sameTypeDupExists = computed<boolean>(() => {
   const ioa = formIoa.value
   if (typeof ioa !== 'number' || !Number.isInteger(ioa)) return false
   const self = findAsduTypeOption(formAsduType.value)
   if (!self) return false
-  if (isEditing.value && props.point && ioa === props.point.ioa) return false
   return (props.existingPoints ?? []).some(
-    p => p.ioa === ioa && findAsduTypeOption(p.asdu_type)?.value === self.value,
+    p => {
+      const existingType = findAsduTypeOption(p.asdu_type)?.value
+      const isOriginalSelf = isEditing.value
+        && props.point
+        && p.ioa === props.point.ioa
+        && existingType === normalizeAsduType(props.point.asdu_type)
+      return !isOriginalSelf && p.ioa === ioa && existingType === self.value
+    },
   )
 })
 
@@ -175,7 +185,7 @@ watch(() => props.visible, (visible) => {
     // formAsduType 变化时由其 watcher 触发加载,这里只补未变化的情况,避免重复请求
     if (formAsduType.value === prevAsduType) loadMappingTargets()
   }
-})
+}, { immediate: true })
 
 watch(formAsduType, () => {
   if (!isEditing.value) mappingKey.value = ''
@@ -224,7 +234,9 @@ async function handleConfirm() {
         common_address: props.commonAddress,
         // 编辑模式 ioa 是定位键(原地址),改址走 new_ioa(issue #28:IOA 可编辑)。
         ioa: isEditing.value ? props.point!.ioa : formIoa.value,
-        asdu_type: formAsduType.value,
+        asdu_type: isEditing.value
+          ? normalizeAsduType(props.point!.asdu_type)
+          : formAsduType.value,
         name: formName.value || null,
         comment: formComment.value || null,
         mapping: mapping.value,
@@ -233,9 +245,10 @@ async function handleConfirm() {
     }
     if (isEditing.value) {
       request.new_ioa = formIoa.value
+      request.new_asdu_type = formAsduType.value
     }
     await invoke(isEditing.value ? 'update_data_point_definition' : 'add_data_point', { request })
-    emit('added')
+    emit('added', { ioa: formIoa.value, asdu_type: formAsduType.value })
   } catch (e) {
     await showAlert(String(e))
   } finally {
@@ -277,7 +290,7 @@ async function handleConfirm() {
 
           <div class="form-group">
             <label class="form-label">{{ t('pointModal.asduTypeLabel') }}</label>
-            <select v-model="formAsduType" class="form-select" :disabled="isEditing">
+            <select v-model="formAsduType" class="form-select">
               <option v-for="opt in ASDU_TYPES" :key="opt.value" :value="opt.value">
                 {{ opt.label }} · {{ opt.typeId }}
               </option>

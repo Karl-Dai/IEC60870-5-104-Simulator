@@ -78,6 +78,7 @@ export type DictShape = {
     protocolParams: string
     protocolParamsHint: string
     unitSeconds: string
+    channelRetry: string
     defaultQoi: string
     defaultQcc: string
     interrogatePeriod: string
@@ -163,6 +164,8 @@ export type DictShape = {
     export: string
     exporting: string
     exportFailed: string
+    backendDetailFallback: string
+    masterConnected: string
     singleCommand: string
     doubleCommand: string
     stepCommand: string
@@ -253,6 +256,7 @@ export type DictShape = {
     titleAlert: string
     titleConfirm: string
     titlePrompt: string
+    backendMessageFallback: string
   }
   errors: {
     connectFailed: string
@@ -287,6 +291,7 @@ export type DictShape = {
     typeRow: string
     cotNegative: string
     cotTest: string
+    cotNames: Record<string, string>
     oa: string
     ca: string
     objects: string
@@ -379,8 +384,9 @@ const dict: DictShape = {
     acceptInvalidCerts: '接受无效证书（测试用）',
     create: '创建',
     protocolParams: 'IEC 104 协议参数',
-    protocolParamsHint: 't0/t1/t2/t3/k/w 遵循 IEC 60870-5-104 §5.2；周期为 0 时不进行自动召唤',
+    protocolParamsHint: 'T0 是单次连接建立超时；Channel Retry 是失败后再次尝试前的固定等待（0 表示立即重试，无次数上限或退避）。t1/t2/t3/k/w 遵循 IEC 60870-5-104 §5.2；召唤周期为 0 时禁用自动召唤。',
     unitSeconds: '秒',
+    channelRetry: 'Channel Retry（重试间隔）',
     defaultQoi: '默认 QOI（总召唤限定词）',
     defaultQcc: '默认 QCC（计数量召唤限定词）',
     interrogatePeriod: '总召唤周期 (秒，0=关闭)',
@@ -477,6 +483,8 @@ const dict: DictShape = {
     export: '导出',
     exporting: '导出中…',
     exportFailed: '导出 CSV 失败',
+    backendDetailFallback: '后端事件（技术上下文：{technical}）',
+    masterConnected: '已连接到 {address}（{transport}）',
     singleCommand: '单点命令 IOA={ioa} val={val}',
     doubleCommand: '双点命令 IOA={ioa} val={val}',
     stepCommand: '步调节命令 IOA={ioa} val={val}',
@@ -608,6 +616,7 @@ const dict: DictShape = {
     titleAlert: '提示',
     titleConfirm: '确认',
     titlePrompt: '输入',
+    backendMessageFallback: '后端操作失败（技术上下文：{technical}）',
   },
   errors: {
     connectFailed: '连接失败: {err}\n将每 {sec} 秒自动重试,点击「断开」可停止。',
@@ -642,6 +651,11 @@ const dict: DictShape = {
     typeRow: '类型',
     cotNegative: 'P/N=否定',
     cotTest: 'T=测试',
+    cotNames: {
+      '1': '周期', '2': '背景扫描', '3': '自发', '4': '初始化',
+      '5': '请求', '6': '激活', '7': '激活确认', '8': '停止激活',
+      '9': '停止确认', '10': '激活终止', '20': '总召唤响应', '37': '计数量召唤响应',
+    },
     oa: 'OA (源地址)',
     ca: 'CA (公共地址)',
     objects: '信息对象',

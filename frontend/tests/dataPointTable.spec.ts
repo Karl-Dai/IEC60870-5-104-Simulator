@@ -229,4 +229,128 @@ describe('DataPointTable 子站数据表', () => {
     expect(document.body.querySelector('.sim-drawer')).toBeNull()
     wrapper.unmount()
   })
+
+  it('同一 IOA 的不同 Type ID 可通过首列复选框分别选择', async () => {
+    const sameIoa = [
+      dp(10, 'M_SP_NA_1', 'single_point', '0'),
+      dp(10, 'M_SP_TB_1', 'single_point', '1'),
+    ]
+    invokeMock.mockResolvedValue({ points: sameIoa, seq: 1, total_count: 2 })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+    const vm = wrapper.vm as unknown as { selectedRows: DataPointInfo[] }
+    const checkboxes = wrapper.findAll('tbody input[type="checkbox"]')
+
+    await checkboxes[0].trigger('click')
+    await checkboxes[1].trigger('click')
+    expect(vm.selectedRows.map(point => point.asdu_type))
+      .toEqual(['M_SP_NA_1', 'M_SP_TB_1'])
+
+    await checkboxes[0].trigger('click')
+    expect(vm.selectedRows.map(point => point.asdu_type)).toEqual(['M_SP_TB_1'])
+    wrapper.unmount()
+  })
+
+  it('全选、反选和清空只作用于当前筛选结果', async () => {
+    const points = [
+      dp(1, 'M_SP_NA_1', 'single_point', '0'),
+      dp(2, 'M_SP_NA_1', 'single_point', '1'),
+      dp(3, 'M_DP_NA_1', 'double_point', '2'),
+    ]
+    invokeMock.mockResolvedValue({ points, seq: 1, total_count: 3 })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+    refs.selectedCategory.value = 'single_point'
+    await nextTick()
+    const vm = wrapper.vm as unknown as { selectedRows: DataPointInfo[] }
+    const actions = wrapper.findAll('.selection-btn')
+
+    await actions[0].trigger('click')
+    expect(vm.selectedRows.map(point => point.ioa)).toEqual([1, 2])
+
+    await wrapper.findAll('tbody input[type="checkbox"]')[0].trigger('click')
+    await actions[1].trigger('click')
+    expect(vm.selectedRows.map(point => point.ioa)).toEqual([1])
+
+    await actions[2].trigger('click')
+    expect(vm.selectedRows).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('IOA、名称、类型和值列支持稳定的升降序排列', async () => {
+    const points = [
+      { ...dp(3, 'M_ME_NC_1', 'float_measured', '10'), name: 'same' },
+      { ...dp(1, 'M_SP_NA_1', 'single_point', '2'), name: 'same' },
+      { ...dp(2, 'M_DP_NA_1', 'double_point', '1'), name: 'alpha' },
+    ]
+    invokeMock.mockResolvedValue({ points, seq: 1, total_count: 3 })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+    const vm = wrapper.vm as unknown as { filteredPoints: DataPointInfo[] }
+    const sortable = wrapper.findAll('th.sortable')
+
+    expect(vm.filteredPoints.map(point => point.ioa)).toEqual([1, 2, 3])
+    await sortable[0].trigger('click')
+    expect(vm.filteredPoints.map(point => point.ioa)).toEqual([3, 2, 1])
+
+    await sortable[2].trigger('click')
+    expect(vm.filteredPoints.map(point => point.ioa)).toEqual([2, 1, 3])
+    await sortable[2].trigger('click')
+    expect(vm.filteredPoints.map(point => point.ioa)).toEqual([1, 3, 2])
+
+    await sortable[3].trigger('click')
+    expect(vm.filteredPoints.map(point => point.ioa)).toEqual([2, 1, 3])
+    wrapper.unmount()
+  })
+
+  it('工具栏使用明确按钮名称，并从选中监视点打开批量设置', async () => {
+    invokeMock.mockResolvedValue({ points: [A, B], seq: 1, total_count: 2 })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+
+    expect(wrapper.findAll('.add-btn.batch:not(.simulation)').map(button => button.text()))
+      .toEqual(['Add Batch Points', 'Set Values', 'Batch Settings'])
+
+    await wrapper.findAll('tbody input[type="checkbox"]')[0].trigger('click')
+    const settings = wrapper.find('.add-btn.settings')
+    expect((settings.element as HTMLButtonElement).disabled).toBe(false)
+    await settings.trigger('click')
+    expect((wrapper.vm as unknown as { showBatchTypeModal: boolean }).showBatchTypeModal).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('编辑保存后按新 IOA/Type 重新选中并立即向详情面板发出刷新', async () => {
+    let backend = [A]
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'list_data_points_since') {
+        return Promise.resolve({ points: backend, seq: 1, total_count: backend.length })
+      }
+      if (command === 'get_remote_operation_config') {
+        return Promise.resolve({ sync_tb_by_category: {} })
+      }
+      return Promise.resolve([])
+    })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+    await wrapper.find('tbody input[type="checkbox"]').trigger('click')
+
+    backend = [{ ...A, ioa: 20, asdu_type: 'M_SP_TB_1', name: 'migrated' }]
+    const vm = wrapper.vm as unknown as {
+      handlePointEdited: (target: { ioa: number; asdu_type: string }) => Promise<void>
+      selectedRows: DataPointInfo[]
+    }
+    await vm.handlePointEdited({ ioa: 20, asdu_type: 'MSpTb1' })
+    await flushPromises()
+
+    expect(vm.selectedRows).toHaveLength(1)
+    expect(vm.selectedRows[0]).toMatchObject({ ioa: 20, asdu_type: 'M_SP_TB_1' })
+    const lastSelection = wrapper.emitted('point-select')?.at(-1)?.[0]
+    expect(lastSelection).toEqual([{
+      ioa: 20,
+      asdu_type: 'M_SP_TB_1',
+      category: '单点 (SP)',
+      value: 'on',
+    }])
+    wrapper.unmount()
+  })
 })

@@ -124,4 +124,21 @@ describe('NewConnectionModal SOCKS5', () => {
     expect((findInput(wrapper, '密码（可选）').element as HTMLInputElement).value).toBe('')
     expect((findInput(wrapper, '用户名（可选）').element as HTMLInputElement).value).toBe('alice')
   })
+
+  it('submits Channel Retry independently from T0', async () => {
+    invokeMock.mockResolvedValue({ timing_corrections: [] })
+    const { wrapper } = mountModal()
+
+    await findInput(wrapper, 't0').setValue('30')
+    await findInput(wrapper, 'Channel Retry（重试间隔）').setValue('7')
+    await wrapper.find('.btn-primary').trigger('click')
+    await flushPromises()
+
+    expect(invokeMock).toHaveBeenCalledWith('create_connection', {
+      request: expect.objectContaining({
+        t0: 30,
+        channel_retry_s: 7,
+      }),
+    })
+  })
 })

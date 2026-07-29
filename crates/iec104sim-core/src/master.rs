@@ -15,6 +15,25 @@ fn active_lc(lc: &Option<Arc<LogCollector>>) -> Option<&Arc<LogCollector>> {
     lc.as_ref().filter(|l| l.is_enabled())
 }
 
+fn master_connected_log(addr: &str, is_tls: bool) -> LogEntry {
+    LogEntry::new(
+        Direction::Rx,
+        FrameLabel::ConnectionEvent,
+        format!(
+            "Connected to {}{}",
+            addr,
+            if is_tls { " (TLS)" } else { "" }
+        ),
+    )
+    .with_detail_event(
+        "masterConnected",
+        serde_json::json!({
+            "address": addr,
+            "transport": if is_tls { "TLS" } else { "TCP" },
+        }),
+    )
+}
+
 /// A control command response received from the slave.
 #[derive(Debug, Clone)]
 pub struct ControlResponse {
@@ -539,6 +558,13 @@ pub struct MasterConfig {
     /// t0: connection establishment timeout (seconds).
     #[serde(default = "default_t0")]
     pub t0: u32,
+    /// Fixed pause between automatic reconnect attempts (seconds).
+    ///
+    /// This is intentionally independent from `t0`: `t0` bounds one TCP/TLS
+    /// connection attempt, while this value paces the next attempt after a
+    /// failure. `0` retries immediately; there is no retry limit or backoff.
+    #[serde(default = "default_channel_retry_s")]
+    pub channel_retry_s: u32,
     /// t1: timeout waiting for ACK of sent I-frame or TESTFR_CON (seconds).
     #[serde(default = "default_t1")]
     pub t1: u32,
@@ -576,6 +602,7 @@ pub struct MasterConfig {
 }
 
 fn default_t0() -> u32 { 30 }
+pub fn default_channel_retry_s() -> u32 { 5 }
 fn default_t1() -> u32 { 15 }
 fn default_t2() -> u32 { 10 }
 fn default_t3() -> u32 { 20 }
@@ -595,6 +622,7 @@ impl Default for MasterConfig {
             tls: TlsConfig::default(),
             socks5: Socks5Config::default(),
             t0: default_t0(),
+            channel_retry_s: default_channel_retry_s(),
             t1: default_t1(),
             t2: default_t2(),
             t3: default_t3(),
@@ -1130,11 +1158,7 @@ impl MasterConnection {
         }
 
         if let Some(lc) = active_lc(&self.log_collector) {
-            lc.try_add(LogEntry::new(
-                Direction::Rx,
-                FrameLabel::ConnectionEvent,
-                format!("已连接到 {}{}", addr, if is_tls { " (TLS)" } else { "" }),
-            ));
+            lc.try_add(master_connected_log(&addr, is_tls));
         }
 
         self.spawn_periodic_poller();
@@ -3044,6 +3068,7 @@ mod tests {
     fn test_master_config_protocol_defaults() {
         let cfg = MasterConfig::default();
         assert_eq!(cfg.t0, 30);
+        assert_eq!(cfg.channel_retry_s, 5);
         assert_eq!(cfg.t1, 15);
         assert_eq!(cfg.t2, 10);
         assert_eq!(cfg.t3, 20);
@@ -3061,9 +3086,23 @@ mod tests {
         let json = r#"{"target_address":"127.0.0.1","port":2404,"common_address":1,"timeout_ms":3000}"#;
         let cfg: MasterConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.t1, 15); // pulled from default_t1
+        assert_eq!(cfg.channel_retry_s, 5);
         assert_eq!(cfg.k, 12);
         assert_eq!(cfg.default_qoi, 20);
         assert_eq!(cfg.broadcast_address, 0xFFFF);
+    }
+
+    #[test]
+    fn connected_log_has_localizable_event_and_english_fallback() {
+        let entry = master_connected_log("127.0.0.1:2404", true);
+        assert!(!entry
+            .detail
+            .chars()
+            .any(|c| ('\u{3400}'..='\u{9fff}').contains(&c)));
+        let event = entry.detail_event.expect("structured connection event");
+        assert_eq!(event.kind, "masterConnected");
+        assert_eq!(event.payload["address"], "127.0.0.1:2404");
+        assert_eq!(event.payload["transport"], "TLS");
     }
 
     #[test]

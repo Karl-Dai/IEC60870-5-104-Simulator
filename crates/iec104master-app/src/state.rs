@@ -77,6 +77,7 @@ pub struct ConnectionInfo {
     // Echo back the protocol parameters so the frontend can pre-fill the
     // edit dialog without re-parsing the persisted form state.
     pub t0: u32,
+    pub channel_retry_s: u32,
     pub t1: u32,
     pub t2: u32,
     pub t3: u32,

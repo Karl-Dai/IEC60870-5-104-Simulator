@@ -10,6 +10,29 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as AsyncTcpListener, TcpStream as AsyncTcpStream};
 use tokio::sync::RwLock;
 
+fn slave_server_log(started: bool, address: Option<&str>, is_tls: bool) -> LogEntry {
+    let detail = if started {
+        format!(
+            "Server started: {}{}",
+            address.unwrap_or("-"),
+            if is_tls { " (TLS)" } else { "" },
+        )
+    } else {
+        "Server stopped".to_string()
+    };
+    LogEntry::new(Direction::Tx, FrameLabel::ConnectionEvent, detail).with_detail_event(
+        if started {
+            "serverStarted"
+        } else {
+            "serverStopped"
+        },
+        serde_json::json!({
+            "address": address.unwrap_or("-"),
+            "transport": if is_tls { "TLS" } else { "TCP" },
+        }),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // TLS Configuration
 // ---------------------------------------------------------------------------
@@ -245,6 +268,21 @@ impl Default for RemoteOperationConfig {
     }
 }
 
+impl RemoteOperationConfig {
+    /// Defaults for a server created by the current UI/API.
+    ///
+    /// `Default` deliberately keeps the historical automatic mapping enabled
+    /// because serde uses it when loading configuration files written before
+    /// `auto_map_commands` existed. New servers should instead require an
+    /// explicit control-to-monitor mapping.
+    pub fn for_new_server() -> Self {
+        Self {
+            auto_map_commands: false,
+            ..Self::default()
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Stream Abstraction (for blocking TLS path)
 // ---------------------------------------------------------------------------
@@ -452,24 +490,56 @@ impl Station {
         asdu_type: AsduTypeId,
         new_ioa: u32,
     ) -> Result<(), SlaveError> {
-        if new_ioa == ioa {
+        self.migrate_point(ioa, asdu_type, new_ioa, asdu_type)
+    }
+
+    /// Atomically migrate a point definition and runtime value to another
+    /// `(IOA, ASDU type)` key. Only types in the same data category are
+    /// compatible, so the runtime value representation remains valid while
+    /// value, quality, timestamp, metadata, and command settings are preserved.
+    pub fn migrate_point(
+        &mut self,
+        ioa: u32,
+        asdu_type: AsduTypeId,
+        new_ioa: u32,
+        new_asdu_type: AsduTypeId,
+    ) -> Result<(), SlaveError> {
+        if new_ioa == ioa && new_asdu_type == asdu_type {
             return Ok(());
         }
-        if self.data_points.contains(new_ioa, asdu_type)
-            || self.object_defs.iter().any(|d| d.ioa == new_ioa && d.asdu_type == asdu_type)
+        if asdu_type.category() != new_asdu_type.category() {
+            return Err(SlaveError::IncompatiblePointType {
+                from: asdu_type,
+                to: new_asdu_type,
+            });
+        }
+        let def_index = self.object_defs
+            .iter()
+            .position(|d| d.ioa == ioa && d.asdu_type == asdu_type)
+            .ok_or(SlaveError::IoaNotFound(ioa))?;
+        if !self.data_points.contains(ioa, asdu_type) {
+            return Err(SlaveError::IoaNotFound(ioa));
+        }
+        if self.data_points.contains(new_ioa, new_asdu_type)
+            || self.object_defs.iter().enumerate().any(|(index, d)| {
+                index != def_index && d.ioa == new_ioa && d.asdu_type == new_asdu_type
+            })
         {
             return Err(SlaveError::DuplicateIoa(new_ioa));
         }
-        let def = self
-            .object_defs
-            .iter_mut()
-            .find(|d| d.ioa == ioa && d.asdu_type == asdu_type)
-            .ok_or(SlaveError::IoaNotFound(ioa))?;
+
+        // All fallible checks are complete before either collection changes.
+        let mut point = self.data_points
+            .remove(ioa, asdu_type)
+            .expect("source point checked above");
+        point.ioa = new_ioa;
+        point.asdu_type = new_asdu_type;
+        self.data_points.insert(point);
+
+        let def = &mut self.object_defs[def_index];
         def.ioa = new_ioa;
-        if let Some(mut point) = self.data_points.remove(ioa, asdu_type) {
-            point.ioa = new_ioa;
-            self.data_points.insert(point);
-        }
+        def.asdu_type = new_asdu_type;
+        def.category = new_asdu_type.category();
         Ok(())
     }
 
@@ -1682,10 +1752,7 @@ impl SlaveServer {
         self.server_handle = Some(handle);
         self.state = ServerState::Running;
         if let Some(ref lc) = self.log_collector {
-            lc.try_add(LogEntry::new(
-                Direction::Tx, FrameLabel::ConnectionEvent,
-                format!("服务器启动: {}{}", addr_str, if is_tls { " (TLS)" } else { "" }),
-            ));
+            lc.try_add(slave_server_log(true, Some(&addr_str), is_tls));
         }
         Ok(())
     }
@@ -1724,10 +1791,7 @@ impl SlaveServer {
         }
         self.state = ServerState::Stopped;
         if let Some(ref lc) = self.log_collector {
-            lc.try_add(LogEntry::new(
-                Direction::Tx, FrameLabel::ConnectionEvent,
-                "服务器停止".to_string(),
-            ));
+            lc.try_add(slave_server_log(false, None, false));
         }
         Ok(())
     }
@@ -3082,6 +3146,8 @@ async fn do_queue_spontaneous(
 pub enum SlaveError {
     #[error("IOA {0} already exists")] DuplicateIoa(u32),
     #[error("IOA {0} not found")] IoaNotFound(u32),
+    #[error("cannot migrate point type from {from:?} to {to:?}: data categories are incompatible")]
+    IncompatiblePointType { from: AsduTypeId, to: AsduTypeId },
     #[error("station CA={0} already exists")] DuplicateStation(u16),
     #[error("station CA={0} not found")] StationNotFound(u16),
     #[error("server is already running")] AlreadyRunning,
@@ -4356,6 +4422,19 @@ mod tests {
             decide_clock_sync(&frame, false),
             ClockSyncDecision::Malformed { reason: "vsq" }
         );
+    }
+
+    #[test]
+    fn server_lifecycle_log_has_localizable_event_and_english_fallback() {
+        let entry = slave_server_log(true, Some("0.0.0.0:2404"), false);
+        assert!(!entry
+            .detail
+            .chars()
+            .any(|c| ('\u{3400}'..='\u{9fff}').contains(&c)));
+        let event = entry.detail_event.expect("structured server event");
+        assert_eq!(event.kind, "serverStarted");
+        assert_eq!(event.payload["address"], "0.0.0.0:2404");
+        assert_eq!(event.payload["transport"], "TCP");
     }
 
     #[test]

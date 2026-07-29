@@ -8,6 +8,7 @@ import { formatDataPointValue } from '../utils/dataPointValue'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
 import EmptyState from '@shared/components/EmptyState.vue'
 import QualityIndicator from '@shared/components/QualityIndicator.vue'
+import { formatAsduTypeWithId } from '../constants/asduTypes'
 
 const { t } = useI18n()
 const { showAlert } = inject<{ showAlert: typeof ShowAlert }>(dialogKey)!
@@ -34,6 +35,35 @@ const quality = computed(() => ({
 const isMeasured = computed(() => pointDetail.value?.asdu_type?.startsWith('M_ME') ?? false)
 // M_ME_ND_1 不携带品质描述词:整组品质开关隐藏,只显示中性占位
 const isNoQuality = computed(() => pointDetail.value?.asdu_type === 'M_ME_ND_1')
+const hasCommandOptions = computed(() => {
+  const type = pointDetail.value?.asdu_type ?? ''
+  return type.startsWith('C_') && !type.startsWith('C_BO')
+})
+const isSetpoint = computed(() => pointDetail.value?.asdu_type.startsWith('C_SE') ?? false)
+const qualifierLabel = computed(() =>
+  isSetpoint.value ? t('valuePanel.qualifierQl') : t('valuePanel.qualifierQoc'),
+)
+const qualifierDescription = computed(() => {
+  const qualifier = pointDetail.value?.command_qualifier
+  if (qualifier == null) return t('valuePanel.qualifierAny')
+  if (isSetpoint.value) {
+    return qualifier === 0
+      ? t('valuePanel.ql0')
+      : t('valuePanel.qlOther', { value: qualifier })
+  }
+  const meanings: Record<number, string> = {
+    0: t('valuePanel.qoc0'),
+    1: t('valuePanel.qoc1'),
+    2: t('valuePanel.qoc2'),
+    3: t('valuePanel.qoc3'),
+  }
+  return meanings[qualifier] ?? t('valuePanel.qocReserved', { value: qualifier })
+})
+const executionModeDescription = computed(() => {
+  const sbo = pointDetail.value?.select_before_operate
+  if (sbo == null) return t('valuePanel.executionFlexible')
+  return sbo ? t('valuePanel.executionSbo') : t('valuePanel.executionDirect')
+})
 
 async function toggleQuality(bit: 'ov' | 'bl' | 'sb' | 'nt' | 'iv') {
   const p = pointDetail.value
@@ -222,7 +252,7 @@ function handleEditKeydown(e: KeyboardEvent) {
         </div>
         <div class="detail-row">
           <span class="detail-label">{{ t('valuePanel.asduType') }}</span>
-          <span class="detail-value">{{ pointDetail.asdu_type }}</span>
+          <span class="detail-value mono">{{ formatAsduTypeWithId(pointDetail.asdu_type) }}</span>
         </div>
         <div class="detail-row">
           <span class="detail-label">{{ t('valuePanel.category') }}</span>
@@ -238,8 +268,22 @@ function handleEditKeydown(e: KeyboardEvent) {
         </div>
         <div v-if="pointDetail.mapping_common_address != null" class="detail-row">
           <span class="detail-label">{{ t('valuePanel.mapping') }}</span>
-          <span class="detail-value mono">CA {{ pointDetail.mapping_common_address }} · IOA {{ pointDetail.mapping_ioa }} · {{ pointDetail.mapping_asdu_type }}</span>
+          <span class="detail-value mono mapping-value">
+            CA {{ pointDetail.mapping_common_address }}
+            · IOA {{ pointDetail.mapping_ioa }}
+            · {{ formatAsduTypeWithId(pointDetail.mapping_asdu_type ?? '') }}
+          </span>
         </div>
+        <template v-if="hasCommandOptions">
+          <div class="detail-row">
+            <span class="detail-label">{{ qualifierLabel }}</span>
+            <span class="detail-value">{{ qualifierDescription }}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">{{ t('valuePanel.executionMode') }}</span>
+            <span class="detail-value">{{ executionModeDescription }}</span>
+          </div>
+        </template>
       </div>
 
       <div class="detail-section">
@@ -374,6 +418,11 @@ function handleEditKeydown(e: KeyboardEvent) {
 
 .detail-value.mono {
   font-family: var(--font-mono);
+}
+
+.detail-value.mapping-value {
+  max-width: 70%;
+  white-space: normal;
 }
 
 .detail-value.editable {

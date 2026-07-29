@@ -24,6 +24,7 @@ type CreateConnectionRequest = {
   accept_invalid_certs?: boolean
   tls_version?: ConnectionInfo['tls_version']
   t0?: number
+  channel_retry_s?: number
   t1?: number
   t2?: number
   t3?: number
@@ -88,6 +89,7 @@ function connectionFromRequest(request: CreateConnectionRequest): ConnectionInfo
     accept_invalid_certs: request.accept_invalid_certs ?? false,
     tls_version: request.tls_version ?? 'auto',
     t0: request.t0 ?? 30,
+    channel_retry_s: request.channel_retry_s ?? 5,
     t1: request.t1 ?? 15,
     t2: request.t2 ?? 10,
     t3: request.t3 ?? 20,

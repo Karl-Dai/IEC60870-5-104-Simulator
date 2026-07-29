@@ -1,8 +1,8 @@
-//! 端到端验证:主站建立连接后被对端掉线,应在 T0 间隔后自动重连。
+//! 端到端验证:主站建立连接后被对端掉线,应在 Channel Retry 间隔后自动重连。
 //!
 //! 这是 `commands.rs::create_connection` 里 state supervisor 接线的纯 Rust
 //! 等价版(不依赖 tauri::AppHandle):真实 `MasterConnection` + 真实 TCP server,
-//! supervisor 用 `run_state_supervisor` 驱动,on_drop 闭包按 T0 锁 map 重连。
+//! supervisor 用 `run_state_supervisor` 驱动,on_drop 闭包按 Channel Retry 锁 map 重连。
 //!
 //! Fake server 接受 conn1(主站到达 Connected)后立刻掉线,再接受 conn2(重连),
 //! 断言主站重新回到 Connected 且 server 收到了第二条连接。
@@ -28,7 +28,7 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
-async fn master_auto_reconnects_after_peer_drop_at_t0_interval() {
+async fn master_auto_reconnects_after_peer_drop_at_channel_retry_interval() {
     let port = free_port();
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
@@ -53,12 +53,13 @@ async fn master_auto_reconnects_after_peer_drop_at_t0_interval() {
 
     sleep(Duration::from_millis(200)).await;
 
-    // t0=1 → 重连间隔 1s,让测试快。plain TCP(tls 关闭)。
+    // T0 保持 30s；Channel Retry=1s → 独立重连间隔 1s。
     let connection = MasterConnection::new(MasterConfig {
         target_address: "127.0.0.1".into(),
         port,
         common_address: 1,
-        t0: 1,
+        t0: 30,
+        channel_retry_s: 1,
         ..Default::default()
     });
     let state_rx = connection.subscribe_state();
@@ -71,7 +72,7 @@ async fn master_auto_reconnects_after_peer_drop_at_t0_interval() {
         .await
         .insert(id.clone(), MockConnState { connection });
 
-    // supervisor:on_drop = 读 T0 → sleep T0 → 锁 map 重连。
+    // supervisor:on_drop = 读 Channel Retry → 固定 sleep → 锁 map 重连。
     let conns_for_drop = connections.clone();
     let id_for_drop = id.clone();
     let supervisor = tokio::spawn(run_state_supervisor(
@@ -81,14 +82,14 @@ async fn master_auto_reconnects_after_peer_drop_at_t0_interval() {
             let conns = conns_for_drop.clone();
             let id = id_for_drop.clone();
             async move {
-                let t0 = {
+                let retry_delay_s = {
                     let g = conns.read().await;
                     match g.get(&id) {
-                        Some(c) => c.connection.config().t0,
+                        Some(c) => c.connection.config().channel_retry_s,
                         None => return,
                     }
                 };
-                sleep(Duration::from_secs(t0 as u64)).await;
+                sleep(Duration::from_secs(retry_delay_s as u64)).await;
                 let mut g = conns.write().await;
                 if let Some(c) = g.get_mut(&id) {
                     if c.connection.state() != MasterState::Connected {
@@ -105,7 +106,7 @@ async fn master_auto_reconnects_after_peer_drop_at_t0_interval() {
         g.get_mut(&id).unwrap().connection.connect().await.unwrap();
     }
 
-    // conn1 掉线检测(~100ms 轮询)+ T0=1s 重连等待 + 余量。
+    // conn1 掉线检测(~100ms 轮询)+ Channel Retry=1s + 余量。
     sleep(Duration::from_secs(3)).await;
 
     let final_state = {

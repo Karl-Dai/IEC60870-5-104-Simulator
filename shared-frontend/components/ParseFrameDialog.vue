@@ -137,6 +137,12 @@ function formatTimestamp(t: ParsedObject['timestamp']): string {
 const hasTimestamp = computed(() => {
   return result.value?.asdu?.objects.some(o => o.timestamp) ?? false
 })
+
+function localizedCotName(cot: number, backendName: string): string {
+  const key = `parseFrame.cotNames.${cot}`
+  const localized = t(key)
+  return localized === key ? backendName : localized
+}
 </script>
 
 <template>
@@ -211,7 +217,7 @@ const hasTimestamp = computed(() => {
                   <tr>
                     <th>COT</th>
                     <td>
-                      <code>{{ result.asdu.cot }}</code> · {{ result.asdu.cot_name }}
+                      <code>{{ result.asdu.cot }}</code> · {{ localizedCotName(result.asdu.cot, result.asdu.cot_name) }}
                       <span v-if="result.asdu.negative" class="flag-neg">{{ t('parseFrame.cotNegative') }}</span>
                       <span v-if="result.asdu.test" class="flag-test">{{ t('parseFrame.cotTest') }}</span>
                     </td>

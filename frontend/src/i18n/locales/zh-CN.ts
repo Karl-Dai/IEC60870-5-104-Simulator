@@ -189,6 +189,14 @@ export type DictShape = {
     derivedTbTitle: string
     dupIoaTitle: string
     batchControlOptions: string
+    batchTypeMigration: string
+    batchSettings: string
+    selectFiltered: string
+    invertFiltered: string
+    clearSelection: string
+    selectedCount: string
+    sortAscending: string
+    sortDescending: string
   }
   simulationSettings: {
     open: string
@@ -277,6 +285,16 @@ export type DictShape = {
     appliedResult: string
     qualifierRange: string
   }
+  batchType: {
+    title: string
+    selectionHint: string
+    targetType: string
+    preserveHint: string
+    changedCount: string
+    apply: string
+    appliedResult: string
+    failed: string
+  }
   batchWrite: {
     title: string
     typeLabel: string
@@ -310,6 +328,20 @@ export type DictShape = {
     name: string
     comment: string
     mapping: string
+    qualifierQoc: string
+    qualifierQl: string
+    qualifierAny: string
+    qoc0: string
+    qoc1: string
+    qoc2: string
+    qoc3: string
+    qocReserved: string
+    ql0: string
+    qlOther: string
+    executionMode: string
+    executionFlexible: string
+    executionDirect: string
+    executionSbo: string
     sectionCurrent: string
     value: string
     quality: string
@@ -348,6 +380,16 @@ export type DictShape = {
     titleRefresh: string
     titleClear: string
     titleExport: string
+    backendDetailFallback: string
+    serverStarted: string
+    serverStopped: string
+    cmdRejected: string
+    cmdCancel: string
+    cmdSelect: string
+    cmdExecute: string
+    cmdMappingBroken: string
+    cmdMalformed: string
+    unknownType: string
     /** 后端 detail_event 键:时钟同步应答开关关闭导致的拒收(payload: ca)。 */
     clockSyncDisabled: string
     clockSyncInvalidCot: string
@@ -367,6 +409,7 @@ export type DictShape = {
     titleAlert: string
     titleConfirm: string
     titlePrompt: string
+    backendMessageFallback: string
   }
   errors: {
     invalidPort: string
@@ -407,6 +450,7 @@ export type DictShape = {
     typeRow: string
     cotNegative: string
     cotTest: string
+    cotNames: Record<string, string>
     oa: string
     ca: string
     objects: string
@@ -650,8 +694,8 @@ const dict: DictShape = {
     countSuffix: '个数据点',
     searchPlaceholder: '搜索 IOA / 名称...',
     addPointTitle: '添加数据点',
-    batchAdd: '批量',
-    batchWrite: '写值',
+    batchAdd: '批量添加点位',
+    batchWrite: '设置值',
     chooseStation: '选择一个站',
     chooseStationHint: '在左侧导航树中点击一个站查看数据点',
     noPoints: '该站暂无数据点',
@@ -678,6 +722,14 @@ const dict: DictShape = {
     derivedTbTitle: '变位时将追加派生帧 {tb}（「变位同步上送 TB」已开启；点位自身 Type ID 不变）',
     dupIoaTitle: 'IOA {ioa} 与本站其他类型共用：{types}。同一 CASDU 内 IOA 应唯一，请编辑该点修改 IOA。',
     batchControlOptions: '批量设置控制参数',
+    batchTypeMigration: '批量修改 ASDU 类型',
+    batchSettings: '批量设置',
+    selectFiltered: '全选当前筛选',
+    invertFiltered: '反选当前筛选',
+    clearSelection: '清空选择',
+    selectedCount: '已选 {count}',
+    sortAscending: '升序排列',
+    sortDescending: '降序排列',
   },
   simulationSettings: {
     open: '模拟设置',
@@ -766,6 +818,16 @@ const dict: DictShape = {
     appliedResult: '已更新 {applied}/{total} 个控制点',
     qualifierRange: '限定词超出范围（0..{max}）',
   },
+  batchType: {
+    title: '批量修改 ASDU 类型',
+    selectionHint: '将迁移当前选中的 {count} 个监视点。',
+    targetType: '目标 ASDU 类型',
+    preserveHint: '仅可选择同一值族的兼容类型；运行值、品质、名称、备注、控制映射和活动模拟任务都会保留。',
+    changedCount: '将迁移 {count} 个点位',
+    apply: '迁移',
+    appliedResult: '已迁移 {applied} 个点位',
+    failed: '批量修改类型失败：{error}',
+  },
   batchWrite: {
     title: '按 IOA 批量写值',
     typeLabel: '类型',
@@ -799,6 +861,20 @@ const dict: DictShape = {
     name: '名称',
     comment: '备注',
     mapping: '控制映射',
+    qualifierQoc: 'QOC / QU 限定词',
+    qualifierQl: 'QL 限定词',
+    qualifierAny: '任意（未限制）',
+    qoc0: '0 — 无附加定义',
+    qoc1: '1 — 短脉冲',
+    qoc2: '2 — 长脉冲',
+    qoc3: '3 — 持续输出',
+    qocReserved: '{value} — 保留或厂商自定义',
+    ql0: '0 — 无附加定义',
+    qlOther: '{value} — 保留或应用自定义',
+    executionMode: '执行模式 (S/E)',
+    executionFlexible: '任意（直接执行或选择后执行）',
+    executionDirect: '直接执行',
+    executionSbo: '选择后执行 (SBO)',
     sectionCurrent: '当前值',
     value: '值',
     quality: '品质',
@@ -843,6 +919,16 @@ const dict: DictShape = {
     titleRefresh: '刷新',
     titleClear: '清除',
     titleExport: '导出CSV',
+    backendDetailFallback: '后端事件（技术上下文：{technical}）',
+    serverStarted: '服务器已启动：{address}（{transport}）',
+    serverStopped: '服务器已停止',
+    cmdRejected: '{type} 已拒绝（原因={reason}，COT={cot}）IOA={ioa} CA={ca}',
+    cmdCancel: '{type} 停止激活确认 IOA={ioa} CA={ca}',
+    cmdSelect: '{type} 选择确认 IOA={ioa} QU/QL={qu} CA={ca}',
+    cmdExecute: '{type} 已执行 val={val} QU/QL={qu} IOA={ioa} CA={ca} target={target}',
+    cmdMappingBroken: '{type} 映射目标不存在 IOA={ioa} CA={ca}',
+    cmdMalformed: '畸形控制报文 type={type} len={len} CA={ca}',
+    unknownType: '未知 ASDU Type ID={type} 已拒绝（COT=44 否定确认）CA={ca} 原 COT={cot}',
     clockSyncDisabled: '时钟同步 拒收（应答已禁用，COT=7 + P/N） CA={ca}',
     clockSyncInvalidCot: '时钟同步 拒收（非法 COT={cot}，回 COT=45 + P/N） CA={ca}',
     clockSyncInvalidIoa: '时钟同步 拒收（IOA={ioa}，应为 0；回 COT=47 + P/N） CA={ca}',
@@ -861,6 +947,7 @@ const dict: DictShape = {
     titleAlert: '提示',
     titleConfirm: '确认',
     titlePrompt: '输入',
+    backendMessageFallback: '后端操作失败（技术上下文：{technical}）',
   },
   errors: {
     invalidPort: '请输入有效的端口号 (1-65535)',
@@ -901,6 +988,11 @@ const dict: DictShape = {
     typeRow: '类型',
     cotNegative: 'P/N=否定',
     cotTest: 'T=测试',
+    cotNames: {
+      '1': '周期', '2': '背景扫描', '3': '自发', '4': '初始化',
+      '5': '请求', '6': '激活', '7': '激活确认', '8': '停止激活',
+      '9': '停止确认', '10': '激活终止', '20': '总召唤响应', '37': '计数量召唤响应',
+    },
     oa: 'OA (源地址)',
     ca: 'CA (公共地址)',
     objects: '信息对象',

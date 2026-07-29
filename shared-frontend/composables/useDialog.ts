@@ -1,7 +1,8 @@
 import { ref, readonly } from 'vue'
 import { useI18n } from '../i18n'
+import { localizeLegacyBackendText } from '../i18n/backendText'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 export type DialogMode = 'alert' | 'confirm' | 'prompt'
 
@@ -26,13 +27,19 @@ const state = ref<DialogState>({
 let resolvePromise: ((value: string | boolean | null) => void) | null = null
 
 function open(mode: DialogMode, message: string, defaultValue = ''): Promise<any> {
+  const localizedMessage = localizeLegacyBackendText(
+    message,
+    locale.value,
+    t,
+    'appDialog.backendMessageFallback',
+  )
   return new Promise((resolve) => {
     resolvePromise = resolve
     state.value = {
       visible: true,
       mode,
       title: mode === 'alert' ? t('appDialog.titleAlert') : mode === 'confirm' ? t('appDialog.titleConfirm') : t('appDialog.titlePrompt'),
-      message,
+      message: localizedMessage,
       defaultValue,
       inputValue: defaultValue,
     }

@@ -38,6 +38,7 @@ type NewConnForm = {
   accept_invalid_certs: boolean
   tls_version: 'auto' | 'tls12_only' | 'tls13_only'
   t0: number
+  channel_retry_s: number
   t1: number
   t2: number
   t3: number
@@ -66,6 +67,7 @@ const defaultForm = (): NewConnForm => ({
   accept_invalid_certs: false,
   tls_version: 'auto',
   t0: 30,
+  channel_retry_s: 5,
   t1: 15,
   t2: 10,
   t3: 20,
@@ -191,6 +193,7 @@ async function openEditConnection(connId: string) {
       accept_invalid_certs: conn.accept_invalid_certs ?? lf.accept_invalid_certs,
       tls_version: conn.tls_version || lf.tls_version,
       t0: conn.t0,
+      channel_retry_s: conn.channel_retry_s ?? lf.channel_retry_s,
       t1: conn.t1,
       t2: conn.t2,
       t3: conn.t3,
@@ -277,6 +280,7 @@ async function createConnection() {
         accept_invalid_certs: form.value.accept_invalid_certs,
         tls_version: form.value.use_tls ? form.value.tls_version : undefined,
         t0: form.value.t0,
+        channel_retry_s: form.value.channel_retry_s,
         t1: form.value.t1,
         t2: form.value.t2,
         t3: form.value.t3,
@@ -302,12 +306,13 @@ async function createConnection() {
 }
 
 type ProtoFieldKey =
-  | 't0' | 't1' | 't2' | 't3' | 'k' | 'w'
+  | 't0' | 'channel_retry_s' | 't1' | 't2' | 't3' | 'k' | 'w'
   | 'default_qoi' | 'default_qcc'
   | 'interrogate_period_s' | 'counter_interrogate_period_s'
 type ProtoField = { key: ProtoFieldKey; label: string; min: number; max?: number; unit?: 'sec' }
 const protoFields: ProtoField[] = [
   { key: 't0', label: 't0', unit: 'sec', min: 1, max: 255 },
+  { key: 'channel_retry_s', label: 'newConn.channelRetry', unit: 'sec', min: 0, max: 86400 },
   { key: 't1', label: 't1', unit: 'sec', min: 1, max: 255 },
   { key: 't2', label: 't2', unit: 'sec', min: 1, max: 255 },
   { key: 't3', label: 't3', unit: 'sec', min: 1, max: 255 },

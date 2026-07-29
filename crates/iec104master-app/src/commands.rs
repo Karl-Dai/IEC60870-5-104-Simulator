@@ -58,6 +58,8 @@ pub struct CreateConnectionRequest {
     // ---- IEC 60870-5-104 protocol parameters (all optional; defaults from
     //      MasterConfig when absent). Frontend sends these as JSON numbers. ----
     pub t0: Option<u32>,
+    /// Fixed delay between automatic reconnect attempts. Independent from T0.
+    pub channel_retry_s: Option<u32>,
     pub t1: Option<u32>,
     pub t2: Option<u32>,
     pub t3: Option<u32>,
@@ -129,6 +131,7 @@ impl ConnectionInfo {
             accept_invalid_certs: cfg.tls.accept_invalid_certs,
             tls_version: tls_version_str(cfg.tls.version).to_string(),
             t0: cfg.t0,
+            channel_retry_s: cfg.channel_retry_s,
             t1: cfg.t1,
             t2: cfg.t2,
             t3: cfg.t3,
@@ -208,6 +211,7 @@ pub async fn create_connection(
     };
     // Override the per-protocol params from the request when supplied.
     if let Some(v) = request.t0 { config.t0 = v; }
+    if let Some(v) = request.channel_retry_s { config.channel_retry_s = v; }
     if let Some(v) = request.t1 { config.t1 = v; }
     if let Some(v) = request.t2 { config.t2 = v; }
     if let Some(v) = request.t3 { config.t3 = v; }
@@ -233,7 +237,7 @@ pub async fn create_connection(
     connection.set_configured_cas(common_addresses.clone());
 
     // 状态督导任务:把 core 的状态变化转发给前端,并在连接建立过之后异常
-    // 掉线时按 T0 间隔自动重连。连接被删除(`delete_connection`)→ state_tx
+    // 掉线时按 Channel Retry 固定间隔自动重连。连接被删除(`delete_connection`)→ state_tx
     // 关闭 → 任务退出。重连决策逻辑见 `crate::reconnect`。
     let state_rx = connection.subscribe_state();
     let emit_handle = app_handle.clone();
@@ -257,17 +261,17 @@ pub async fn create_connection(
             async move {
                 use iec104sim_core::master::MasterState;
                 use tauri::Manager;
-                // 掉线后实时取当前 T0(跟随配置变更),等 T0 再重连。读 t0 时
-                // 不持锁过 sleep,避免阻塞其他连接操作。
-                let t0 = {
+                // T0 只限制单次连接建立；Channel Retry 单独控制失败后的
+                // 固定等待。读取时不持锁过 sleep,避免阻塞其他连接操作。
+                let retry_delay_s = {
                     let st: State<'_, AppState> = app.state();
                     let conns = st.connections.read().await;
                     match conns.get(&id) {
-                        Some(c) => c.connection.config().t0,
+                        Some(c) => c.connection.config().channel_retry_s,
                         None => return,
                     }
                 };
-                tokio::time::sleep(std::time::Duration::from_secs(t0 as u64)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(retry_delay_s as u64)).await;
                 let st: State<'_, AppState> = app.state();
                 let mut conns = st.connections.write().await;
                 if let Some(c) = conns.get_mut(&id) {
@@ -1186,6 +1190,7 @@ pub async fn save_config(
                 common_addresses: cs.common_addresses.clone(),
                 timeout_ms: cfg.timeout_ms,
                 t0: cfg.t0,
+                channel_retry_s: cfg.channel_retry_s,
                 t1: cfg.t1,
                 t2: cfg.t2,
                 t3: cfg.t3,
@@ -1246,6 +1251,7 @@ pub async fn load_config(
             accept_invalid_certs: Some(conn.accept_invalid_certs),
             tls_version: Some(conn.tls_version),
             t0: Some(conn.t0),
+            channel_retry_s: Some(conn.channel_retry_s),
             t1: Some(conn.t1),
             t2: Some(conn.t2),
             t3: Some(conn.t3),

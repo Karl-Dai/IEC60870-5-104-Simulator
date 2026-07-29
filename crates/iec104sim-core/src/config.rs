@@ -84,6 +84,9 @@ pub struct MasterConnectionConfig {
     pub common_addresses: Vec<u16>,
     pub timeout_ms: u64,
     pub t0: u32,
+    /// Fixed delay between reconnect attempts. Old files default to 5 s.
+    #[serde(default = "crate::master::default_channel_retry_s")]
+    pub channel_retry_s: u32,
     pub t1: u32,
     pub t2: u32,
     pub t3: u32,
@@ -193,6 +196,10 @@ mod tests {
         let s = &parsed.servers[0];
         assert_eq!(s.protocol_timing.t0, 30);
         assert!(s.remote_ops.answer_general_interrogation);
+        assert!(
+            s.remote_ops.auto_map_commands,
+            "legacy files that predate remote_ops keep automatic mapping"
+        );
     }
 
     #[test]
@@ -212,8 +219,39 @@ mod tests {
         let parsed = SlaveConfigFile::from_json(legacy).unwrap();
         let ops = &parsed.servers[0].remote_ops;
         assert!(!ops.answer_commands);
+        assert!(
+            ops.auto_map_commands,
+            "legacy partial remote_ops keep the historical automatic mapping"
+        );
         assert!(ops.answer_clock_sync);
         assert!(ops.send_act_term);
+    }
+
+    #[test]
+    fn slave_file_preserves_explicit_auto_mapping_choice() {
+        for enabled in [false, true] {
+            let mut remote_ops = RemoteOperationConfig::default();
+            remote_ops.auto_map_commands = enabled;
+            let file = SlaveConfigFile::new(vec![SlaveServerConfig {
+                bind_address: "0.0.0.0".to_string(),
+                port: 2404,
+                stations: vec![],
+                protocol_timing: ProtocolTimingConfig::default(),
+                remote_ops,
+            }]);
+
+            let parsed = SlaveConfigFile::from_json(&file.to_json().unwrap()).unwrap();
+            assert_eq!(parsed.servers[0].remote_ops.auto_map_commands, enabled);
+        }
+    }
+
+    #[test]
+    fn new_server_defaults_to_explicit_mapping() {
+        assert!(!RemoteOperationConfig::for_new_server().auto_map_commands);
+        assert!(
+            RemoteOperationConfig::default().auto_map_commands,
+            "serde compatibility default must remain enabled"
+        );
     }
 
     #[test]
@@ -245,6 +283,7 @@ mod tests {
             common_addresses: vec![1, 2],
             timeout_ms: 3000,
             t0: 30, t1: 15, t2: 10, t3: 20, k: 12, w: 8,
+            channel_retry_s: 7,
             default_qoi: 20, default_qcc: 5,
             interrogate_period_s: 0,
             counter_interrogate_period_s: 0,
@@ -283,6 +322,7 @@ mod tests {
         assert_eq!(c.socks5.username, "operator");
         assert_eq!(c.socks5.password, "secret");
         assert!(c.socks5.remote_dns);
+        assert_eq!(c.channel_retry_s, 7);
     }
 
     #[test]
@@ -307,6 +347,7 @@ mod tests {
         assert!(!c.socks5.enabled);
         assert_eq!(c.socks5.proxy_port, 1080);
         assert!(c.socks5.remote_dns);
+        assert_eq!(c.channel_retry_s, 5);
     }
 
     #[test]

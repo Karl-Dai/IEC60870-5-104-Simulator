@@ -2,8 +2,8 @@
 //!
 //! 在 `create_connection` 里随每个连接 spawn 一个本任务,职责有二:
 //!   1. 把 core 的 `MasterState` 变化转发给前端(`emit`);
-//!   2. 一旦连接**建立过之后**掉线(Disconnected/Error),按 T0 间隔自动重连
-//!      (`on_drop`,内部封装"等 T0 + 调 connect")。
+//!   2. 一旦连接**建立过之后**掉线(Disconnected/Error),按独立的
+//!      Channel Retry 固定间隔自动重连(`on_drop`,内部封装等待 + connect)。
 //!
 //! 督导只在**首次 Connected 之后**才武装重连:首次连接失败(填错 IP/端口)
 //! 仍按 Error 暴露给用户,不静默无限重试。武装之后,任何进入 Disconnected/
@@ -32,7 +32,7 @@ pub async fn run_state_supervisor<E, R, RF>(
         match state {
             MasterState::Connected => armed = true,
             MasterState::Disconnected | MasterState::Error if armed => {
-                // on_drop 内部封装"等 T0 + 重连";其间 connect() 驱动的
+                // on_drop 内部封装"等 Channel Retry + 重连";其间 connect() 驱动的
                 // Connecting/Connected 变化会在下一轮 changed() 被取到。
                 on_drop().await;
             }

@@ -16,8 +16,9 @@ import DataPointModal from './DataPointModal.vue'
 import BatchAddModal from './BatchAddModal.vue'
 import BatchWriteModal from './BatchWriteModal.vue'
 import BatchControlOptionsModal from './BatchControlOptionsModal.vue'
+import BatchTypeMigrationModal from './BatchTypeMigrationModal.vue'
 import SimulationSettingsDrawer from './SimulationSettingsDrawer.vue'
-import { formatAsduTypeWithId } from '../constants/asduTypes'
+import { findAsduTypeOption, formatAsduTypeWithId } from '../constants/asduTypes'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
 import EmptyState from '@shared/components/EmptyState.vue'
 import QualityIndicator from '@shared/components/QualityIndicator.vue'
@@ -63,7 +64,11 @@ const editingPointDefinition = ref<DataPointInfo | null>(null)
 const showBatchModal = ref(false)
 const showBatchWriteModal = ref(false)
 const showBatchControlModal = ref(false)
+const showBatchTypeModal = ref(false)
 const showSimulationDrawer = ref(false)
+type SortKey = 'ioa' | 'asdu_type' | 'name' | 'value'
+const sortKey = ref<SortKey>('ioa')
+const sortDirection = ref<'asc' | 'desc'>('asc')
 // 默认写值类型：取当前分类过滤命中的首个点的 asdu_type；无过滤则空（弹窗回退首个可用类型）。
 const batchWriteDefaultType = computed(() => {
   if (!selectedCategory.value) return ''
@@ -419,17 +424,53 @@ const filteredPoints = computed(() => {
     }
   }
   const q = searchQuery.value.trim()
-  if (!q) return pts
   if (/^\d+$/.test(q)) {
     const num = Number(q)
-    return pts.filter(p => p.ioa === num || p.ioa.toString().includes(q))
+    pts = pts.filter(p => p.ioa === num || p.ioa.toString().includes(q))
+  } else if (q) {
+    const lower = q.toLowerCase()
+    pts = pts.filter(p =>
+      p.name.toLowerCase().includes(lower)
+      || p.asdu_type.toLowerCase().includes(lower)
+    )
   }
-  const lower = q.toLowerCase()
-  return pts.filter(p =>
-    p.name.toLowerCase().includes(lower)
-    || p.asdu_type.toLowerCase().includes(lower)
-  )
+
+  const direction = sortDirection.value === 'asc' ? 1 : -1
+  return pts
+    .map((point, index) => ({ point, index }))
+    .sort((left, right) => {
+      const a = left.point[sortKey.value]
+      const b = right.point[sortKey.value]
+      let compared: number
+      if (sortKey.value === 'ioa') {
+        compared = Number(a) - Number(b)
+      } else if (sortKey.value === 'value') {
+        const aNumber = Number(a)
+        const bNumber = Number(b)
+        compared = Number.isFinite(aNumber) && Number.isFinite(bNumber)
+          ? aNumber - bNumber
+          : String(a).localeCompare(String(b), undefined, { numeric: true })
+      } else {
+        compared = String(a).localeCompare(String(b), undefined, { numeric: true })
+      }
+      return compared === 0 ? left.index - right.index : compared * direction
+    })
+    .map(({ point }) => point)
 })
+
+function toggleSort(key: SortKey) {
+  if (sortKey.value === key) {
+    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortKey.value = key
+    sortDirection.value = 'asc'
+  }
+}
+
+function sortGlyph(key: SortKey) {
+  if (sortKey.value !== key) return ''
+  return sortDirection.value === 'asc' ? '▲' : '▼'
+}
 
 // Virtual scroll state
 const totalHeight = computed(() => filteredPoints.value.length * ROW_HEIGHT)
@@ -456,7 +497,8 @@ function onScroll(e: Event) {
 }
 
 function isSelected(point: DataPointInfo): boolean {
-  return selectedRows.value.some(r => r.ioa === point.ioa)
+  const key = pointKey(point.ioa, point.asdu_type)
+  return selectedRows.value.some(r => pointKey(r.ioa, r.asdu_type) === key)
 }
 
 function selectRow(e: MouseEvent, point: DataPointInfo) {
@@ -470,7 +512,10 @@ function selectRow(e: MouseEvent, point: DataPointInfo) {
     selectedRows.value = list.slice(start, end + 1)
   } else if (isCtrl) {
     if (isSelected(point)) {
-      selectedRows.value = selectedRows.value.filter(r => r.ioa !== point.ioa)
+      const key = pointKey(point.ioa, point.asdu_type)
+      selectedRows.value = selectedRows.value.filter(
+        r => pointKey(r.ioa, r.asdu_type) !== key,
+      )
     } else {
       selectedRows.value = [...selectedRows.value, point]
     }
@@ -480,6 +525,40 @@ function selectRow(e: MouseEvent, point: DataPointInfo) {
     lastClickedIndex.value = idx
   }
 
+  emitSelection()
+}
+
+function toggleRowSelection(point: DataPointInfo) {
+  const key = pointKey(point.ioa, point.asdu_type)
+  if (isSelected(point)) {
+    selectedRows.value = selectedRows.value.filter(
+      row => pointKey(row.ioa, row.asdu_type) !== key,
+    )
+  } else {
+    selectedRows.value = [...selectedRows.value, point]
+  }
+  lastClickedIndex.value = filteredPoints.value.indexOf(point)
+  emitSelection()
+}
+
+function selectFilteredPoints() {
+  selectedRows.value = [...filteredPoints.value]
+  lastClickedIndex.value = selectedRows.value.length - 1
+  emitSelection()
+}
+
+function invertFilteredSelection() {
+  const selected = new Set(selectedRows.value.map(row => pointKey(row.ioa, row.asdu_type)))
+  selectedRows.value = filteredPoints.value.filter(
+    point => !selected.has(pointKey(point.ioa, point.asdu_type)),
+  )
+  lastClickedIndex.value = selectedRows.value.length - 1
+  emitSelection()
+}
+
+function clearSelection() {
+  selectedRows.value = []
+  lastClickedIndex.value = -1
   emitSelection()
 }
 
@@ -512,7 +591,9 @@ function handleTableKeydown(e: KeyboardEvent) {
     let currentIdx = -1
     if (selectedRows.value.length > 0) {
       const last = selectedRows.value[selectedRows.value.length - 1]
-      currentIdx = list.findIndex(r => r.ioa === last.ioa)
+      currentIdx = list.findIndex(
+        r => pointKey(r.ioa, r.asdu_type) === pointKey(last.ioa, last.asdu_type),
+      )
     }
 
     let nextIdx: number
@@ -582,13 +663,30 @@ function onPointAdded() {
 
 // 编辑可能改了 IOA(点位在后端换键);增量协议表达不了"旧键消失",
 // 强制从 seq=0 全量重建,避免旧 IOA 行残留。
-async function onPointEdited() {
+async function onPointEdited(target?: { ioa: number; asdu_type: string }) {
+  const selectedKeys = new Set(
+    selectedRows.value.map(point => pointKey(point.ioa, point.asdu_type)),
+  )
   dataMap = new Map()
   lastSeq = 0
-  selectedRows.value = []
-  emitSelection()
   await loadDataPoints()
+  const targetType = target ? findAsduTypeOption(target.asdu_type)?.value : undefined
+  selectedRows.value = target
+    ? displayPoints.value.filter(point =>
+        point.ioa === target.ioa
+        && findAsduTypeOption(point.asdu_type)?.value === targetType
+      )
+    : displayPoints.value.filter(point =>
+        selectedKeys.has(pointKey(point.ioa, point.asdu_type))
+      )
+  emitSelection()
   dataRefreshKey.value++
+}
+
+async function handlePointEdited(target: { ioa: number; asdu_type: string }) {
+  showEditModal.value = false
+  editingPointDefinition.value = null
+  await onPointEdited(target)
 }
 
 function onBatchWritten() {
@@ -630,6 +728,21 @@ const selectedCount = computed(() => selectedRows.value.length)
 const selectedControlPoints = computed(() =>
   selectedRows.value.filter(r => r.asdu_type.startsWith('C_') && !r.asdu_type.startsWith('C_BO'))
 )
+const selectedMonitorPoints = computed(() =>
+  selectedRows.value.filter(r => !r.asdu_type.startsWith('C_'))
+)
+const canBatchMigrateType = computed(() => {
+  if (selectedMonitorPoints.value.length === 0
+    || selectedMonitorPoints.value.length !== selectedRows.value.length) return false
+  return new Set(selectedMonitorPoints.value.map(point => point.category)).size === 1
+})
+const canOpenBatchSettings = computed(() =>
+  canBatchMigrateType.value
+  || (
+    selectedControlPoints.value.length > 0
+    && selectedControlPoints.value.length === selectedRows.value.length
+  )
+)
 
 function openBatchControlOptions() {
   contextMenu.value.show = false
@@ -637,9 +750,38 @@ function openBatchControlOptions() {
   showBatchControlModal.value = true
 }
 
-function onControlOptionsApplied() {
+function openBatchTypeMigration() {
+  contextMenu.value.show = false
+  if (!canBatchMigrateType.value) return
+  showBatchTypeModal.value = true
+}
+
+function openBatchSettings() {
+  if (canBatchMigrateType.value) {
+    openBatchTypeMigration()
+  } else if (selectedControlPoints.value.length === selectedRows.value.length) {
+    openBatchControlOptions()
+  }
+}
+
+async function onControlOptionsApplied() {
   showBatchControlModal.value = false
+  const selectedKeys = new Set(
+    selectedRows.value.map(point => pointKey(point.ioa, point.asdu_type)),
+  )
+  dataMap = new Map()
+  lastSeq = 0
+  await loadDataPoints()
+  selectedRows.value = displayPoints.value.filter(
+    point => selectedKeys.has(pointKey(point.ioa, point.asdu_type)),
+  )
+  emitSelection()
   dataRefreshKey.value++
+}
+
+async function onTypeMigrationApplied() {
+  showBatchTypeModal.value = false
+  await onPointEdited()
 }
 
 // 删除当前选中的所有点位(单选即删一个)。改走批量命令,一次锁内删除;
@@ -872,6 +1014,23 @@ defineExpose({ loadData: loadDataPoints })
         type="text"
         :placeholder="t('table.searchPlaceholder')"
       />
+      <div class="selection-actions">
+        <button
+          class="selection-btn"
+          :disabled="filteredPoints.length === 0"
+          @click="selectFilteredPoints"
+        >{{ t('table.selectFiltered') }}</button>
+        <button
+          class="selection-btn"
+          :disabled="filteredPoints.length === 0"
+          @click="invertFilteredSelection"
+        >{{ t('table.invertFiltered') }}</button>
+        <button
+          class="selection-btn"
+          :disabled="selectedCount === 0"
+          @click="clearSelection"
+        >{{ t('table.clearSelection') }}</button>
+      </div>
       <button
         class="add-btn"
         :disabled="!selectedServerId || currentCA === null"
@@ -891,11 +1050,20 @@ defineExpose({ loadData: loadDataPoints })
         :title="t('batchWrite.title')"
       >{{ t('table.batchWrite') }}</button>
       <button
+        class="add-btn batch settings"
+        :disabled="!canOpenBatchSettings"
+        @click="openBatchSettings"
+        :title="t('table.batchSettings')"
+      >{{ t('table.batchSettings') }}</button>
+      <button
         class="add-btn batch simulation"
         :disabled="!selectedServerId || currentCA === null"
         @click="openSimulationSettings"
         :title="t('simulationSettings.title')"
       >{{ t('simulationSettings.open') }}</button>
+      <span v-if="selectedCount > 0" class="selected-count">
+        {{ t('table.selectedCount', { count: selectedCount }) }}
+      </span>
       <span class="table-count">{{ filteredPoints.length }} {{ t('table.countSuffix') }}</span>
     </div>
 
@@ -934,10 +1102,19 @@ defineExpose({ loadData: loadDataPoints })
       <table class="table">
         <thead>
           <tr>
-            <th class="col-ioa">IOA</th>
-            <th class="col-type">{{ t('table.asduTypeCol') }}</th>
-            <th class="col-name">{{ t('table.nameCol') }}</th>
-            <th class="col-value">{{ t('table.valueCol') }}</th>
+            <th class="col-select" />
+            <th class="col-ioa sortable" @click="toggleSort('ioa')">
+              IOA <span class="sort-glyph">{{ sortGlyph('ioa') }}</span>
+            </th>
+            <th class="col-type sortable" @click="toggleSort('asdu_type')">
+              {{ t('table.asduTypeCol') }} <span class="sort-glyph">{{ sortGlyph('asdu_type') }}</span>
+            </th>
+            <th class="col-name sortable" @click="toggleSort('name')">
+              {{ t('table.nameCol') }} <span class="sort-glyph">{{ sortGlyph('name') }}</span>
+            </th>
+            <th class="col-value sortable" @click="toggleSort('value')">
+              {{ t('table.valueCol') }} <span class="sort-glyph">{{ sortGlyph('value') }}</span>
+            </th>
             <th class="col-quality"><span class="th-quality">{{ t('table.qualityCol') }}<QualityLegend /></span></th>
             <th class="col-timestamp">{{ t('table.timestampCol') }}</th>
           </tr>
@@ -958,6 +1135,14 @@ defineExpose({ loadData: loadDataPoints })
               @click="selectRow($event, point)"
               @contextmenu.prevent="showContextMenu($event, point)"
             >
+              <td class="col-select">
+                <input
+                  type="checkbox"
+                  :checked="isSelected(point)"
+                  :aria-label="`${point.ioa} ${point.asdu_type}`"
+                  @click.stop="toggleRowSelection(point)"
+                />
+              </td>
               <td :class="['col-ioa', { 'ioa-dup': duplicateIoaTypes(point) }]">
                 <template v-if="activeMutations.has(point.ioa + ':' + point.asdu_type)">
                   <span class="mut-dot" />
@@ -1028,6 +1213,9 @@ defineExpose({ loadData: loadDataPoints })
       <div v-if="selectedControlPoints.length > 0" class="context-menu-item" @click="openBatchControlOptions">
         {{ `${t('table.batchControlOptions')} (${selectedControlPoints.length})` }}
       </div>
+      <div v-if="canBatchMigrateType" class="context-menu-item" @click="openBatchTypeMigration">
+        {{ `${t('table.batchTypeMigration')} (${selectedMonitorPoints.length})` }}
+      </div>
       <div class="context-menu-item danger" @click="deleteSelectedPoints">
         {{ selectedCount > 1 ? `${t('table.deletePoint')} (${selectedCount})` : t('table.deletePoint') }}
       </div>
@@ -1061,7 +1249,7 @@ defineExpose({ loadData: loadDataPoints })
       :point="editingPointDefinition"
       :existing-points="showEditModal ? displayPoints : []"
       @close="showEditModal = false; editingPointDefinition = null"
-      @added="showEditModal = false; editingPointDefinition = null; onPointEdited()"
+      @added="handlePointEdited"
     />
 
     <!-- Batch Add Modal -->
@@ -1083,6 +1271,15 @@ defineExpose({ loadData: loadDataPoints })
       :points="selectedControlPoints"
       @close="showBatchControlModal = false"
       @applied="onControlOptionsApplied"
+    />
+
+    <BatchTypeMigrationModal
+      :visible="showBatchTypeModal"
+      :server-id="selectedServerId ?? ''"
+      :common-address="currentCA ?? 0"
+      :points="selectedMonitorPoints"
+      @close="showBatchTypeModal = false"
+      @applied="onTypeMigrationApplied"
     />
 
     <!-- Batch Write Modal -->
@@ -1142,6 +1339,32 @@ defineExpose({ loadData: loadDataPoints })
   color: var(--c-overlay0);
 }
 
+.selection-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.selection-btn {
+  padding: 3px 6px;
+  color: var(--c-overlay1);
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+  background: var(--c-surface0);
+  border: 1px solid var(--c-surface1);
+  border-radius: 4px;
+}
+
+.selection-btn:hover:not(:disabled) {
+  color: var(--c-text);
+  background: var(--c-surface1);
+}
+
+.selection-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
 .add-btn {
   padding: 2px 8px;
   background: var(--c-surface0);
@@ -1164,6 +1387,10 @@ defineExpose({ loadData: loadDataPoints })
   color: var(--c-sapphire);
 }
 
+.add-btn.settings {
+  color: var(--c-mauve);
+}
+
 .add-btn:hover:not(:disabled) {
   background: var(--c-surface1);
 }
@@ -1176,6 +1403,12 @@ defineExpose({ loadData: loadDataPoints })
 .table-count {
   font-size: 11px;
   color: var(--c-overlay0);
+  white-space: nowrap;
+}
+
+.selected-count {
+  color: var(--c-sapphire);
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -1209,6 +1442,20 @@ defineExpose({ loadData: loadDataPoints })
   top: 0;
 }
 
+.table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.table th.sortable:hover {
+  color: var(--c-text);
+}
+
+.sort-glyph {
+  color: var(--c-blue);
+  font-size: 8px;
+}
+
 .table td {
   padding: 5px 10px;
   border-bottom: 1px solid var(--c-base);
@@ -1232,6 +1479,19 @@ defineExpose({ loadData: loadDataPoints })
   font-family: var(--font-mono);
   width: 70px;
   color: var(--c-blue);
+}
+
+.col-select {
+  width: 28px;
+  padding-right: 0 !important;
+  padding-left: 8px !important;
+  text-align: center;
+}
+
+.col-select input {
+  margin: 0;
+  accent-color: var(--c-blue);
+  cursor: pointer;
 }
 
 .table tbody tr.selected .col-ioa {

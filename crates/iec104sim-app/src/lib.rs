@@ -33,6 +33,7 @@ pub fn run() {
             commands::batch_add_data_points,
             commands::remove_data_point,
             commands::batch_remove_data_points,
+            commands::batch_migrate_data_point_types,
             commands::batch_update_control_options,
             commands::update_data_point,
             commands::set_data_point_quality,

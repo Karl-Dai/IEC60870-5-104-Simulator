@@ -96,7 +96,7 @@ The bottom log panel shows every TLS handshake step, U/I/S frame, COT decode, an
 - **Value panel** showing selected point details
 - **General Interrogation**, **Counter Interrogation** and **Clock Sync** commands — GI and Counter Interrogation are per-CA selectable on multi-CA connections (pick one CA or "all CAs")
 - **Deactivation (COT=8)** — stop an in-progress General or Counter Interrogation (per-CA, "all CAs" fan-out, or broadcast); the slave answers with a Deactivation Confirmation (COT=9)
-- **Auto-reconnect** — re-establishes a dropped link automatically at the T0 interval
+- **Auto-reconnect** — T0 limits one connection attempt; an independent **Channel Retry** value (default 5 s) sets the fixed pause before the next attempt, with no retry limit or exponential backoff
 - **Communication log** with TLS handshake events, U/I/S frame decode, COT names, raw hex bytes and CSV export
 - **In-app auto-update** from GitHub Releases (ed25519-signed bundles, 6 h check throttle, "later" snoozes 24 h)
 
@@ -195,11 +195,13 @@ Back on the Slave, drive value changes and watch them surface live on the Master
 
 - **Right-click → 周期变位 (Periodic Mutation)** on any point(s) — analog points and counters ramp as a **triangle wave** (set a step and min/max bounds, bounces at the limits; the in-row glyph shows ↑/↓/⇅), discrete points flip. Multiple points mutate concurrently and independently.
 - **写值 (Batch Write by IOA)** on the toolbar — type a mix of single IOAs and ranges (e.g. `100, 1000-2000, 5000`), pick a type, write one value to every matching point with a live **matched N · ignored M** preview.
-- Changed values are pushed **spontaneously (COT=3)** and appear in the Master's table and log in real time. If the Master's link drops, it **auto-reconnects** at the T0 interval.
+- Changed values are pushed **spontaneously (COT=3)** and appear in the Master's table and log in real time. If the Master's link drops, it **auto-reconnects** indefinitely: T0 bounds each attempt, while **Channel Retry** is the fixed delay between attempts (0 retries immediately).
 
 ### Step 6 · Read the wire — decoded frames & raw hex
 
 Expand **通信日志 (Communication Log)** at the bottom (drag the splitter to resize — the height persists). Every U/I/S frame is decoded — frame type, Cause of Transmission, a readable detail and the raw hex side by side. The master's **auto-reconnect**, TLS handshake steps and the **TESTFR** heartbeat are all logged. Click **导出 CSV** to export the whole log for offline analysis.
+
+Localized log descriptions and validation messages follow the selected UI language. Protocol identifiers and wire-level fields—such as `Type ID`, `COT`, `CA`, `IOA`, `QOI`, `QCC`, `S/E`, `QU/QL`, APDU hex, certificate paths, IP addresses, and OS error codes—are intentionally kept in their standard/original form.
 
 ![Communication log with decoded frames and raw hex](docs/screenshots/tut-4-master-log.png)
 

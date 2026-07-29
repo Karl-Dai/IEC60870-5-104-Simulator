@@ -6,8 +6,9 @@ import type { LogEntry } from '../types'
 import { useI18n } from '@shared/i18n'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
+import { localizeLegacyBackendText } from '@shared/i18n/backendText'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 interface Props {
   expanded: boolean
@@ -131,7 +132,7 @@ function formatDetail(log: LogEntry): string {
   if (log.detail_event && log.detail_event.kind) {
     return t(`log.${log.detail_event.kind}`, log.detail_event.payload)
   }
-  return log.detail
+  return localizeLegacyBackendText(log.detail, locale.value, t, 'log.backendDetailFallback')
 }
 
 const isExporting = ref(false)
