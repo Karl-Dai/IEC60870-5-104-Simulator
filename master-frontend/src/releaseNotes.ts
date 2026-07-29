@@ -4,6 +4,8 @@ export const RELEASES_URL = 'https://github.com/Karl-Dai/IEC60870-5-104-Simulato
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.3 SOCKS5 凭据安全修复: 填写代理认证后再关闭 SOCKS5 开关时,提交请求会在 Tauri IPC 边界清空用户名和密码,不可见凭据不再进入后端连接配置;重新打开开关仍可继续编辑当前表单',
+  'v1.15.3 前端真实浏览器验证: 新增 npm run dev:mock 的 Tauri API mock 模式,覆盖连接创建与 SOCKS5 流程且不会进入 production bundle;40 项前端测试通过,Playwright 实测完整认证、远程 DNS、密码不缓存、错误拦截及 800×600 最小窗口',
   'v1.15.2 主站原生 SOCKS5 代理: 新建 / 编辑连接可配置代理地址、端口、可选用户名密码认证和本地 / 远程 DNS;支持 IPv4、IPv6 与域名目标,代理隧道建立后可继续 TLS 握手,关闭代理时保持原直连行为',
   'v1.15.2 SOCKS5 配置与安全: 代理设置随主站配置保存 / 导入且兼容旧文件;配置认证后禁止静默降级免认证,密码不进入 Debug 输出或 WebView 表单缓存;主动保存的配置文件会包含认证口令,请按敏感文件保管',
   'v1.15.1 主站与共享对话框布局修复: Control、Raw Send 与两端共享的 Parse Frame 等长对话框在矮视口中固定标题与底部操作区,仅正文滚动,按钮始终可见可点;整套 8 个对话框真实浏览器布局验证 16/16',

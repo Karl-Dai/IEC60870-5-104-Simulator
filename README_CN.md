@@ -133,6 +133,9 @@ cd crates/iec104sim-app && cargo tauri dev
 
 # 启动主站
 cd crates/iec104master-app && cargo tauri dev
+
+# 仅启动主站浏览器 mock（用于前端 E2E/视觉检查，不覆盖 Rust/Tauri 联动）
+cd ../../master-frontend && npm run dev:mock
 ```
 
 ## 快速开始(教程)

@@ -2,6 +2,34 @@
 
 本项目的所有重要变更记录在此文件。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.15.3] - 2026-07-29
+
+### Highlights / 亮点
+
+- 🔐 **关闭 SOCKS5 后不再携带隐藏凭据** / **Disabled SOCKS5 no longer carries hidden credentials**:用户填写代理认证后关闭代理开关时,主站会在 Tauri IPC 边界清空用户名与密码,避免不可见凭据进入后端连接配置 / When proxy authentication is filled and SOCKS5 is then disabled, the Master now clears username and password at the Tauri IPC boundary so hidden credentials cannot enter the backend connection configuration.
+- 🎭 **主站浏览器 E2E mock 模式** / **Browser E2E mock mode for the Master**:`npm run dev:mock` 为 Vite 提供确定性的 Tauri API 替身,可在没有 Tauri runtime 的真实浏览器中验证新建连接、代理配置和错误流程,且生产 bundle 不包含 mock / `npm run dev:mock` provides deterministic Tauri API substitutes for real-browser validation of connection creation, proxy settings and error flows without a Tauri runtime, while production bundles remain mock-free.
+- 🧪 **Playwright 真实浏览器回归** / **Real-browser Playwright regression**:SOCKS5 完整认证、远程 DNS、密码不缓存、认证不完整拦截、关闭代理凭据清理及 800×600 最小窗口布局均已实测 / Full SOCKS5 authentication, remote DNS, password cache exclusion, partial-credential validation, disabled-proxy credential scrubbing and the 800×600 minimum-window layout are all exercised in a real browser.
+
+### Added 新增
+
+- 主站前端新增仅在 Vite `mock` mode 生效的 Tauri `invoke` mock,覆盖连接列举 / 创建 / 删除、连接 / 断开、日志、更新检查等页面启动与 SOCKS5 流程所需命令 / Added a Vite `mock`-mode-only Tauri `invoke` replacement covering list/create/delete, connect/disconnect, logs, update checks and the commands required by Master startup and SOCKS5 flows.
+- README 中英文开发说明新增 `npm run dev:mock`,并明确浏览器 mock 只覆盖前端 E2E / 视觉检查,Rust/Tauri 联动继续由集成测试验证 / The English and Chinese READMEs now document `npm run dev:mock` and explicitly scope it to frontend E2E/visual checks while Rust/Tauri integration remains covered by integration tests.
+
+### Security 安全
+
+- `use_socks5=false` 时提交请求强制把 `socks5_username` / `socks5_password` 置空;表单内暂存值仍允许用户重新打开开关继续编辑,但不会跨越 IPC 边界 / Requests now force `socks5_username` and `socks5_password` to empty strings when `use_socks5=false`; in-memory form values remain reversible when toggling the UI, but cannot cross the IPC boundary.
+
+### Tests 测试
+
+- Rust workspace:319 项通过、0 失败、2 项 macOS `native-tls` TLS 1.3 已知限制 ignored / Rust workspace: 319 passed, 0 failed and 2 ignored for the known macOS `native-tls` TLS 1.3 limitation.
+- Master frontend:7 个测试文件 40 项通过,新增 SOCKS5 完整请求、认证配对、密码不缓存及关闭代理凭据清理 4 个回归场景;Slave frontend:20 个文件 155 项通过;两端 production build 成功且确认 Master bundle 不含 mock 标识 / Master frontend: 40 passing tests across 7 files, with four SOCKS5 regressions covering complete requests, credential pairing, password cache exclusion and disabled-proxy credential scrubbing; Slave frontend: 155 passing tests across 20 files; both production builds succeed and the Master bundle contains no mock markers.
+- Release notes 自动化脚本 18 项通过,确认 v1.15.3 CHANGELOG 段和各平台下载表可正确生成 / All 18 release-notes automation tests pass, validating v1.15.3 CHANGELOG extraction and the cross-platform download table.
+- Playwright CLI 真实浏览器完成 7 份截图与 trace:1280×800 主流程、错误流程及 800×600 最小窗口均为 0 console error;仅有 mock 模式预期的 Tauri runtime 缺失 warning / Playwright CLI produced seven screenshots plus a trace across the 1280×800 happy/error paths and the 800×600 minimum window with zero console errors; the only warning is the expected missing Tauri runtime in mock mode.
+
+### Notes 说明
+
+- 本版本为 v1.15.2 SOCKS5 功能的安全与可验证性补丁;IEC104Slave 仅同步版本号和应用内说明 / This release is a security and verifiability patch for the v1.15.2 SOCKS5 feature; IEC104Slave only receives the synchronized version and in-app note.
+
 ## [1.15.2] - 2026-07-29
 
 ### Highlights / 亮点

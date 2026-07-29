@@ -264,8 +264,11 @@ async function createConnection() {
         use_socks5: form.value.use_socks5,
         socks5_proxy_address: form.value.socks5_proxy_address.trim(),
         socks5_proxy_port: form.value.socks5_proxy_port,
-        socks5_username: form.value.socks5_username,
-        socks5_password: form.value.socks5_password,
+        // A disabled proxy must not smuggle hidden credentials into the
+        // backend configuration. Keep the visible form values in memory so
+        // toggling the checkbox is reversible, but scrub them at the IPC edge.
+        socks5_username: form.value.use_socks5 ? form.value.socks5_username : '',
+        socks5_password: form.value.use_socks5 ? form.value.socks5_password : '',
         socks5_remote_dns: form.value.socks5_remote_dns,
         use_tls: form.value.use_tls,
         ca_file: form.value.ca_file || undefined,

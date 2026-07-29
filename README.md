@@ -133,6 +133,9 @@ cd crates/iec104sim-app && cargo tauri dev
 
 # run the Master
 cd crates/iec104master-app && cargo tauri dev
+
+# run the Master browser mock only (for frontend E2E/visual QA, not Rust/Tauri integration)
+cd ../../master-frontend && npm run dev:mock
 ```
 
 ## Quick Start (Tutorial)
