@@ -53,6 +53,12 @@ One IEC 104 master connection can talk to several stations (Common Addresses) at
 
 ![Master multi-CA tree and new-connection dialog](docs/screenshots/master-multi-ca-newconn.png)
 
+**Master · SOCKS5 proxy with optional authentication and remote DNS**
+
+Route an IEC 104 connection through a SOCKS5 proxy when the target is not directly reachable. The **New Connection** dialog accepts the proxy host and port, optional username/password authentication, and remote target resolution to avoid a local DNS lookup.
+
+![Master SOCKS5 proxy connection settings](docs/screenshots/master-socks5-connection.png)
+
 **Master · communication log with TLS handshake & per-CA GI**
 
 The bottom log panel shows every TLS handshake step, U/I/S frame, COT decode, and the raw hex bytes side-by-side. Here the master sends **GI CA=1** and **GI CA=2** in sequence and receives the spontaneous response stream from each station.
@@ -80,6 +86,7 @@ The bottom log panel shows every TLS handshake step, U/I/S frame, COT decode, an
 ### 📡 Master — `IEC104Master`
 
 - **IEC 104 client** with TCP and TLS support
+- **Per-connection SOCKS5 proxy** — configure the proxy address/port, optional username/password authentication, and local or remote DNS resolution directly in the New Connection dialog
 - **Multi-CA per connection** — drive 1..N Common Addresses over a single TCP link. Auto-GI / Clock-Sync / Counter-Read fan out to every CA; data is stored per-CA so colliding IOAs from different stations stay separate
 - **Three-level connection tree** for multi-CA setups (Connection → CA badge → category) with independent per-CA counts; single-CA connections keep the classic flat tree
 - **Real-time data display** with incremental polling and virtual scrolling
