@@ -8,6 +8,7 @@ import QualityIndicator from '@shared/components/QualityIndicator.vue'
 import QualityLegend from '@shared/components/QualityLegend.vue'
 import DoublePointLegend from './DoublePointLegend.vue'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
+import { formatDataPointValue, normalizeDoublePointCode } from '@shared/utils/dataPointValue'
 
 const { t } = useI18n()
 
@@ -331,15 +332,19 @@ function ctxOpenControlDialog() {
 // Helper: check if option matches current value for marking
 // optValue is the string from CONTROL_CONFIG options; cv is the point's value string
 function isCtxActiveOption(optValue: string): boolean {
-  const cv = contextMenu.value.point?.value?.toLowerCase() ?? ''
+  const point = contextMenu.value.point
+  const cv = point?.value?.toLowerCase() ?? ''
   // Single point: value='true' => 'on', value='false' => 'off'
   if (optValue === 'true') return cv === 'on'
   if (optValue === 'false') return cv === 'off'
-  // Double point: value='0'..'3' directly compare
-  if (optValue === '0') return cv === '中间'
-  if (optValue === '1') return cv === '分'
-  if (optValue === '2') return cv === '合'
-  if (optValue === '3') return cv === '不确定'
+  // Double point: compare normalized protocol codes while retaining support
+  // for values produced by older localized backends.
+  const isDoublePoint = point?.category === 'double_point'
+    || point?.asdu_type.startsWith('M_DP_')
+    || point?.asdu_type.startsWith('C_DC_')
+  if (isDoublePoint && (optValue === '0' || optValue === '1' || optValue === '2' || optValue === '3')) {
+    return normalizeDoublePointCode(cv) === optValue
+  }
   return false
 }
 </script>
@@ -380,7 +385,7 @@ function isCtxActiveOption(optValue: string): boolean {
               >
                 <td class="col-ioa">{{ point.ioa }}</td>
                 <td class="col-type">{{ point.asdu_type }} · {{ point.asdu_type_id }}</td>
-                <td :class="['col-value', { 'value-highlight': changedKeys.has(pointKey(point)) }]"><span class="value-text">{{ point.value }}</span><DoublePointLegend v-if="point.asdu_type.startsWith('M_DP')" /></td>
+                <td :class="['col-value', { 'value-highlight': changedKeys.has(pointKey(point)) }]"><span class="value-text">{{ formatDataPointValue(point, t) }}</span><DoublePointLegend v-if="point.asdu_type.startsWith('M_DP')" /></td>
                 <td class="col-quality">
                   <QualityIndicator
                     :quality="{ ov: point.quality_ov, bl: point.quality_bl, sb: point.quality_sb, nt: point.quality_nt, iv: point.quality_iv }"

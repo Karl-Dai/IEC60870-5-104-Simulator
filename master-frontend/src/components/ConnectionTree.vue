@@ -52,15 +52,15 @@ onUnmounted(() => {
 })
 
 const DATA_CATEGORIES = [
-  { key: 'single_point', label: '单点 (SP)' },
-  { key: 'double_point', label: '双点 (DP)' },
-  { key: 'step_position', label: '步位置 (ST)' },
-  { key: 'bitstring', label: '位串 (BO)' },
-  { key: 'normalized_measured', label: '归一化 (ME_NA)' },
-  { key: 'scaled_measured', label: '标度化 (ME_NB)' },
-  { key: 'float_measured', label: '浮点 (ME_NC)' },
-  { key: 'integrated_totals', label: '累计量 (IT)' },
-]
+  'single_point',
+  'double_point',
+  'step_position',
+  'bitstring',
+  'normalized_measured',
+  'scaled_measured',
+  'float_measured',
+  'integrated_totals',
+].map(key => ({ key }))
 
 // 每个监视方向 category 对应的 ASDU TypeId: 无时标 · CP24 时标 · CP56 时标
 // 与 crates/iec104sim-core/src/types.rs::AsduTypeId::category 一致, 与子站树展示对齐
@@ -163,7 +163,7 @@ function selectConnection(conn: TreeConnection) {
   emit('connection-select', conn.info.id, conn.info.state)
 }
 
-function selectCategory(conn: TreeConnection, cat: { key: string; label: string }, ca: number | null) {
+function selectCategory(conn: TreeConnection, cat: { key: string }, ca: number | null) {
   const id = ca === null
     ? `${conn.info.id}:${cat.key}`
     : `${conn.info.id}:ca:${ca}:${cat.key}`

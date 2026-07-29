@@ -119,6 +119,8 @@ export type DictShape = {
     copyIoa: string
     copyValue: string
     freeControl: string
+    dpIntermediate: string
+    dpIndeterminate: string
   }
   valuePanel: {
     title: string
@@ -147,6 +149,7 @@ export type DictShape = {
   }
   doublePoint: {
     legendTitle: string
+    tokens: Record<'intermediate' | 'off' | 'on' | 'indeterminate', string>
     states: Record<'intermediate' | 'off' | 'on' | 'indeterminate', string>
   }
   log: {
@@ -271,6 +274,27 @@ export type DictShape = {
     failedTitle: string
     retry: string
     close: string
+  }
+  rawSend: {
+    title: string
+    hint: string
+    hexLabel: string
+    preview: string
+    templatesLabel: string
+    templateGeneralInterrogationAct: string
+    invalidChars: string
+    empty: string
+    oddDigits: string
+    invalidApdu: string
+    frameI: string
+    frameS: string
+    frameU: string
+    lengthSummary: string
+    noConnection: string
+    sent: string
+    byteCount: string
+    sending: string
+    send: string
   }
   parseFrame: {
     title: string
@@ -427,6 +451,8 @@ const dict: DictShape = {
     copyIoa: '复制 IOA',
     copyValue: '复制值',
     freeControl: '自由控制...',
+    dpIntermediate: '中间',
+    dpIndeterminate: '不确定',
   },
   valuePanel: {
     title: '数据详情',
@@ -461,6 +487,12 @@ const dict: DictShape = {
   },
   doublePoint: {
     legendTitle: '双点遥信 DPI · 双位置状态',
+    tokens: {
+      intermediate: '中间',
+      off: 'OFF',
+      on: 'ON',
+      indeterminate: '不确定',
+    },
     states: {
       intermediate: 'DPI=0 中间态 · 双位均为 0(动作过程 / 未定义)',
       off: 'DPI=1 分闸(断开)',
@@ -631,6 +663,27 @@ const dict: DictShape = {
     failedTitle: '更新失败',
     retry: '重试',
     close: '关闭',
+  },
+  rawSend: {
+    title: '原始报文发送',
+    hint: '发送任意 APDU。I 帧的 SSN/RSN 与 S 帧的 RSN 会被自动覆写为当前会话计数；U 帧 (STARTDT/STOPDT/TESTFR) 原样透传。',
+    hexLabel: '十六进制字节（允许空格、换行或逗号）',
+    preview: '解析预览',
+    templatesLabel: '模板：',
+    templateGeneralInterrogationAct: '总召唤 act',
+    invalidChars: '包含非法字符',
+    empty: '为空',
+    oddDigits: '共 {n} 个十六进制数字，需要偶数个',
+    invalidApdu: '{bytes} 字节，首字节 0x{firstByte}（合规 APDU 需至少 6 字节且首字节为 0x68）',
+    frameI: 'I 帧',
+    frameS: 'S 帧',
+    frameU: 'U 帧',
+    lengthSummary: '{frameType}，LEN={declared}（期望总长 {expected}/实际 {actual}）{status}',
+    noConnection: '未选择连接',
+    sent: '已发送：',
+    byteCount: '{n} 字节 @ {timestamp}',
+    sending: '发送中…',
+    send: '发送',
   },
   parseFrame: {
     title: '报文解析器',

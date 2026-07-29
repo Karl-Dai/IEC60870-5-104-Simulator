@@ -4,12 +4,11 @@ import { useI18n } from '@shared/i18n'
 
 const { t } = useI18n()
 
-// DPI 编码与显示 token 由协议固定(与后端 DataPointValue::display() 一致),语言无关。
 const STATES = [
-  { code: '0', token: '中间', key: 'intermediate' },
-  { code: '1', token: 'OFF', key: 'off' },
-  { code: '2', token: 'ON', key: 'on' },
-  { code: '3', token: '不确定', key: 'indeterminate' },
+  { code: '0', key: 'intermediate' },
+  { code: '1', key: 'off' },
+  { code: '2', key: 'on' },
+  { code: '3', key: 'indeterminate' },
 ] as const
 
 const open = ref(false)
@@ -82,7 +81,7 @@ onBeforeUnmount(close)
       <div class="dp-legend-title">{{ t('doublePoint.legendTitle') }}</div>
       <div v-for="s in STATES" :key="s.code" class="dp-legend-row">
         <span class="dp-legend-code">DPI {{ s.code }}</span>
-        <span class="dp-legend-token">{{ s.token }}</span>
+        <span class="dp-legend-token">{{ t(`doublePoint.tokens.${s.key}`) }}</span>
         <span class="dp-legend-desc">{{ t(`doublePoint.states.${s.key}`) }}</span>
       </div>
     </div>

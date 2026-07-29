@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
-import { APP_NAME, RELEASE_NOTES, REPO_URL, RELEASES_URL } from '@app/releaseNotes'
+import { ABOUT_RELEASE_NOTES, APP_NAME, REPO_URL, RELEASES_URL } from '@app/releaseNotes'
 import { useI18n } from '../i18n'
+import { documentationUrlForLocale } from '../i18n/documentation'
 import { useClipboardFlash } from '../composables/useClipboardFlash'
 
 defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const { flash: copied, openOrCopy } = useClipboardFlash()
 const version = ref('')
+const releaseNotes = computed(() => ABOUT_RELEASE_NOTES[locale.value])
+const documentationUrl = computed(() => documentationUrlForLocale(REPO_URL, locale.value))
 onMounted(async () => {
   try { version.value = await getVersion() } catch { version.value = '' }
 })
@@ -28,10 +31,10 @@ onMounted(async () => {
         <div class="about-body">
           <div class="about-section-title">{{ t('about.whatsNew') }}</div>
           <ul class="about-notes">
-            <li v-for="(note, i) in RELEASE_NOTES" :key="i">{{ note }}</li>
+            <li v-for="(note, i) in releaseNotes" :key="i">{{ note }}</li>
           </ul>
           <div class="about-links">
-            <a href="#" @click.prevent="openOrCopy(REPO_URL, t('about.homepageLabel'))">{{ t('about.homepageLabel') }}</a>
+            <a href="#" @click.prevent="openOrCopy(documentationUrl, t('about.homepageLabel'))">{{ t('about.homepageLabel') }}</a>
             <span class="about-sep">·</span>
             <a href="#" @click.prevent="openOrCopy(RELEASES_URL, t('about.releasesLabel'))">{{ t('about.releasesLabel') }}</a>
             <span v-if="copied" class="about-toast">{{ copied }}</span>

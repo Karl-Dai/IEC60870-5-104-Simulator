@@ -2,6 +2,7 @@
 import { ref, watch, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { RawSendResult } from '../types'
+import { useI18n } from '@shared/i18n'
 
 interface Props {
   visible: boolean
@@ -10,28 +11,72 @@ interface Props {
 
 const props = defineProps<Props>()
 const emit = defineEmits<{ (e: 'close'): void }>()
+const { t } = useI18n()
+
+type PreviewState =
+  | { kind: 'invalidChars' }
+  | { kind: 'empty' }
+  | { kind: 'oddDigits'; digits: number }
+  | { kind: 'invalidApdu'; bytes: number; firstByte: string }
+  | {
+      kind: 'frame'
+      frameType: 'i' | 's' | 'u'
+      declared: number
+      expected: number
+      actual: number
+      valid: boolean
+    }
 
 const hexInput = ref('')
 const sending = ref(false)
 const errorMsg = ref('')
 const lastResult = ref<RawSendResult | null>(null)
-const previewMsg = ref('')
+const previewState = ref<PreviewState | null>(null)
 
-const TEMPLATES: { label: string; hex: string }[] = [
+const templates = computed(() => [
   { label: 'STARTDT act', hex: '68 04 07 00 00 00' },
   { label: 'STARTDT con', hex: '68 04 0B 00 00 00' },
   { label: 'STOPDT act',  hex: '68 04 13 00 00 00' },
   { label: 'TESTFR act',  hex: '68 04 43 00 00 00' },
   { label: 'TESTFR con',  hex: '68 04 83 00 00 00' },
   { label: 'S-frame (RSN=0)', hex: '68 04 01 00 00 00' },
-  { label: '总召唤 act',   hex: '68 0E 00 00 00 00 64 01 06 00 01 00 00 00 00 14' },
-]
+  {
+    label: t('rawSend.templateGeneralInterrogationAct'),
+    hex: '68 0E 00 00 00 00 64 01 06 00 01 00 00 00 00 14',
+  },
+])
+
+const previewMsg = computed(() => {
+  const state = previewState.value
+  if (!state) return ''
+  switch (state.kind) {
+    case 'invalidChars':
+      return t('rawSend.invalidChars')
+    case 'empty':
+      return t('rawSend.empty')
+    case 'oddDigits':
+      return t('rawSend.oddDigits', { n: state.digits })
+    case 'invalidApdu':
+      return t('rawSend.invalidApdu', {
+        bytes: state.bytes,
+        firstByte: state.firstByte,
+      })
+    case 'frame':
+      return t('rawSend.lengthSummary', {
+        frameType: t(`rawSend.frame${state.frameType.toUpperCase()}`),
+        declared: state.declared,
+        expected: state.expected,
+        actual: state.actual,
+        status: state.valid ? '✓' : '✗',
+      })
+  }
+})
 
 watch(() => props.visible, (v) => {
   if (v) {
     errorMsg.value = ''
     lastResult.value = null
-    previewMsg.value = ''
+    previewState.value = null
   }
 })
 
@@ -54,15 +99,15 @@ const compactHex = computed(() => {
 function preview() {
   const h = compactHex.value
   if (h === null) {
-    previewMsg.value = '包含非法字符'
+    previewState.value = { kind: 'invalidChars' }
     return
   }
   if (h.length === 0) {
-    previewMsg.value = '为空'
+    previewState.value = { kind: 'empty' }
     return
   }
   if (h.length % 2 !== 0) {
-    previewMsg.value = `奇数位 (${h.length} 位),需偶数`
+    previewState.value = { kind: 'oddDigits', digits: h.length }
     return
   }
   const bytes: number[] = []
@@ -70,22 +115,33 @@ function preview() {
     bytes.push(parseInt(h.slice(i, i + 2), 16))
   }
   if (bytes.length < 6 || bytes[0] !== 0x68) {
-    previewMsg.value = `${bytes.length} 字节,首字节 0x${bytes[0]?.toString(16).toUpperCase().padStart(2, '0') ?? '??'} (合规需 ≥6 且首字节 0x68)`
+    previewState.value = {
+      kind: 'invalidApdu',
+      bytes: bytes.length,
+      firstByte: bytes[0]?.toString(16).toUpperCase().padStart(2, '0') ?? '??',
+    }
     return
   }
   const declared = bytes[1]
   const expected = declared + 2
   const ctrl1 = bytes[2]
-  let kind = 'I 帧'
-  if ((ctrl1 & 0x03) === 0x03) kind = 'U 帧'
-  else if ((ctrl1 & 0x03) === 0x01) kind = 'S 帧'
+  let frameType: 'i' | 's' | 'u' = 'i'
+  if ((ctrl1 & 0x03) === 0x03) frameType = 'u'
+  else if ((ctrl1 & 0x03) === 0x01) frameType = 's'
   const lenOk = expected === bytes.length
-  previewMsg.value = `${kind},LEN=${declared} (期望总长 ${expected}/实际 ${bytes.length}) ${lenOk ? '✓' : '✗'}`
+  previewState.value = {
+    kind: 'frame',
+    frameType,
+    declared,
+    expected,
+    actual: bytes.length,
+    valid: lenOk,
+  }
 }
 
 async function send() {
   if (!props.connectionId) {
-    errorMsg.value = '未选择连接'
+    errorMsg.value = t('rawSend.noConnection')
     return
   }
   errorMsg.value = ''
@@ -116,40 +172,37 @@ function handleKeydown(e: KeyboardEvent) {
     <Transition name="dialog-pop">
     <div v-if="visible" class="modal-backdrop dialog-blur" @mousedown.self="emit('close')" @keydown="handleKeydown">
       <div class="modal-box">
-        <div class="modal-title">原始报文发送</div>
+        <div class="modal-title">{{ t('rawSend.title') }}</div>
         <div class="modal-body">
-          <div class="hint">
-            发送任意 APDU。I 帧的 SSN/RSN 与 S 帧的 RSN 会被自动覆写为当前会话计数;
-            U 帧 (STARTDT/STOPDT/TESTFR) 原样透传。
-          </div>
+          <div class="hint">{{ t('rawSend.hint') }}</div>
 
           <label class="form-label">
-            十六进制字节 (允许空格/换行/逗号)
+            {{ t('rawSend.hexLabel') }}
             <textarea v-model="hexInput" @input="preview" class="hex-area" rows="4"
               placeholder="68 04 07 00 00 00" spellcheck="false"></textarea>
           </label>
 
           <div class="preview-row">
-            <button class="btn btn-secondary btn-sm" type="button" @click="preview">解析预览</button>
+            <button class="btn btn-secondary btn-sm" type="button" @click="preview">{{ t('rawSend.preview') }}</button>
             <span class="preview-msg">{{ previewMsg || '—' }}</span>
           </div>
 
           <div class="templates">
-            <span class="templates-label">模板:</span>
-            <button v-for="t in TEMPLATES" :key="t.label" type="button"
-              class="template-btn" @click="applyTemplate(t.hex)">{{ t.label }}</button>
+            <span class="templates-label">{{ t('rawSend.templatesLabel') }}</span>
+            <button v-for="template in templates" :key="template.label" type="button"
+              class="template-btn" @click="applyTemplate(template.hex)">{{ template.label }}</button>
           </div>
 
           <div v-if="errorMsg" class="error-msg">{{ errorMsg }}</div>
           <div v-if="lastResult" class="result-ok">
-            <div class="result-line"><span class="k">已发送:</span><span class="v">{{ lastResult.byte_len }} 字节 @ {{ lastResult.timestamp }}</span></div>
+            <div class="result-line"><span class="k">{{ t('rawSend.sent') }}</span><span class="v">{{ t('rawSend.byteCount', { n: lastResult.byte_len, timestamp: lastResult.timestamp }) }}</span></div>
             <div class="result-bytes">{{ lastResult.sent_hex }}</div>
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="emit('close')">关闭</button>
+          <button class="btn btn-secondary" @click="emit('close')">{{ t('common.close') }}</button>
           <button class="btn btn-primary" :disabled="sending || !connectionId" @click="send">
-            {{ sending ? '发送中...' : '发送' }}
+            {{ sending ? t('rawSend.sending') : t('rawSend.send') }}
           </button>
         </div>
       </div>

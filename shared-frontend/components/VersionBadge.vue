@@ -3,13 +3,14 @@ import { computed, ref, onMounted } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { REPO_URL } from '@app/releaseNotes'
 import { useI18n } from '../i18n'
+import { documentationUrlForLocale } from '../i18n/documentation'
 import { useClipboardFlash } from '../composables/useClipboardFlash'
 
 const { t, locale } = useI18n()
 const { flash, copy, openOrCopy } = useClipboardFlash()
 const version = ref('')
 const documentationUrl = computed(() =>
-  `${REPO_URL}/blob/main/${locale.value === 'zh-CN' ? 'README_CN.md' : 'README.md'}`,
+  documentationUrlForLocale(REPO_URL, locale.value),
 )
 
 onMounted(async () => {

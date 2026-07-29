@@ -4,12 +4,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref, nextTick, type Ref } from 'vue'
 import DataTable from '../src/components/DataTable.vue'
+import { useI18n } from '@shared/i18n'
 
 const invokeMock = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invokeMock(...a) }))
 
-function pt(ioa: number, category: string, value: string, ca = 1) {
-  return { ioa, asdu_type: 'M_X', value, category, common_address: ca, quality_ov: false, quality_bl: false, quality_sb: false, quality_nt: false, quality_iv: false, timestamp: null }
+function pt(ioa: number, category: string, value: string, ca = 1, asduType = 'M_X') {
+  return { ioa, asdu_type: asduType, asdu_type_id: 3, value, category, common_address: ca, quality_ov: false, quality_bl: false, quality_sb: false, quality_nt: false, quality_iv: false, timestamp: null }
 }
 
 function provideRefs() {
@@ -27,6 +28,7 @@ describe('DataTable 分类筛选 (4.4 / 4.2)', () => {
   beforeEach(() => {
     invokeMock.mockReset()
     vi.useFakeTimers() // 阻止 1s 轮询真正触发,保持确定性
+    useI18n().setLocale('en-US')
   })
 
   it('切换分类只过滤,dataMap 不丢数据;来回切换可复原', async () => {
@@ -65,6 +67,47 @@ describe('DataTable 分类筛选 (4.4 / 4.2)', () => {
     expect(byCa.get(1)!.get('单点')).toBe(2)
     expect(byCa.get(1)!.get('浮点')).toBe(1)
     expect(byCa.get(2)!.get('单点')).toBe(1) // 不同 CA 独立计数
+    wrapper.unmount()
+  })
+
+  it('按当前语言显示 DPI 0/3,并用协议值标记右键控制当前态', async () => {
+    const points = [
+      pt(1, 'double_point', '0', 1, 'M_DP_NA_1'),
+      pt(2, 'double_point', '3', 1, 'M_DP_NA_1'),
+    ]
+    invokeMock.mockResolvedValueOnce({ points, seq: 1 }).mockResolvedValue({ points: [], seq: 1 })
+
+    const wrapper = mount(DataTable, { global: { provide: provideRefs() } })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.findAll('.value-text').map(node => node.text())).toEqual([
+      'Intermediate',
+      'Indeterminate',
+    ])
+
+    await wrapper.findAll('tbody tr')[0].trigger('contextmenu')
+    expect(wrapper.findAll('.ctx-item')[0].classes()).toContain('ctx-active')
+
+    useI18n().setLocale('zh-CN')
+    await nextTick()
+    expect(wrapper.findAll('.value-text').map(node => node.text())).toEqual([
+      '中间',
+      '不确定',
+    ])
+    wrapper.unmount()
+  })
+
+  it('不会把步位置的数值误判为双点控制当前态', async () => {
+    const points = [pt(1, 'step_position', '1', 1, 'M_ST_NA_1')]
+    invokeMock.mockResolvedValueOnce({ points, seq: 1 }).mockResolvedValue({ points: [], seq: 1 })
+
+    const wrapper = mount(DataTable, { global: { provide: provideRefs() } })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('tbody tr').trigger('contextmenu')
+    expect(wrapper.findAll('.ctx-active')).toHaveLength(0)
     wrapper.unmount()
   })
 })

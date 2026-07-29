@@ -11,7 +11,7 @@ import type {
   PointMutationRow,
   MutationMode,
 } from '../types'
-import { formatDataPointValue } from '../utils/dataPointValue'
+import { formatDataPointValue } from '@shared/utils/dataPointValue'
 import DataPointModal from './DataPointModal.vue'
 import BatchAddModal from './BatchAddModal.vue'
 import BatchWriteModal from './BatchWriteModal.vue'

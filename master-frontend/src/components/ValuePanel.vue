@@ -5,6 +5,7 @@ import type { ReceivedDataPointInfo, ControlResult } from '../types'
 import { getControlConfig, asduHasTimestamp } from '../types'
 import QualityIndicator from '@shared/components/QualityIndicator.vue'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
+import { formatDataPointValue, normalizeDoublePointCode } from '@shared/utils/dataPointValue'
 
 const { t } = useI18n()
 const selectedConnectionId = inject<Ref<string | null>>('selectedConnectionId')!
@@ -68,10 +69,13 @@ function isActiveOption(optionValue: string): boolean {
   if (optionValue === 'true') return cv === 'on'
   if (optionValue === 'false') return cv === 'off'
   // double point
-  if (optionValue === '0') return cv === '中间'
-  if (optionValue === '1') return cv === 'off'
-  if (optionValue === '2') return cv === 'on'
-  if (optionValue === '3') return cv === '不确定'
+  const point = firstPoint.value
+  const isDoublePoint = point?.category === 'double_point'
+    || point?.asdu_type.startsWith('M_DP_')
+    || point?.asdu_type.startsWith('C_DC_')
+  if (isDoublePoint && (optionValue === '0' || optionValue === '1' || optionValue === '2' || optionValue === '3')) {
+    return normalizeDoublePointCode(cv) === optionValue
+  }
   return false
 }
 
@@ -122,7 +126,7 @@ watch(firstPoint, (p) => {
           </div>
           <div class="detail-row">
             <span class="detail-label">{{ t('valuePanel.value') }}</span>
-            <span class="detail-value mono">{{ point.value }}</span>
+            <span class="detail-value mono">{{ formatDataPointValue(point, t) }}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">{{ t('valuePanel.quality') }}</span>

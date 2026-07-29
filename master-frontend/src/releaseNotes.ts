@@ -61,3 +61,13 @@ export const RELEASE_NOTES: string[] = [
   '单向连接禁用总召/命令/对时/控制按钮, 连接树显示「单向」徽标',
   '品质图例补 OK(正常)行, 说明无品质位置位的基线态',
 ]
+
+// Keep the complete release history above for release automation, while the
+// About dialog shows a concise, localized summary of the current release.
+export const ABOUT_RELEASE_NOTES = {
+  'zh-CN': RELEASE_NOTES.slice(0, 2),
+  'en-US': [
+    'v1.15.4 independent Channel Retry (#41): the Master adds a fixed reconnect interval (5 seconds by default) that is separate from T0; it is editable, persisted, backward-compatible with old configurations, and accepts 0 for an immediate retry.',
+    'v1.15.4 bilingual diagnostics (#36/#40): connection lifecycle logs use structured localized events so the English UI no longer leaks legacy Chinese backend text; Point Details and the frame parser now include Type ID, control qualifiers, S/E, and COT semantics.',
+  ],
+} as const

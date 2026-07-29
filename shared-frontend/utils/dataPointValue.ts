@@ -4,9 +4,34 @@ export interface DisplayableDataPointValue {
 }
 
 type Translate = (key: string) => string
+export type DoublePointCode = '0' | '1' | '2' | '3'
 
 function isDoublePointValue(asduType: string) {
   return asduType.startsWith('M_DP_') || asduType.startsWith('C_DC_')
+}
+
+/** Normalize current and legacy DPI representations to their protocol code. */
+export function normalizeDoublePointCode(value: string): DoublePointCode | null {
+  switch (value.trim().toLowerCase()) {
+    case '0':
+    case 'intermediate':
+    case '中间':
+      return '0'
+    case '1':
+    case 'off':
+    case '分':
+      return '1'
+    case '2':
+    case 'on':
+    case '合':
+      return '2'
+    case '3':
+    case 'indeterminate':
+    case '不确定':
+      return '3'
+    default:
+      return null
+  }
 }
 
 /** Render stable backend point values in the active UI language. */
@@ -16,20 +41,14 @@ export function formatDataPointValue(
 ): string {
   if (!isDoublePointValue(point.asdu_type)) return point.value
 
-  switch (point.value.trim()) {
-    // Accept the legacy Chinese strings as a compatibility fallback for any
-    // stale response produced during an in-place upgrade.
+  switch (normalizeDoublePointCode(point.value)) {
     case '0':
-    case '中间':
-    case 'Intermediate':
       return t('table.dpIntermediate')
     case '1':
       return 'OFF'
     case '2':
       return 'ON'
     case '3':
-    case '不确定':
-    case 'Indeterminate':
       return t('table.dpIndeterminate')
     default:
       return point.value

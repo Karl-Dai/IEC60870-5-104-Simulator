@@ -5,7 +5,7 @@ import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
 import { formatAsduTypeWithId } from '../constants/asduTypes'
-import { formatDataPointValue } from '../utils/dataPointValue'
+import { formatDataPointValue } from '@shared/utils/dataPointValue'
 import type { DataPointInfo, MutationMode, PointMutationRow } from '../types'
 
 const props = defineProps<{

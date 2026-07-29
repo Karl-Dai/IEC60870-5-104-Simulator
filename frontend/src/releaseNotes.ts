@@ -60,3 +60,13 @@ export const RELEASE_NOTES: string[] = [
   'Master 端: 命令类型下拉显示十进制 TypeID, 广播 GI 响应提速 (debouncer 3s→1s, 去 3500ms 兜底), 修复新学 CA 节点不出现, 详见 CHANGELOG.md',
   '品质图例补 OK(正常)行, 说明无品质位置位的基线态',
 ]
+
+// Keep the complete release history above for release automation, while the
+// About dialog shows a concise, localized summary of the current release.
+export const ABOUT_RELEASE_NOTES = {
+  'zh-CN': RELEASE_NOTES.slice(0, 2),
+  'en-US': [
+    'v1.15.4 point workflow upgrades (#38–#40): migrate one or many points atomically between ASDU types in the same category while preserving values, quality, timestamps, mappings, and active mutations; the table also gains exact multi-selection, filtered select/invert, stable sorting, and batch settings; Point Details now explains Type ID, QOC/QL/QU, and S/E.',
+    'v1.15.4 explicit mapping and localization (#36–#37): new servers disable automatic control-point mapping by default while legacy configurations retain their behavior; backend logs, errors, DPI 0/3, COT text, and documentation entry points now follow the active UI language.',
+  ],
+} as const
