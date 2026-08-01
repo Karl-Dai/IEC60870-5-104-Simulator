@@ -136,7 +136,7 @@ async function applyToSelection() {
   }
   if (
     selectionSupportsStep.value
-    && mode.value !== 'flip'
+    && (mode.value === 'increment' || mode.value === 'decrement')
     && (!Number.isFinite(step.value) || step.value === 0)
   ) {
     await showAlert(t('simulationSettings.stepInvalid'))
@@ -209,6 +209,7 @@ function stopSelection() {
 function modeLabel(value: MutationMode) {
   if (value === 'increment') return t('table.modeIncrement')
   if (value === 'decrement') return t('table.modeDecrement')
+  if (value === 'random') return t('table.modeRandom')
   return t('table.modeFlip')
 }
 </script>
@@ -282,11 +283,14 @@ function modeLabel(value: MutationMode) {
                       <button :class="{ active: mode === 'decrement' }" @click="mode = 'decrement'">
                         {{ t('table.modeDecrement') }}
                       </button>
+                      <button :class="{ active: mode === 'random' }" @click="mode = 'random'">
+                        {{ t('table.modeRandom') }}
+                      </button>
                     </div>
                   </div>
 
                   <template v-if="selectionSupportsStep && mode !== 'flip'">
-                    <label>
+                    <label v-if="mode !== 'random'">
                       <span>{{ t('table.mutationStep') }}</span>
                       <input v-model.number="step" type="number" />
                     </label>
@@ -351,7 +355,7 @@ function modeLabel(value: MutationMode) {
                       <dt>{{ t('table.mutationPeriod') }}</dt>
                       <dd>{{ row.period_ms }} ms</dd>
                     </div>
-                    <div v-if="row.mode !== 'flip'">
+                    <div v-if="row.mode === 'increment' || row.mode === 'decrement'">
                       <dt>{{ t('table.mutationStep') }}</dt>
                       <dd>{{ row.step }}</dd>
                     </div>

@@ -24,6 +24,7 @@ pub fn run() {
             commands::list_bind_address_suggestions,
             // Station commands
             commands::add_station,
+            commands::update_station,
             commands::remove_station,
             commands::list_stations,
             // Data point commands

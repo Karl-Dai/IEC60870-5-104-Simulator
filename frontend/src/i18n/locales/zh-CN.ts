@@ -50,6 +50,9 @@ export type DictShape = {
     bindAddressLabel: string
     bindAddressHint: string
     portLabel: string
+    commonAddressLabel: string
+    stationNameLabel: string
+    stationNamePlaceholder: string
     initMode: string
     initZero: string
     initRandom: string
@@ -68,6 +71,8 @@ export type DictShape = {
   }
   station: {
     defaultName: string
+    unnamedName: string
+    displayName: string
   }
   tree: {
     title: string
@@ -77,6 +82,7 @@ export type DictShape = {
     ctxStopServer: string
     ctxDeleteServer: string
     ctxDeleteStation: string
+    ctxEditStation: string
     ctxEditRuntimeParams: string
     connTooltip: string
     confirmDeleteServer: string
@@ -181,6 +187,7 @@ export type DictShape = {
     modeFlip: string
     modeIncrement: string
     modeDecrement: string
+    modeRandom: string
     mutationStep: string
     mutationMin: string
     mutationMax: string
@@ -414,6 +421,7 @@ export type DictShape = {
   errors: {
     invalidPort: string
     invalidCa: string
+    stationCaRunning: string
     invalidIoa: string
     startBindInUse: string
     startBindDenied: string
@@ -583,6 +591,9 @@ const dict: DictShape = {
     bindAddressLabel: '监听地址',
     bindAddressHint: '0.0.0.0 监听全部网卡；也可输入指定网卡的 IP 地址。',
     portLabel: '端口号',
+    commonAddressLabel: 'ASDU 公共地址 (CA)',
+    stationNameLabel: '站名',
+    stationNamePlaceholder: '可选，例如：220kV 站',
     initMode: '初始值',
     initZero: '全零',
     initRandom: '随机',
@@ -600,7 +611,9 @@ const dict: DictShape = {
     defaultStationName: '站 {ca}',
   },
   station: {
-    defaultName: '站 {ca}',
+    defaultName: '站',
+    unnamedName: '站',
+    displayName: '{name}（CA:{ca}）',
   },
   tree: {
     title: '服务器',
@@ -610,6 +623,7 @@ const dict: DictShape = {
     ctxStopServer: '停止服务器',
     ctxDeleteServer: '删除服务器',
     ctxDeleteStation: '删除站',
+    ctxEditStation: '编辑站配置',
     ctxEditRuntimeParams: '修改运行参数',
     connTooltip: '已连接 {n} 个客户端',
     confirmDeleteServer: '确定删除服务器 {server}？未保存的点表数据将丢失（可先「保存配置」）。',
@@ -714,6 +728,7 @@ const dict: DictShape = {
     modeFlip: '翻转',
     modeIncrement: '递增',
     modeDecrement: '递减',
+    modeRandom: '随机',
     mutationStep: '步长',
     mutationMin: '下限',
     mutationMax: '上限',
@@ -952,6 +967,7 @@ const dict: DictShape = {
   errors: {
     invalidPort: '请输入有效的端口号 (1-65535)',
     invalidCa: '请输入有效的公共地址 (1-65534)',
+    stationCaRunning: '修改公共地址前请先停止服务器；站名可以在运行中修改。',
     invalidIoa: '请输入有效的 IOA (0 ~ 16777215 的整数)',
     startBindInUse: '无法监听 {addr}：端口已被其他程序占用。请停止占用程序或更换端口。（系统错误 {osError}）',
     startBindDenied: '无法监听 {addr}：系统拒绝访问该端口。Windows 上常见原因是 Hyper-V/WSL2 保留端口段、安全软件或独占绑定；请尝试未保留的高位端口，并检查 “netsh interface ipv4 show excludedportrange protocol=tcp”。（系统错误 {osError}）',

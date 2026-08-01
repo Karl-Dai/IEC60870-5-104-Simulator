@@ -25,6 +25,7 @@ const dataPointTableRef = ref<InstanceType<typeof DataPointTable> | null>(null)
 const selectedServerId = ref<string | null>(null)
 const selectedServerState = ref<string>('Stopped')
 const selectedCA = ref<number | null>(null)
+const selectedStationName = ref('')
 const selectedCategory = ref<string | null>(null)
 const selectedPoints = ref<{ ioa: number; asdu_type: string; category: string; value: string }[]>([])
 const logExpanded = ref(false)
@@ -66,6 +67,7 @@ watch(logHeight, (v) => {
 provide('selectedServerId', selectedServerId)
 provide('selectedServerState', selectedServerState)
 provide('selectedCA', selectedCA)
+provide('selectedStationName', selectedStationName)
 provide('selectedCategory', selectedCategory)
 provide('selectedPoints', selectedPoints)
 
@@ -105,23 +107,26 @@ function handleServerSelect(id: string, state: string) {
   selectedServerId.value = id
   selectedServerState.value = state
   selectedCA.value = null
+  selectedStationName.value = ''
   selectedCategory.value = null
   selectedPoints.value = []
 }
 
-function handleStationSelect(serverId: string, ca: number, state: string) {
+function handleStationSelect(serverId: string, ca: number, state: string, stationName: string) {
   selectedServerId.value = serverId
   selectedServerState.value = state
   selectedCA.value = ca
+  selectedStationName.value = stationName
   selectedCategory.value = null
   selectedPoints.value = []
   dataPointTableRef.value?.loadData()
 }
 
-function handleCategorySelect(serverId: string, ca: number, category: string, state: string) {
+function handleCategorySelect(serverId: string, ca: number, category: string, state: string, stationName: string) {
   selectedServerId.value = serverId
   selectedServerState.value = state
   selectedCA.value = ca
+  selectedStationName.value = stationName
   selectedCategory.value = category
   selectedPoints.value = []
   dataPointTableRef.value?.loadData()

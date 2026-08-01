@@ -16,6 +16,8 @@ const emit = defineEmits<{ (e: 'update:visible', v: boolean): void }>()
 const bindAddress = ref('0.0.0.0')
 const bindSuggestions = ref<string[]>(['0.0.0.0', '127.0.0.1'])
 const port = ref('2404')
+const commonAddress = ref(1)
+const stationName = ref('')
 const initMode = ref('zero')
 // issue #28:默认 0 = 空配置。旧默认 10 会给全部监视类型预填 IOA 1..10,
 // 制造大量同 CASDU 跨类型重复 IOA;实际站点应按需批量创建。
@@ -29,6 +31,8 @@ const requireClientCert = ref(false)
 function reset() {
   bindAddress.value = '0.0.0.0'
   port.value = '2404'
+  commonAddress.value = 1
+  stationName.value = ''
   initMode.value = 'zero'
   count.value = 0
   useTls.value = false
@@ -58,6 +62,11 @@ async function submit() {
     await showAlert(t('errors.invalidPort'))
     return
   }
+  const ca = Number(commonAddress.value)
+  if (!Number.isInteger(ca) || ca < 1 || ca > 65534) {
+    await showAlert(t('errors.invalidCa'))
+    return
+  }
   close()
   try {
     const c = Number.isFinite(count.value) && count.value >= 0
@@ -67,6 +76,8 @@ async function submit() {
       request: {
         bind_address: bindAddress.value.trim() || undefined,
         port: p,
+        common_address: ca,
+        station_name: stationName.value.trim(),
         init_mode: initMode.value,
         count_per_category: c,
         use_tls: useTls.value || undefined,
@@ -108,6 +119,19 @@ async function submit() {
           <div class="modal-field">
             <label>{{ t('newServer.portLabel') }}</label>
             <input v-model="port" type="number" min="1" max="65535" @keyup.enter="submit" />
+          </div>
+          <div class="modal-field">
+            <label>{{ t('newServer.commonAddressLabel') }}</label>
+            <input v-model.number="commonAddress" type="number" min="1" max="65534" step="1" @keyup.enter="submit" />
+          </div>
+          <div class="modal-field">
+            <label>{{ t('newServer.stationNameLabel') }}</label>
+            <input
+              v-model="stationName"
+              type="text"
+              :placeholder="t('newServer.stationNamePlaceholder')"
+              @keyup.enter="submit"
+            />
           </div>
           <div class="modal-field">
             <label>{{ t('newServer.initMode') }}</label>

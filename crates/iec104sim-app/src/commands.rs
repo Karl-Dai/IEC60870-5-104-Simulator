@@ -32,6 +32,12 @@ pub struct ServerStateEvent {
 pub struct CreateServerRequest {
     pub bind_address: Option<String>,
     pub port: u16,
+    /// Initial logical station created with the listener. Defaults to CA=1
+    /// with an empty user-defined name for backward compatibility.
+    #[serde(default)]
+    pub common_address: Option<u16>,
+    #[serde(default)]
+    pub station_name: Option<String>,
     pub init_mode: Option<String>,
     /// 默认 station 每个 ASDU 类型分类下的点数（缺省 10）。0 = 空站。
     pub count_per_category: Option<u32>,
@@ -91,11 +97,13 @@ pub async fn create_server(
         )
         .await;
 
-    // Auto-create default station (CA=1) with pre-filled data points
+    // Auto-create the requested initial logical station with pre-filled data points.
     let n = request.count_per_category.unwrap_or(10);
+    let common_address = request.common_address.unwrap_or(1);
+    let station_name = request.station_name.unwrap_or_default();
     let default_station = match request.init_mode.as_deref() {
-        Some("random") => Station::with_random_points(1, "", n),
-        _ => Station::with_default_points(1, "", n),
+        Some("random") => Station::with_random_points(common_address, station_name, n),
+        _ => Station::with_default_points(common_address, station_name, n),
     };
     server
         .add_station(default_station)
@@ -385,6 +393,45 @@ pub async fn remove_station(
         .map_err(|e| format!("failed to remove station: {}", e))?;
 
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct UpdateStationRequest {
+    pub server_id: String,
+    pub current_common_address: u16,
+    pub common_address: u16,
+    pub name: String,
+}
+
+#[tauri::command]
+pub async fn update_station(
+    state: State<'_, AppState>,
+    request: UpdateStationRequest,
+) -> Result<StationInfo, String> {
+    let servers = state.servers.read().await;
+    let srv = servers
+        .get(&request.server_id)
+        .ok_or_else(|| format!("server {} not found", request.server_id))?;
+
+    srv.server
+        .update_station(
+            request.current_common_address,
+            request.common_address,
+            request.name.clone(),
+        )
+        .await
+        .map_err(|e| format!("failed to update station: {}", e))?;
+
+    let stations = srv.server.stations.read().await;
+    let station = stations
+        .get(&request.common_address)
+        .ok_or_else(|| format!("station CA={} not found after update", request.common_address))?;
+    Ok(StationInfo {
+        common_address: station.common_address,
+        name: station.name.clone(),
+        point_count: station.data_points.len(),
+    })
 }
 
 #[tauri::command]
@@ -1871,12 +1918,13 @@ pub async fn get_remote_operation_config(
     Ok(srv.server.get_remote_ops().await)
 }
 
-/// 解析前端传入的变位模式字符串(serde snake_case:flip/increment/decrement)。
+/// 解析前端传入的变位模式字符串(serde snake_case:flip/increment/decrement/random)。
 /// 缺省或无法识别时按 flip 处理,保持旧行为。
 fn parse_mutation_mode(s: Option<&str>) -> MutationMode {
     match s {
         Some("increment") => MutationMode::Increment,
         Some("decrement") => MutationMode::Decrement,
+        Some("random") => MutationMode::Random,
         _ => MutationMode::Flip,
     }
 }
@@ -1951,6 +1999,7 @@ fn mutation_mode_str(mode: MutationMode) -> &'static str {
         MutationMode::Flip => "flip",
         MutationMode::Increment => "increment",
         MutationMode::Decrement => "decrement",
+        MutationMode::Random => "random",
     }
 }
 
@@ -2171,6 +2220,13 @@ mod tests {
             assert_eq!(data_point_to_info(&point, &def_map).value, expected);
             assert_eq!(data_point_to_value_snapshot(&point).value, expected);
         }
+    }
+
+    #[test]
+    fn point_mutation_mode_round_trips_random() {
+        assert_eq!(parse_mutation_mode(Some("random")), MutationMode::Random);
+        assert_eq!(mutation_mode_str(MutationMode::Random), "random");
+        assert_eq!(parse_mutation_mode(Some("unknown")), MutationMode::Flip);
     }
 
     #[tokio::test]

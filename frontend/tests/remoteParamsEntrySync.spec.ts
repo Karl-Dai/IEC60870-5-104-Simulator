@@ -70,12 +70,14 @@ async function ctxEditRuntimeParams(root: VueWrapper, idx: number) {
   await flushPromises()
 }
 
-// 右键第 idx 个站节点 → 点站菜单第一项「运行参数」
+// 右键第 idx 个站节点 → 点站菜单里的「运行参数」
 async function ctxEditStationRuntimeParams(root: VueWrapper, idx: number) {
   await root.findAll('.station-node')[idx].trigger('contextmenu')
   const items = root.findAll('.context-menu-item')
-  expect(items).toHaveLength(2)
-  await items[0].trigger('click')
+  expect(items).toHaveLength(3)
+  const runtimeItem = items.find(item => /Runtime Params|运行参数/.test(item.text()))
+  expect(runtimeItem).toBeDefined()
+  await runtimeItem!.trigger('click')
   await flushPromises()
 }
 

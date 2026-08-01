@@ -89,7 +89,7 @@ async function addStation() {
   const caStr = await showPrompt(t('prompt.inputCommonAddress'), '1')
   if (caStr === null) return
   const ca = Number(caStr)
-  if (isNaN(ca) || ca < 1 || ca > 65534) {
+  if (!Number.isInteger(ca) || ca < 1 || ca > 65534) {
     await showAlert(t('errors.invalidCa'))
     return
   }

@@ -33,6 +33,7 @@ const emit = defineEmits<{
 
 const selectedServerId = inject<Ref<string | null>>('selectedServerId')!
 const selectedCA = inject<Ref<number | null>>('selectedCA')!
+const selectedStationName = inject<Ref<string>>('selectedStationName', ref(''))
 const selectedCategory = inject<Ref<string | null>>('selectedCategory')!
 const dataRefreshKey = inject<Ref<number>>('dataRefreshKey')!
 
@@ -85,13 +86,22 @@ const activeMutationDetails = ref<Map<string, PointMutationInfo>>(new Map())
 
 // 变位方式的图标 / 本地化标签（数据表行内显示）。
 function mutationGlyph(mode: MutationMode | undefined) {
-  return mode === 'increment' ? '↑' : mode === 'decrement' ? '↓' : '⇅'
+  return mode === 'increment' ? '↑' : mode === 'decrement' ? '↓' : mode === 'random' ? '∿' : '⇅'
 }
 function mutationModeLabel(mode: MutationMode | undefined) {
   if (mode === 'increment') return t('table.modeIncrement')
   if (mode === 'decrement') return t('table.modeDecrement')
+  if (mode === 'random') return t('table.modeRandom')
   return t('table.modeFlip')
 }
+
+const selectedStationLabel = computed(() => {
+  if (selectedCA.value === null) return ''
+  return t('station.displayName', {
+    name: selectedStationName.value.trim() || t('station.unnamedName'),
+    ca: selectedCA.value,
+  })
+})
 
 // === Virtual scroll (same pattern as master DataTable) ===
 const ROW_HEIGHT = 28
@@ -1006,6 +1016,7 @@ defineExpose({ loadData: loadDataPoints })
   <div class="data-point-table" @click="closeContextMenu">
     <div class="table-header-bar">
       <span class="table-title">
+        <template v-if="selectedStationLabel">{{ selectedStationLabel }} · </template>
         {{ selectedCategory ? localizeCategoryLabel(selectedCategory) : t('table.allPoints') }}
       </span>
       <input

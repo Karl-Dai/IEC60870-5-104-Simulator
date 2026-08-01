@@ -116,8 +116,8 @@ export interface RemoteOperationConfig {
   send_act_term: boolean
 }
 
-/** 周期变位方式:翻转(两态振荡)/ 递增 / 递减(三角波)。 */
-export type MutationMode = 'flip' | 'increment' | 'decrement'
+/** 周期变位方式:翻转(两态振荡)/递增/递减(三角波)/范围内随机。 */
+export type MutationMode = 'flip' | 'increment' | 'decrement' | 'random'
 
 /** list_point_mutations 返回项。用于数据表状态标记、动态刷新和模拟参数回显。 */
 export interface PointMutationInfo {

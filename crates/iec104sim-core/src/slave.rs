@@ -1316,11 +1316,67 @@ impl SlaveServer {
     pub fn state(&self) -> ServerState { self.state }
 
     pub async fn add_station(&self, station: Station) -> Result<(), SlaveError> {
+        if !(1..=65534).contains(&station.common_address) {
+            return Err(SlaveError::InvalidCommonAddress(station.common_address));
+        }
         let mut stations = self.stations.write().await;
         if stations.contains_key(&station.common_address) {
             return Err(SlaveError::DuplicateStation(station.common_address));
         }
         stations.insert(station.common_address, station);
+        Ok(())
+    }
+
+    /// Update a logical station without rebuilding its points. Changing the CA
+    /// is only allowed while the listener is stopped; every explicit control
+    /// mapping that targets the old CA follows the station to the new address.
+    pub async fn update_station(
+        &self,
+        current_ca: u16,
+        new_ca: u16,
+        name: String,
+    ) -> Result<(), SlaveError> {
+        if !(1..=65534).contains(&new_ca) {
+            return Err(SlaveError::InvalidCommonAddress(new_ca));
+        }
+        if current_ca != new_ca && self.state == ServerState::Running {
+            return Err(SlaveError::StationAddressChangeWhileRunning);
+        }
+
+        let mut stations = self.stations.write().await;
+        if !stations.contains_key(&current_ca) {
+            return Err(SlaveError::StationNotFound(current_ca));
+        }
+        if current_ca != new_ca && stations.contains_key(&new_ca) {
+            return Err(SlaveError::DuplicateStation(new_ca));
+        }
+
+        let mut station = stations
+            .remove(&current_ca)
+            .ok_or(SlaveError::StationNotFound(current_ca))?;
+        station.common_address = new_ca;
+        station.name = name;
+
+        if current_ca != new_ca {
+            for other in stations.values_mut() {
+                for def in &mut other.object_defs {
+                    if let Some(mapping) = def.mapping.as_mut() {
+                        if mapping.common_address == current_ca {
+                            mapping.common_address = new_ca;
+                        }
+                    }
+                }
+            }
+            for def in &mut station.object_defs {
+                if let Some(mapping) = def.mapping.as_mut() {
+                    if mapping.common_address == current_ca {
+                        mapping.common_address = new_ca;
+                    }
+                }
+            }
+        }
+
+        stations.insert(new_ca, station);
         Ok(())
     }
 
@@ -2906,8 +2962,8 @@ fn flip_value(value: &DataPointValue) -> DataPointValue {
 }
 
 /// 周期变位的变位方式。Flip 为两态翻转(离散量翻转、模拟量取反);
-/// Increment/Decrement 为按步长在 [min,max] 三角波来回(仅模拟量/累计量,
-/// 离散量回退翻转)。
+/// Increment/Decrement 为按步长在 [min,max] 三角波来回；Random 为每个
+/// 周期在范围内独立采样(仅模拟量/累计量，离散量回退翻转)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MutationMode {
@@ -2915,6 +2971,7 @@ pub enum MutationMode {
     Flip,
     Increment,
     Decrement,
+    Random,
 }
 
 impl MutationMode {
@@ -2927,8 +2984,8 @@ impl MutationMode {
     }
 }
 
-/// 周期变位参数。step/min/max 仅 Increment/Decrement 使用(统一以 f64 传递,
-/// 应用到具体类型时按需 round/clamp);Flip 时忽略。
+/// 周期变位参数。step 仅 Increment/Decrement 使用，min/max 也供 Random 使用
+/// (统一以 f64 传递，应用到具体类型时按需 round/clamp)；Flip 时全部忽略。
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct MutationParams {
     pub mode: MutationMode,
@@ -2988,6 +3045,48 @@ fn apply_mutation(value: &DataPointValue, params: &MutationParams, dir: f64) -> 
     match params.mode {
         MutationMode::Flip => (flip_value(value), dir),
         MutationMode::Increment | MutationMode::Decrement => step_value(value, params, dir),
+        MutationMode::Random => (random_value(value, params), dir),
+    }
+}
+
+/// 在配置范围内独立生成下一个模拟量/累计量值。整数值沿用现有参数语义：
+/// 从浮点范围采样后四舍五入，并再次钳制到协议量程。离散量不支持随机数，
+/// 与其他数值模式一致回退到 Flip。
+fn random_value(value: &DataPointValue, params: &MutationParams) -> DataPointValue {
+    use rand::Rng;
+
+    let (lo, hi): (f64, f64) = match value {
+        DataPointValue::ShortFloat { .. } => (params.min, params.max),
+        DataPointValue::Normalized { .. } => (params.min.max(-1.0), params.max.min(1.0)),
+        DataPointValue::Scaled { .. } => (
+            params.min.max(i16::MIN as f64),
+            params.max.min(i16::MAX as f64),
+        ),
+        DataPointValue::IntegratedTotal { .. } => (
+            params.min.max(i32::MIN as f64),
+            params.max.min(i32::MAX as f64),
+        ),
+        _ => return flip_value(value),
+    };
+    let (lo, hi) = (lo.min(hi), lo.max(hi));
+    let sampled = if lo == hi {
+        lo
+    } else {
+        rand::thread_rng().gen_range(lo..=hi)
+    };
+
+    match value {
+        DataPointValue::ShortFloat { .. } => DataPointValue::ShortFloat { value: sampled as f32 },
+        DataPointValue::Normalized { .. } => DataPointValue::Normalized { value: sampled as f32 },
+        DataPointValue::Scaled { .. } => DataPointValue::Scaled {
+            value: sampled.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16,
+        },
+        DataPointValue::IntegratedTotal { carry, sequence, .. } => DataPointValue::IntegratedTotal {
+            value: sampled.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32,
+            carry: *carry,
+            sequence: *sequence,
+        },
+        _ => unreachable!(),
     }
 }
 
@@ -3150,6 +3249,9 @@ pub enum SlaveError {
     IncompatiblePointType { from: AsduTypeId, to: AsduTypeId },
     #[error("station CA={0} already exists")] DuplicateStation(u16),
     #[error("station CA={0} not found")] StationNotFound(u16),
+    #[error("common address must be between 1 and 65534, got {0}")] InvalidCommonAddress(u16),
+    #[error("stop the server before changing a station common address")]
+    StationAddressChangeWhileRunning,
     #[error("server is already running")] AlreadyRunning,
     #[error("server is not running")] NotRunning,
     #[error("bind error: {0}")] BindError(String),
@@ -3539,12 +3641,120 @@ mod tests {
         assert!(matches!(v, V::ShortFloat { value } if value == -5.0));
     }
 
+    #[test]
+    fn test_apply_mutation_random_stays_within_bounds_and_preserves_type() {
+        use DataPointValue as V;
+        let params = MutationParams {
+            mode: MutationMode::Random,
+            step: 999.0,
+            min: -2.5,
+            max: 3.5,
+        };
+
+        for _ in 0..128 {
+            let (float, dir) = apply_mutation(&V::ShortFloat { value: 0.0 }, &params, -1.0);
+            assert!(matches!(float, V::ShortFloat { value } if (-2.5..=3.5).contains(&value)));
+            assert_eq!(dir, -1.0, "random mode does not use triangle-wave direction");
+
+            let (scaled, _) = apply_mutation(&V::Scaled { value: 0 }, &params, 1.0);
+            assert!(matches!(scaled, V::Scaled { value } if (-3..=4).contains(&value)));
+        }
+
+        let fixed = MutationParams { min: 7.0, max: 7.0, ..params };
+        assert!(matches!(
+            apply_mutation(&V::IntegratedTotal { value: 0, carry: true, sequence: 4 }, &fixed, 1.0).0,
+            V::IntegratedTotal { value: 7, carry: true, sequence: 4 }
+        ));
+
+        let normalized = MutationParams { min: -100.0, max: 100.0, ..params };
+        for _ in 0..32 {
+            assert!(matches!(
+                apply_mutation(&V::Normalized { value: 0.0 }, &normalized, 1.0).0,
+                V::Normalized { value } if (-1.0..=1.0).contains(&value)
+            ));
+        }
+
+        // Unsupported discrete types retain the established fallback behavior.
+        assert!(matches!(
+            apply_mutation(&V::SinglePoint { value: false }, &params, 1.0).0,
+            V::SinglePoint { value: true }
+        ));
+    }
+
     #[tokio::test]
     async fn test_slave_server_station_management() {
         let server = SlaveServer::new(SlaveTransportConfig::default());
         let station = Station::new(1, "站1");
         server.add_station(station).await.unwrap();
         assert!(server.add_station(Station::new(1, "重复")).await.is_err());
+        assert!(matches!(
+            server.add_station(Station::new(0, "非法")).await,
+            Err(SlaveError::InvalidCommonAddress(0))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_update_station_rekeys_ca_and_follows_control_mappings() {
+        let server = SlaveServer::new(SlaveTransportConfig::default());
+        let mut monitor = Station::new(2, "old");
+        monitor.add_point(InformationObjectDef {
+            ioa: 10,
+            asdu_type: AsduTypeId::MSpNa1,
+            category: DataCategory::SinglePoint,
+            name: String::new(),
+            comment: String::new(),
+            mapping: None,
+            command_qualifier: None,
+            select_before_operate: None,
+        }).unwrap();
+        let mut control = Station::new(1, "control");
+        control.add_point(InformationObjectDef {
+            ioa: 10,
+            asdu_type: AsduTypeId::CScNa1,
+            category: DataCategory::SingleCommand,
+            name: String::new(),
+            comment: String::new(),
+            mapping: Some(ControlTarget {
+                common_address: 2,
+                ioa: 10,
+                asdu_type: AsduTypeId::MSpNa1,
+            }),
+            command_qualifier: None,
+            select_before_operate: None,
+        }).unwrap();
+        server.add_station(control).await.unwrap();
+        server.add_station(monitor).await.unwrap();
+
+        server.update_station(2, 20, "renamed".to_string()).await.unwrap();
+
+        let stations = server.stations.read().await;
+        assert!(!stations.contains_key(&2));
+        let moved = stations.get(&20).unwrap();
+        assert_eq!(moved.common_address, 20);
+        assert_eq!(moved.name, "renamed");
+        assert!(moved.data_points.contains(10, AsduTypeId::MSpNa1));
+        let mapping = stations
+            .get(&1)
+            .unwrap()
+            .object_defs
+            .iter()
+            .find_map(|def| def.mapping)
+            .unwrap();
+        assert_eq!(mapping.common_address, 20);
+    }
+
+    #[tokio::test]
+    async fn test_update_station_rejects_ca_change_while_running_but_allows_rename() {
+        let mut server = SlaveServer::new(SlaveTransportConfig::default());
+        server.add_station(Station::new(1, "old")).await.unwrap();
+        server.state = ServerState::Running;
+
+        assert!(matches!(
+            server.update_station(1, 2, "new".to_string()).await,
+            Err(SlaveError::StationAddressChangeWhileRunning)
+        ));
+        server.update_station(1, 1, "renamed".to_string()).await.unwrap();
+        assert_eq!(server.stations.read().await.get(&1).unwrap().name, "renamed");
     }
 
     #[tokio::test]

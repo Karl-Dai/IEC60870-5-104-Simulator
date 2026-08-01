@@ -147,4 +147,27 @@ describe('SimulationSettingsDrawer', () => {
     expect(wrapper.emitted('changed')).toHaveLength(1)
     wrapper.unmount()
   })
+
+  it('随机模式按周期在 Min/Max 范围内生成且不要求 Step', async () => {
+    const wrapper = mountDrawer([point(10, 'M_ME_NC_1', '4')], [])
+
+    const modeButtons = wrapper.findAll('.sim-mode-buttons button')
+    expect(modeButtons.map(button => button.text())).toContain('Random')
+    await modeButtons[3].trigger('click')
+
+    const labels = wrapper.findAll('.sim-form label').map(label => label.text())
+    expect(labels.some(label => label.startsWith('Step'))).toBe(false)
+    expect(labels.some(label => label.startsWith('Min'))).toBe(true)
+    expect(labels.some(label => label.startsWith('Max'))).toBe(true)
+
+    await wrapper.find('.sim-btn-primary').trigger('click')
+    await flushPromises()
+    expect(invokeMock).toHaveBeenCalledWith('start_point_mutation', expect.objectContaining({
+      mode: 'random',
+      min: -96,
+      max: 104,
+    }))
+    expect(alertMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })

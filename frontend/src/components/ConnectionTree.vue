@@ -2,14 +2,18 @@
 import { ref, inject, watch, onMounted, type Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
-import type { showAlert as ShowAlert, showConfirm as ShowConfirm } from '@shared/composables/useDialog'
+import type { showAlert as ShowAlert, showConfirm as ShowConfirm, showPrompt as ShowPrompt } from '@shared/composables/useDialog'
 import type { ServerInfo, StationInfo } from '../types'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
 import EmptyState from '@shared/components/EmptyState.vue'
 import { formatStartServerError } from '../errors'
 
 const { t } = useI18n()
-const { showAlert, showConfirm } = inject<{ showAlert: typeof ShowAlert; showConfirm: typeof ShowConfirm }>(dialogKey)!
+const { showAlert, showConfirm, showPrompt } = inject<{
+  showAlert: typeof ShowAlert
+  showConfirm: typeof ShowConfirm
+  showPrompt: typeof ShowPrompt
+}>(dialogKey)!
 
 const CATEGORIES = [
   'single_point',
@@ -65,8 +69,8 @@ interface TreeStation {
 
 const emit = defineEmits<{
   (e: 'server-select', id: string, state: string): void
-  (e: 'station-select', serverId: string, ca: number, state: string): void
-  (e: 'category-select', serverId: string, ca: number, category: string, state: string): void
+  (e: 'station-select', serverId: string, ca: number, state: string, stationName: string): void
+  (e: 'category-select', serverId: string, ca: number, category: string, state: string, stationName: string): void
   (e: 'edit-runtime-params', serverId: string, label: string): void
 }>()
 
@@ -83,6 +87,7 @@ const contextMenu = ref({
   type: '' as 'server' | 'station',
   serverId: '',
   ca: 0,
+  stationName: '',
   serverState: '',
 })
 
@@ -126,11 +131,11 @@ function selectServer(ts: TreeServer) {
 }
 
 function selectStation(ts: TreeServer, tst: TreeStation) {
-  emit('station-select', ts.server.id, tst.station.common_address, ts.server.state)
+  emit('station-select', ts.server.id, tst.station.common_address, ts.server.state, tst.station.name)
 }
 
 function selectCategory(ts: TreeServer, tst: TreeStation, category: string) {
-  emit('category-select', ts.server.id, tst.station.common_address, category, ts.server.state)
+  emit('category-select', ts.server.id, tst.station.common_address, category, ts.server.state, tst.station.name)
 }
 
 function showContextMenuForServer(e: MouseEvent, ts: TreeServer) {
@@ -142,6 +147,7 @@ function showContextMenuForServer(e: MouseEvent, ts: TreeServer) {
     type: 'server',
     serverId: ts.server.id,
     ca: 0,
+    stationName: '',
     serverState: ts.server.state,
   }
 }
@@ -155,6 +161,7 @@ function showContextMenuForStation(e: MouseEvent, ts: TreeServer, tst: TreeStati
     type: 'station',
     serverId: ts.server.id,
     ca: tst.station.common_address,
+    stationName: tst.station.name,
     serverState: ts.server.state,
   }
 }
@@ -220,6 +227,52 @@ async function ctxDeleteStation() {
   }
 }
 
+async function ctxEditStation() {
+  const {
+    serverId,
+    ca: currentCommonAddress,
+    stationName,
+    serverState,
+  } = contextMenu.value
+  closeContextMenu()
+
+  const caText = await showPrompt(t('prompt.inputCommonAddress'), String(currentCommonAddress))
+  if (caText === null) return
+  const commonAddress = Number(caText)
+  if (!Number.isInteger(commonAddress) || commonAddress < 1 || commonAddress > 65534) {
+    await showAlert(t('errors.invalidCa'))
+    return
+  }
+  if (commonAddress !== currentCommonAddress && serverState === 'Running') {
+    await showAlert(t('errors.stationCaRunning'))
+    return
+  }
+
+  const name = await showPrompt(t('prompt.inputStationName'), stationName)
+  if (name === null) return
+  try {
+    await invoke('update_station', {
+      request: {
+        server_id: serverId,
+        current_common_address: currentCommonAddress,
+        common_address: commonAddress,
+        name: name.trim(),
+      },
+    })
+    emit('station-select', serverId, commonAddress, serverState, name.trim())
+    await loadTree()
+  } catch (e) {
+    await showAlert(String(e))
+  }
+}
+
+function stationLabel(station: StationInfo) {
+  return t('station.displayName', {
+    name: station.name.trim() || t('station.unnamedName'),
+    ca: station.common_address,
+  })
+}
+
 function ctxEditRuntimeParams() {
   const { serverId, ca, type, serverState } = contextMenu.value
   const ts = treeData.value.find(t => t.server.id === serverId)
@@ -234,7 +287,8 @@ function ctxEditRuntimeParams() {
     // 保存后当前点表直接能看到 +TB 徽标)。服务器本已一致时不动用户当前查看的站 ——
     // 右键看一眼服务器级参数不该把点表切到别的站。
     if (selectedServerId.value !== serverId) {
-      emit('station-select', serverId, ca, ts ? ts.server.state : serverState)
+      const station = ts?.stations.find(item => item.station.common_address === ca)?.station
+      emit('station-select', serverId, ca, ts ? ts.server.state : serverState, station?.name ?? '')
     }
   } else if (selectedServerId.value !== serverId) {
     emit('server-select', serverId, ts ? ts.server.state : serverState)
@@ -296,7 +350,7 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
             @contextmenu.prevent="showContextMenuForStation($event, ts, tst)"
           >
             <span class="node-arrow" @click.stop="toggleStation(tst)">{{ tst.expanded ? '\u25BC' : '\u25B6' }}</span>
-            <span class="node-label">{{ tst.station.name || t('station.defaultName', { ca: tst.station.common_address }) }}</span>
+            <span class="node-label">{{ stationLabel(tst.station) }}</span>
             <span class="node-badge">{{ tst.station.point_count }}</span>
           </div>
 
@@ -341,6 +395,7 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
         <div class="context-menu-item danger" @click="ctxDeleteServer">{{ t('tree.ctxDeleteServer') }}</div>
       </template>
       <template v-if="contextMenu.type === 'station'">
+        <div class="context-menu-item" @click="ctxEditStation">{{ t('tree.ctxEditStation') }}</div>
         <div class="context-menu-item" @click="ctxEditRuntimeParams">{{ t('tree.ctxEditRuntimeParams') }}</div>
         <div class="context-menu-item danger" @click="ctxDeleteStation">{{ t('tree.ctxDeleteStation') }}</div>
       </template>
