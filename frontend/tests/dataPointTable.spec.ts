@@ -152,6 +152,61 @@ describe('DataPointTable 子站数据表', () => {
     const badges = wrapper.findAll('.tb-badge')
     expect(badges).toHaveLength(2) // 两个 M_SP_NA_1 点位都补上派生徽标
     expect(badges[0].text()).toBe('+M_SP_TB_1 (30)')
+    expect(badges[0].element.parentElement?.classList.contains('type-cell-content')).toBe(true)
+    expect(badges[0].attributes('title')).toContain('M_SP_TB_1 (30)')
+    expect(wrapper.find('.type-label').attributes('title')).toContain('M_SP_NA_1')
+    expect(wrapper.find('.name-text').attributes('title')).toBe('p1')
+    wrapper.unmount()
+  })
+
+  it('六个数据列可调整宽度，表头和虚拟表体同步且都执行最小宽度', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_remote_operation_config') {
+        return Promise.resolve({ sync_tb_by_category: {} })
+      }
+      return Promise.resolve({ points: [A, B], seq: 1, total_count: 2 })
+    })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+
+    const handles = wrapper.findAll('.column-resizer')
+    expect(handles.map(handle => handle.attributes('data-column')))
+      .toEqual(['ioa', 'type', 'name', 'value', 'quality', 'timestamp'])
+
+    const minimumWidths = ['64px', '160px', '120px', '90px', '90px', '110px']
+    for (const handle of handles) {
+      await handle.trigger('mousedown', { clientX: 1000 })
+      window.dispatchEvent(new MouseEvent('mousemove', { clientX: 0 }))
+      window.dispatchEvent(new MouseEvent('mouseup'))
+      await nextTick()
+    }
+
+    const tables = wrapper.findAll('table.table')
+    expect(tables).toHaveLength(2)
+    for (const table of tables) {
+      const widths = table.findAll('col').slice(1).map(col => col.element.style.width)
+      expect(widths).toEqual(minimumWidths)
+    }
+
+    const vm = wrapper.vm as unknown as { sortKey: string }
+    expect(vm.sortKey).toBe('ioa')
+    await handles[1].trigger('mousedown', { clientX: 300 })
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 260 }))
+    window.dispatchEvent(new MouseEvent('mouseup'))
+    await wrapper.find('th.col-type').trigger('click')
+    expect(vm.sortKey).toBe('ioa')
+
+    // Keyboard resizing uses the same width state and a data refresh must not
+    // rebuild that state or move the body columns out of alignment.
+    await handles[2].trigger('keydown', { key: 'ArrowRight' })
+    expect(tables[0].findAll('col')[3].element.style.width).toBe('132px')
+    expect(tables[1].findAll('col')[3].element.style.width).toBe('132px')
+
+    refs.dataRefreshKey.value++
+    await flushPromises()
+    await nextTick()
+    expect(tables[0].findAll('col')[3].element.style.width).toBe('132px')
+    expect(tables[1].findAll('col')[3].element.style.width).toBe('132px')
     wrapper.unmount()
   })
 

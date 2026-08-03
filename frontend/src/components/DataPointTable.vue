@@ -70,6 +70,83 @@ const showSimulationDrawer = ref(false)
 type SortKey = 'ioa' | 'asdu_type' | 'name' | 'value'
 const sortKey = ref<SortKey>('ioa')
 const sortDirection = ref<'asc' | 'desc'>('asc')
+
+type ResizableColumnKey = 'ioa' | 'type' | 'name' | 'value' | 'quality' | 'timestamp'
+interface ColumnSize { width: number; minWidth: number }
+
+const SELECT_COLUMN_WIDTH = 28
+const columnSizes = ref<Record<ResizableColumnKey, ColumnSize>>({
+  ioa: { width: 70, minWidth: 64 },
+  type: { width: 210, minWidth: 160 },
+  name: { width: 140, minWidth: 120 },
+  value: { width: 100, minWidth: 90 },
+  quality: { width: 90, minWidth: 90 },
+  timestamp: { width: 110, minWidth: 110 },
+})
+const resizingColumn = ref<ResizableColumnKey | null>(null)
+let columnResizeStart: { key: ResizableColumnKey; x: number; width: number } | null = null
+let suppressSortClick = false
+let suppressSortResetTimer: number | null = null
+
+const tableWidthStyle = computed(() => ({
+  width: `${SELECT_COLUMN_WIDTH + Object.values(columnSizes.value).reduce((sum, column) => sum + column.width, 0)}px`,
+  minWidth: '100%',
+}))
+
+function columnWidthStyle(key: ResizableColumnKey) {
+  return { width: `${columnSizes.value[key].width}px` }
+}
+
+function resizeColumn(key: ResizableColumnKey, requestedWidth: number) {
+  const current = columnSizes.value[key]
+  const width = Math.max(current.minWidth, Math.round(requestedWidth))
+  if (width === current.width) return
+  columnSizes.value = {
+    ...columnSizes.value,
+    [key]: { ...current, width },
+  }
+}
+
+function onColumnResize(event: MouseEvent) {
+  if (!columnResizeStart) return
+  if (Math.abs(event.clientX - columnResizeStart.x) > 2) suppressSortClick = true
+  resizeColumn(
+    columnResizeStart.key,
+    columnResizeStart.width + event.clientX - columnResizeStart.x,
+  )
+}
+
+function stopColumnResize() {
+  columnResizeStart = null
+  resizingColumn.value = null
+  window.removeEventListener('mousemove', onColumnResize)
+  window.removeEventListener('mouseup', stopColumnResize)
+  if (suppressSortClick) {
+    if (suppressSortResetTimer !== null) clearTimeout(suppressSortResetTimer)
+    // A browser may retarget the click generated after a drag to the <th>
+    // because the resize handle moved away from the pointer. Keep the guard
+    // through that click, then restore normal sorting on the next task.
+    suppressSortResetTimer = window.setTimeout(() => {
+      suppressSortClick = false
+      suppressSortResetTimer = null
+    }, 0)
+  }
+}
+
+function startColumnResize(event: MouseEvent, key: ResizableColumnKey) {
+  stopColumnResize()
+  columnResizeStart = { key, x: event.clientX, width: columnSizes.value[key].width }
+  resizingColumn.value = key
+  window.addEventListener('mousemove', onColumnResize)
+  window.addEventListener('mouseup', stopColumnResize)
+}
+
+function handleColumnResizeKeydown(event: KeyboardEvent, key: ResizableColumnKey) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  event.stopPropagation()
+  resizeColumn(key, columnSizes.value[key].width + (event.key === 'ArrowLeft' ? -12 : 12))
+}
 // 默认写值类型：取当前分类过滤命中的首个点的 asdu_type；无过滤则空（弹窗回退首个可用类型）。
 const batchWriteDefaultType = computed(() => {
   if (!selectedCategory.value) return ''
@@ -104,7 +181,9 @@ const selectedStationLabel = computed(() => {
 })
 
 // === Virtual scroll (same pattern as master DataTable) ===
-const ROW_HEIGHT = 28
+// The fixed height keeps virtual-scroll offsets stable while leaving room for a
+// derived-TB badge to wrap below the ASDU type on narrow columns.
+const ROW_HEIGHT = 36
 const OVERSCAN = 10
 const scrollTop = ref(0)
 const containerHeight = ref(400)
@@ -317,6 +396,8 @@ onUnmounted(() => {
   componentUnmounted = true
   selectionEpoch++
   stopPolling()
+  stopColumnResize()
+  if (suppressSortResetTimer !== null) clearTimeout(suppressSortResetTimer)
   clearActiveMutationState()
   for (const t of changeTimers.values()) clearTimeout(t)
   if (scrollRaf) cancelAnimationFrame(scrollRaf)
@@ -469,6 +550,7 @@ const filteredPoints = computed(() => {
 })
 
 function toggleSort(key: SortKey) {
+  if (suppressSortClick) return
   if (sortKey.value === key) {
     sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
   } else {
@@ -1110,30 +1192,127 @@ defineExpose({ loadData: loadDataPoints })
       @keydown="handleTableKeydown"
     >
       <!-- Fixed header -->
-      <table class="table">
+      <table class="table" :style="tableWidthStyle">
+        <colgroup>
+          <col :style="{ width: `${SELECT_COLUMN_WIDTH}px` }" />
+          <col :style="columnWidthStyle('ioa')" />
+          <col :style="columnWidthStyle('type')" />
+          <col :style="columnWidthStyle('name')" />
+          <col :style="columnWidthStyle('value')" />
+          <col :style="columnWidthStyle('quality')" />
+          <col :style="columnWidthStyle('timestamp')" />
+        </colgroup>
         <thead>
           <tr>
             <th class="col-select" />
             <th class="col-ioa sortable" @click="toggleSort('ioa')">
               IOA <span class="sort-glyph">{{ sortGlyph('ioa') }}</span>
+              <span
+                class="column-resizer"
+                :class="{ active: resizingColumn === 'ioa' }"
+                data-column="ioa"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="IOA"
+                tabindex="0"
+                @click.stop
+                @mousedown.stop.prevent="startColumnResize($event, 'ioa')"
+                @keydown="handleColumnResizeKeydown($event, 'ioa')"
+              />
             </th>
             <th class="col-type sortable" @click="toggleSort('asdu_type')">
               {{ t('table.asduTypeCol') }} <span class="sort-glyph">{{ sortGlyph('asdu_type') }}</span>
+              <span
+                class="column-resizer"
+                :class="{ active: resizingColumn === 'type' }"
+                data-column="type"
+                role="separator"
+                aria-orientation="vertical"
+                :aria-label="t('table.asduTypeCol')"
+                tabindex="0"
+                @click.stop
+                @mousedown.stop.prevent="startColumnResize($event, 'type')"
+                @keydown="handleColumnResizeKeydown($event, 'type')"
+              />
             </th>
             <th class="col-name sortable" @click="toggleSort('name')">
               {{ t('table.nameCol') }} <span class="sort-glyph">{{ sortGlyph('name') }}</span>
+              <span
+                class="column-resizer"
+                :class="{ active: resizingColumn === 'name' }"
+                data-column="name"
+                role="separator"
+                aria-orientation="vertical"
+                :aria-label="t('table.nameCol')"
+                tabindex="0"
+                @click.stop
+                @mousedown.stop.prevent="startColumnResize($event, 'name')"
+                @keydown="handleColumnResizeKeydown($event, 'name')"
+              />
             </th>
             <th class="col-value sortable" @click="toggleSort('value')">
               {{ t('table.valueCol') }} <span class="sort-glyph">{{ sortGlyph('value') }}</span>
+              <span
+                class="column-resizer"
+                :class="{ active: resizingColumn === 'value' }"
+                data-column="value"
+                role="separator"
+                aria-orientation="vertical"
+                :aria-label="t('table.valueCol')"
+                tabindex="0"
+                @click.stop
+                @mousedown.stop.prevent="startColumnResize($event, 'value')"
+                @keydown="handleColumnResizeKeydown($event, 'value')"
+              />
             </th>
-            <th class="col-quality"><span class="th-quality">{{ t('table.qualityCol') }}<QualityLegend /></span></th>
-            <th class="col-timestamp">{{ t('table.timestampCol') }}</th>
+            <th class="col-quality">
+              <span class="th-quality">{{ t('table.qualityCol') }}<QualityLegend /></span>
+              <span
+                class="column-resizer"
+                :class="{ active: resizingColumn === 'quality' }"
+                data-column="quality"
+                role="separator"
+                aria-orientation="vertical"
+                :aria-label="t('table.qualityCol')"
+                tabindex="0"
+                @click.stop
+                @mousedown.stop.prevent="startColumnResize($event, 'quality')"
+                @keydown="handleColumnResizeKeydown($event, 'quality')"
+              />
+            </th>
+            <th class="col-timestamp">
+              {{ t('table.timestampCol') }}
+              <span
+                class="column-resizer"
+                :class="{ active: resizingColumn === 'timestamp' }"
+                data-column="timestamp"
+                role="separator"
+                aria-orientation="vertical"
+                :aria-label="t('table.timestampCol')"
+                tabindex="0"
+                @click.stop
+                @mousedown.stop.prevent="startColumnResize($event, 'timestamp')"
+                @keydown="handleColumnResizeKeydown($event, 'timestamp')"
+              />
+            </th>
           </tr>
         </thead>
       </table>
       <!-- Virtual scroll body -->
       <div v-if="filteredPoints.length > 0" :style="{ height: totalHeight + 'px', position: 'relative' }">
-        <table class="table table-body" :style="{ transform: `translateY(${offsetY}px)` }">
+        <table
+          class="table table-body"
+          :style="{ ...tableWidthStyle, transform: `translateY(${offsetY}px)` }"
+        >
+          <colgroup>
+            <col :style="{ width: `${SELECT_COLUMN_WIDTH}px` }" />
+            <col :style="columnWidthStyle('ioa')" />
+            <col :style="columnWidthStyle('type')" />
+            <col :style="columnWidthStyle('name')" />
+            <col :style="columnWidthStyle('value')" />
+            <col :style="columnWidthStyle('quality')" />
+            <col :style="columnWidthStyle('timestamp')" />
+          </colgroup>
           <tbody>
             <tr
               v-for="point in visibleRows"
@@ -1168,14 +1347,20 @@ defineExpose({ loadData: loadDataPoints })
                 >⚠</span>
               </td>
               <td class="col-type">
-                {{ formatAsduTypeWithId(point.asdu_type) }}
-                <span
-                  v-if="derivedTbLabel(point)"
-                  class="tb-badge"
-                  :title="t('table.derivedTbTitle', { tb: derivedTbLabel(point)! })"
-                >+{{ derivedTbLabel(point) }}</span>
+                <div class="type-cell-content">
+                  <span class="type-label" :title="formatAsduTypeWithId(point.asdu_type)">
+                    {{ formatAsduTypeWithId(point.asdu_type) }}
+                  </span>
+                  <span
+                    v-if="derivedTbLabel(point)"
+                    class="tb-badge"
+                    :title="t('table.derivedTbTitle', { tb: derivedTbLabel(point)! })"
+                  >+{{ derivedTbLabel(point) }}</span>
+                </div>
               </td>
-              <td class="col-name">{{ point.name || '-' }}</td>
+              <td class="col-name">
+                <span class="name-text" :title="point.name || '-'">{{ point.name || '-' }}</span>
+              </td>
               <td :class="['col-value', { 'value-highlight': changedKeys.has(point.ioa + ':' + point.asdu_type) }]" @dblclick.stop="startEdit(point)">
                 <template v-if="editingCell?.ioa === point.ioa && editingCell?.asduType === point.asdu_type">
                   <input
@@ -1425,7 +1610,7 @@ defineExpose({ loadData: loadDataPoints })
 
 .table-scroll-container {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
   outline: none;
 }
 
@@ -1451,6 +1636,9 @@ defineExpose({ loadData: loadDataPoints })
   border-bottom: 1px solid var(--c-surface0);
   position: sticky;
   top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .table th.sortable {
@@ -1467,10 +1655,39 @@ defineExpose({ loadData: loadDataPoints })
   font-size: 8px;
 }
 
+.column-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 2;
+  outline: none;
+}
+
+.column-resizer::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  right: 2px;
+  bottom: 20%;
+  width: 1px;
+  background: transparent;
+}
+
+.column-resizer:hover::after,
+.column-resizer:focus-visible::after,
+.column-resizer.active::after {
+  background: var(--c-blue);
+}
+
 .table td {
-  padding: 5px 10px;
+  height: 36px;
+  padding: 2px 10px;
   border-bottom: 1px solid var(--c-base);
   cursor: pointer;
+  box-sizing: border-box;
 }
 
 .table tbody tr:hover {
@@ -1488,12 +1705,10 @@ defineExpose({ loadData: loadDataPoints })
 
 .col-ioa {
   font-family: var(--font-mono);
-  width: 70px;
   color: var(--c-blue);
 }
 
 .col-select {
-  width: 28px;
   padding-right: 0 !important;
   padding-left: 8px !important;
   text-align: center;
@@ -1510,19 +1725,44 @@ defineExpose({ loadData: loadDataPoints })
 }
 
 .col-type {
-  width: 168px;
+  min-width: 0;
+}
+
+.type-cell-content {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  align-items: center;
+  gap: 2px 6px;
+  max-height: 30px;
+  min-width: 0;
+  overflow: hidden;
+  line-height: 14px;
+}
+
+.type-label {
+  flex: 0 0 auto;
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .tb-badge {
-  display: inline-block;
-  margin-left: 6px;
+  flex: 0 0 auto;
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 0 5px;
   border-radius: 4px;
   background: var(--c-surface1);
   color: var(--c-sapphire);
   font-size: 10px;
-  line-height: 16px;
+  line-height: 14px;
   cursor: help;
 }
 
@@ -1551,13 +1791,17 @@ defineExpose({ loadData: loadDataPoints })
 }
 
 .col-name {
+  min-width: 0;
+}
+
+.name-text {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .col-value {
-  width: 120px;
   font-family: var(--font-mono);
   transition: color 0.3s;
 }
@@ -1577,7 +1821,6 @@ defineExpose({ loadData: loadDataPoints })
   gap: 4px;
 }
 .col-quality {
-  width: 96px;
   font-weight: 600;
   font-size: 11px;
 }
@@ -1586,7 +1829,6 @@ defineExpose({ loadData: loadDataPoints })
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--c-overlay0);
-  width: 100px;
 }
 
 .table tbody tr.selected .col-timestamp {
