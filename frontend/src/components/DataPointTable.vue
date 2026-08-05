@@ -825,12 +825,21 @@ function closeContextMenu() {
   contextMenu.value.show = false
 }
 
+function openPointEditor(point: DataPointInfo) {
+  contextMenu.value.show = false
+  if (selectedRows.value.length !== 1 || !isSelected(point)) {
+    selectedRows.value = [point]
+    lastClickedIndex.value = filteredPoints.value.indexOf(point)
+    emitSelection()
+  }
+  editingPointDefinition.value = point
+  showEditModal.value = true
+}
+
 function editSelectedPoint() {
   const point = selectedRows.value[0]
   if (!point || selectedRows.value.length !== 1) return
-  contextMenu.value.show = false
-  editingPointDefinition.value = point
-  showEditModal.value = true
+  openPointEditor(point)
 }
 
 const selectedCount = computed(() => selectedRows.value.length)
@@ -1355,6 +1364,7 @@ defineExpose({ loadData: loadDataPoints })
                 mutating: activeMutations.has(point.ioa + ':' + point.asdu_type)
               }"
               @click="selectRow($event, point)"
+              @dblclick="openPointEditor(point)"
               @contextmenu.prevent="showContextMenu($event, point)"
             >
               <td class="col-select">
