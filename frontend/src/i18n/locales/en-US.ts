@@ -55,6 +55,8 @@ const dict: DictShape = {
     csvExportFailed: 'CSV export failed',
     csvTemplateFailed: 'CSV template save failed',
     csvImportFailed: 'CSV import failed',
+    csvImportErrorHint: 'No points were written. Complete error details are shown below; validation errors include the row and reason and can be scrolled or copied for correction.',
+    csvImportStoppedOnly: 'CSV import changes point definitions. Stop the selected server before importing.',
     csvImportModeTitle: 'Choose CSV import mode',
     csvImportModeHint: 'The CSV will be imported into the selected station. Every row is validated first; any error cancels the entire import.',
     csvMerge: 'Merge',

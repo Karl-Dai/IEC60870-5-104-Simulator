@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { ref } from 'vue'
 import { dialogKey } from '@shared/composables/useDialog'
+import { useI18n } from '@shared/i18n'
 import CsvImportModeModal from '../src/components/CsvImportModeModal.vue'
 import Toolbar from '../src/components/Toolbar.vue'
 
@@ -21,12 +22,12 @@ const resetData = vi.fn(() => Promise.resolve())
 const showAlert = vi.fn(() => Promise.resolve())
 const showConfirm = vi.fn(() => Promise.resolve(true))
 
-function mountToolbar(commonAddress: number | null = 12) {
+function mountToolbar(commonAddress: number | null = 12, serverState = 'Stopped') {
   return mount(Toolbar, {
     global: {
       provide: {
         selectedServerId: ref<string | null>('s1'),
-        selectedServerState: ref('Stopped'),
+        selectedServerState: ref(serverState),
         selectedCA: ref<number | null>(commonAddress),
         refreshTree,
         refreshData,
@@ -46,6 +47,7 @@ function mountToolbar(commonAddress: number | null = 12) {
 }
 
 beforeEach(() => {
+  useI18n().setLocale('en-US')
   invokeMock.mockReset()
   invokeMock.mockImplementation((command: string) => {
     if (command === 'import_point_config_csv') {
@@ -74,6 +76,19 @@ describe('Toolbar station point CSV actions', () => {
     ]) {
       expect((wrapper.find(`[data-testid="${testId}"]`).element as HTMLButtonElement).disabled).toBe(true)
     }
+    wrapper.unmount()
+  })
+
+  it('disables only Import while the selected server is running', () => {
+    const wrapper = mountToolbar(12, 'Running')
+    expect((wrapper.find('[data-testid="import-point-csv"]').element as HTMLButtonElement).disabled)
+      .toBe(true)
+    expect(wrapper.find('[data-testid="import-point-csv"]').attributes('title'))
+      .toContain('Stop the selected server')
+    expect((wrapper.find('[data-testid="export-point-csv"]').element as HTMLButtonElement).disabled)
+      .toBe(false)
+    expect((wrapper.find('[data-testid="download-point-csv-template"]').element as HTMLButtonElement).disabled)
+      .toBe(false)
     wrapper.unmount()
   })
 
@@ -116,6 +131,27 @@ describe('Toolbar station point CSV actions', () => {
     expect(invokeMock).not.toHaveBeenCalledWith('import_point_config_csv', expect.anything())
     expect(resetData).not.toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  it('adds a localized transactional hint while preserving complete backend row details', async () => {
+    useI18n().setLocale('zh-CN')
+    openMock.mockResolvedValue('/tmp/invalid.csv')
+    invokeMock.mockRejectedValueOnce(
+      'CSV validation failed (51 error(s)):\nRow 52 [Type ID]: unrecognized IEC type ID 255',
+    )
+    const wrapper = mountToolbar()
+
+    await wrapper.find('[data-testid="import-point-csv"]').trigger('click')
+    await flushPromises()
+    wrapper.findComponent(CsvImportModeModal).vm.$emit('choose', 'merge')
+    await flushPromises()
+
+    const message = String(showAlert.mock.calls.at(-1)?.[0])
+    expect(message).toContain('本次导入未写入任何点位')
+    expect(message).toContain('Row 52 [Type ID]')
+    expect(resetData).not.toHaveBeenCalled()
+    wrapper.unmount()
+    useI18n().setLocale('en-US')
   })
 
   it('exports the selected station and downloads a CA-aware template', async () => {

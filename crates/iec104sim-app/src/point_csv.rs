@@ -7,9 +7,12 @@
 
 use crate::commands::{parse_asdu_type, validate_control_point_options};
 use crate::state::AppState;
-use csv::{ReaderBuilder, StringRecord, Terminator, Trim, WriterBuilder};
+use csv::{QuoteStyle, ReaderBuilder, StringRecord, Terminator, Trim, WriterBuilder};
 use iec104sim_core::data_point::{ControlTarget, DataPoint, InformationObjectDef};
-use iec104sim_core::slave::{MutationMode, MutationParams, SlaveServer, Station};
+use iec104sim_core::slave::{
+    MutationMode, MutationParams, PointMutationConfig, PointMutationUpdate, ServerState,
+    SlaveServer, Station, StationMutationBatchMode,
+};
 use iec104sim_core::types::{AsduTypeId, DataCategory};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -19,6 +22,11 @@ const IOA_MAX: u32 = 0x00FF_FFFF;
 const PERIOD_MIN_MS: u32 = 50;
 const PERIOD_MAX_MS: u32 = 60_000;
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+// Defense-in-depth wire prefix for spreadsheet-bound free text. OWASP's
+// Excel-resistant guidance uses a TAB inside a quoted cell; U+2060 makes the
+// prefix uniquely reversible without adding visible text. No CSV encoding is
+// universally safe across every spreadsheet application.
+const EXCEL_TEXT_GUARD: &str = "\t\u{2060}";
 
 pub(crate) const POINT_CSV_HEADERS: [&str; 15] = [
     "IOA",
@@ -69,6 +77,20 @@ struct ParsedPointRow {
     mutation: Option<CsvMutation>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ProjectedPointCandidate {
+    row: usize,
+    key: Option<(u32, AsduTypeId)>,
+    mapping: Option<ControlTarget>,
+}
+
+#[derive(Debug)]
+struct ParsedPointCsv {
+    rows: Vec<ParsedPointRow>,
+    candidates: Vec<ProjectedPointCandidate>,
+    errors: Vec<ValidationError>,
+}
+
 #[derive(Debug, Clone)]
 struct ValidationError {
     row: Option<usize>,
@@ -106,6 +128,42 @@ fn format_validation_errors(errors: &[ValidationError]) -> String {
         }
     }
     message
+}
+
+fn has_excel_formula_prefix(value: &str) -> bool {
+    if matches!(value.chars().next(), Some('\t' | '\r' | '\n')) {
+        return true;
+    }
+    matches!(
+        value.chars().find(|character| !character.is_whitespace()),
+        Some('=' | '+' | '-' | '@' | '＝' | '＋' | '－' | '＠')
+    )
+}
+
+/// Encode free text so Excel/Sheets cannot interpret it as a formula while a
+/// CSV round trip remains lossless.
+///
+/// Dangerous text is prefixed with TAB + U+2060 and every exported CSV cell is
+/// quoted. A value already beginning with that guard is wrapped again, so
+/// decoding exactly one layer preserves the original bytes. Leading apostrophe
+/// values are guarded too because spreadsheet editors can otherwise consume the
+/// apostrophe as a display-only text marker during a save/reopen cycle.
+fn encode_excel_safe_text(value: &str) -> String {
+    if has_excel_formula_prefix(value)
+        || value.starts_with('\'')
+        || value.starts_with(EXCEL_TEXT_GUARD)
+    {
+        format!("{EXCEL_TEXT_GUARD}{value}")
+    } else {
+        value.to_string()
+    }
+}
+
+fn decode_excel_safe_text(value: &str) -> String {
+    value
+        .strip_prefix(EXCEL_TEXT_GUARD)
+        .unwrap_or(value)
+        .to_string()
 }
 
 fn record_field(record: &StringRecord, index: usize) -> &str {
@@ -450,7 +508,7 @@ fn parse_point_record(
     record: &StringRecord,
     row: usize,
     errors: &mut Vec<ValidationError>,
-) -> Option<ParsedPointRow> {
+) -> (Option<ParsedPointRow>, ProjectedPointCandidate) {
     let error_start = errors.len();
     let ioa = parse_required_u32(record_field(record, 0), row, "IOA", 0, IOA_MAX, errors);
 
@@ -495,29 +553,41 @@ fn parse_point_record(
 
     let mapping = parse_mapping(record, row, asdu_type, errors);
     let mutation = parse_mutation(record, row, asdu_type, errors);
+    // Duplicate-key validation is independent from the rest of the row. A
+    // valid IOA/type declaration still participates when (for example) Period
+    // or QOC is invalid, so users receive the full report in one import attempt.
+    let declared_key = ioa.zip(asdu_type);
+    let candidate = ProjectedPointCandidate {
+        row,
+        key: declared_key,
+        mapping,
+    };
 
     if errors.len() != error_start {
-        return None;
+        return (None, candidate);
     }
-    Some(ParsedPointRow {
-        row,
-        definition: InformationObjectDef {
-            ioa: ioa.expect("validated IOA must be present"),
-            asdu_type: asdu_type.expect("validated ASDU type must be present"),
-            category: asdu_type
-                .expect("validated ASDU type must be present")
-                .category(),
-            name: record_field(record, 3).to_string(),
-            comment: record_field(record, 4).to_string(),
-            mapping,
-            command_qualifier: qualifier,
-            select_before_operate,
-        },
-        mutation,
-    })
+    (
+        Some(ParsedPointRow {
+            row,
+            definition: InformationObjectDef {
+                ioa: ioa.expect("validated IOA must be present"),
+                asdu_type: asdu_type.expect("validated ASDU type must be present"),
+                category: asdu_type
+                    .expect("validated ASDU type must be present")
+                    .category(),
+                name: decode_excel_safe_text(record_field(record, 3)),
+                comment: decode_excel_safe_text(record_field(record, 4)),
+                mapping,
+                command_qualifier: qualifier,
+                select_before_operate,
+            },
+            mutation,
+        }),
+        candidate,
+    )
 }
 
-fn parse_point_csv(bytes: &[u8]) -> Result<Vec<ParsedPointRow>, String> {
+fn parse_point_csv_outcome(bytes: &[u8]) -> Result<ParsedPointCsv, String> {
     if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
         return Err(
             "CSV encoding error: the file is UTF-16. Save it as UTF-8 (UTF-8 with BOM is supported) and retry."
@@ -558,6 +628,7 @@ fn parse_point_csv(bytes: &[u8]) -> Result<Vec<ParsedPointRow>, String> {
     }
 
     let mut parsed = Vec::new();
+    let mut candidates = Vec::new();
     let mut errors = Vec::new();
     for (index, record) in reader.records().enumerate() {
         let spreadsheet_row = index + 2;
@@ -566,7 +637,10 @@ fn parse_point_csv(bytes: &[u8]) -> Result<Vec<ParsedPointRow>, String> {
                 if record.iter().all(|field| field.trim().is_empty()) {
                     continue;
                 }
-                if let Some(row) = parse_point_record(&record, spreadsheet_row, &mut errors) {
+                let (parsed_row, candidate) =
+                    parse_point_record(&record, spreadsheet_row, &mut errors);
+                candidates.push(candidate);
+                if let Some(row) = parsed_row {
                     parsed.push(row);
                 }
             }
@@ -580,30 +654,48 @@ fn parse_point_csv(bytes: &[u8]) -> Result<Vec<ParsedPointRow>, String> {
         }
     }
 
-    let mut seen = HashMap::<(u32, AsduTypeId), usize>::with_capacity(parsed.len());
-    for row in &parsed {
-        let key = (row.definition.ioa, row.definition.asdu_type);
-        if let Some(first_row) = seen.insert(key, row.row) {
-            errors.push(ValidationError::row(
-                row.row,
-                "IOA/Type ID",
-                format!(
-                    "duplicate (Type ID {}, IOA {}) for the selected station; first declared on row {first_row}",
-                    row.definition.asdu_type as u8, row.definition.ioa
-                ),
-            ));
+    let mut seen = HashMap::<(u32, AsduTypeId), usize>::with_capacity(candidates.len());
+    for candidate in &candidates {
+        let Some(key) = candidate.key else {
+            continue;
+        };
+        match seen.entry(key) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(candidate.row);
+            }
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                let first_row = *entry.get();
+                errors.push(ValidationError::row(
+                    candidate.row,
+                    "IOA/Type ID",
+                    format!(
+                        "duplicate (Type ID {}, IOA {}) for the selected station; first declared on row {first_row}",
+                        key.1 as u8, key.0
+                    ),
+                ));
+            }
         }
     }
 
-    if errors.is_empty() {
-        Ok(parsed)
+    Ok(ParsedPointCsv {
+        rows: parsed,
+        candidates,
+        errors,
+    })
+}
+
+#[cfg(test)]
+fn parse_point_csv(bytes: &[u8]) -> Result<Vec<ParsedPointRow>, String> {
+    let parsed = parse_point_csv_outcome(bytes)?;
+    if parsed.errors.is_empty() {
+        Ok(parsed.rows)
     } else {
-        Err(format_validation_errors(&errors))
+        Err(format_validation_errors(&parsed.errors))
     }
 }
 
-fn validate_projected_station(
-    rows: &[ParsedPointRow],
+fn validate_projected_station_candidates(
+    candidates: &[ProjectedPointCandidate],
     stations: &HashMap<u16, Station>,
     common_address: u16,
     mode: ImportMode,
@@ -614,16 +706,9 @@ fn validate_projected_station(
             format!("station CA={common_address} not found"),
         )];
     };
-    if mode == ImportMode::Replace && rows.is_empty() {
-        return vec![ValidationError::file(
-            "Rows",
-            "Replace requires at least one point row; a header-only CSV cannot clear a station",
-        )];
-    }
-
-    let imported: HashSet<(u32, AsduTypeId)> = rows
+    let imported: HashSet<(u32, AsduTypeId)> = candidates
         .iter()
-        .map(|row| (row.definition.ioa, row.definition.asdu_type))
+        .filter_map(|candidate| candidate.key)
         .collect();
     let current_keys: HashSet<(u32, AsduTypeId)> = current
         .object_defs
@@ -646,22 +731,25 @@ fn validate_projected_station(
 
     let mut errors = Vec::new();
     if mode == ImportMode::Merge {
-        for row in rows {
-            if current_keys.contains(&(row.definition.ioa, row.definition.asdu_type)) {
+        for candidate in candidates {
+            let Some((ioa, asdu_type)) = candidate.key else {
+                continue;
+            };
+            if current_keys.contains(&(ioa, asdu_type)) {
                 errors.push(ValidationError::row(
-                    row.row,
+                    candidate.row,
                     "IOA/Type ID",
                     format!(
                         "Merge collision at (CA {}, Type ID {}, IOA {}); no rows were imported",
-                        common_address, row.definition.asdu_type as u8, row.definition.ioa
+                        common_address, asdu_type as u8, ioa
                     ),
                 ));
             }
         }
     }
 
-    for row in rows {
-        let Some(target) = row.definition.mapping else {
+    for candidate in candidates {
+        let Some(target) = candidate.mapping else {
             continue;
         };
         let exists = if target.common_address == common_address {
@@ -674,7 +762,7 @@ fn validate_projected_station(
         };
         if !exists {
             errors.push(ValidationError::row(
-                row.row,
+                candidate.row,
                 "Mapped CA/Mapped IOA/Mapped Type ID",
                 format!(
                     "mapping target not found: CA={} Type ID={} IOA={}",
@@ -714,6 +802,23 @@ fn validate_projected_station(
     }
 
     errors
+}
+
+fn validate_projected_station(
+    rows: &[ParsedPointRow],
+    stations: &HashMap<u16, Station>,
+    common_address: u16,
+    mode: ImportMode,
+) -> Vec<ValidationError> {
+    let candidates: Vec<ProjectedPointCandidate> = rows
+        .iter()
+        .map(|row| ProjectedPointCandidate {
+            row: row.row,
+            key: Some((row.definition.ioa, row.definition.asdu_type)),
+            mapping: row.definition.mapping,
+        })
+        .collect();
+    validate_projected_station_candidates(&candidates, stations, common_address, mode)
 }
 
 fn stage_station_import(
@@ -768,6 +873,7 @@ fn encode_point_csv(
 
     let mut writer = WriterBuilder::new()
         .terminator(Terminator::CRLF)
+        .quote_style(QuoteStyle::Always)
         .from_writer(Vec::new());
     writer
         .write_record(POINT_CSV_HEADERS)
@@ -779,8 +885,8 @@ fn encode_point_csv(
             definition.ioa.to_string(),
             definition.asdu_type.name().to_string(),
             (definition.asdu_type as u8).to_string(),
-            definition.name.clone(),
-            definition.comment.clone(),
+            encode_excel_safe_text(&definition.name),
+            encode_excel_safe_text(&definition.comment),
             definition
                 .command_qualifier
                 .map(|value| value.to_string())
@@ -887,58 +993,93 @@ pub struct PointCsvImportResult {
     pub mutations_started: usize,
 }
 
+fn ensure_csv_import_stopped(server: &SlaveServer) -> Result<(), String> {
+    if server.state() != ServerState::Stopped {
+        return Err(
+            "CSV import requires a stopped server; stop it before importing point definitions"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 async fn apply_point_import(
     server: &SlaveServer,
     rows: &[ParsedPointRow],
     common_address: u16,
     mode: ImportMode,
 ) -> Result<(usize, usize), String> {
-    let mutations: Vec<(u32, AsduTypeId, CsvMutation)> = rows
+    let candidates: Vec<ProjectedPointCandidate> = rows
         .iter()
-        .filter_map(|row| {
-            row.mutation
-                .map(|mutation| (row.definition.ioa, row.definition.asdu_type, mutation))
+        .map(|row| ProjectedPointCandidate {
+            row: row.row,
+            key: Some((row.definition.ioa, row.definition.asdu_type)),
+            mapping: row.definition.mapping,
         })
         .collect();
-    let incoming_keys: Vec<(u32, AsduTypeId)> = rows
+    apply_point_import_parts(server, rows, &candidates, &[], common_address, mode).await
+}
+
+async fn apply_point_import_outcome(
+    server: &SlaveServer,
+    parsed: &ParsedPointCsv,
+    common_address: u16,
+    mode: ImportMode,
+) -> Result<(usize, usize), String> {
+    apply_point_import_parts(
+        server,
+        &parsed.rows,
+        &parsed.candidates,
+        &parsed.errors,
+        common_address,
+        mode,
+    )
+    .await
+}
+
+async fn apply_point_import_parts(
+    server: &SlaveServer,
+    rows: &[ParsedPointRow],
+    candidates: &[ProjectedPointCandidate],
+    parse_errors: &[ValidationError],
+    common_address: u16,
+    mode: ImportMode,
+) -> Result<(usize, usize), String> {
+    let updates: Vec<PointMutationUpdate> = rows
         .iter()
-        .map(|row| (row.definition.ioa, row.definition.asdu_type))
+        .map(|row| PointMutationUpdate {
+            ioa: row.definition.ioa,
+            asdu_type: row.definition.asdu_type,
+            mutation: row.mutation.map(|mutation| PointMutationConfig {
+                params: mutation.params,
+                period_ms: mutation.period_ms,
+            }),
+            preserve_from: None,
+        })
         .collect();
-
-    let mut stations = server.stations.write().await;
-    let staged = stage_station_import(&stations, rows, common_address, mode)?;
-
-    // The station write lock is intentionally held while old tasks are
-    // aborted: a waking task cannot mutate an imported replacement before
-    // its old handle has been removed.
-    if mode == ImportMode::Replace {
-        server
-            .stop_point_mutations_for_station(common_address)
-            .await;
-    } else {
-        // A point can have been removed while its old task handle remained.
-        // Clear every incoming key once, even Sim Mode=off rows, before the
-        // staged station is installed and active CSV tasks are restarted.
-        server
-            .stop_point_mutations_for_keys(common_address, &incoming_keys)
-            .await;
-    }
-    let total = staged.data_points.len();
-    stations.insert(common_address, staged);
-    drop(stations);
-
-    for (ioa, asdu_type, mutation) in &mutations {
-        server
-            .start_point_mutation(
+    let batch_mode = match mode {
+        ImportMode::Replace => StationMutationBatchMode::Replace,
+        ImportMode::Merge => StationMutationBatchMode::Merge,
+    };
+    server
+        .transact_station_point_mutations(common_address, batch_mode, &updates, |stations| {
+            let mut validation_errors = parse_errors.to_vec();
+            validation_errors.extend(validate_projected_station_candidates(
+                candidates,
+                stations,
                 common_address,
-                *ioa,
-                *asdu_type,
-                mutation.period_ms,
-                mutation.params,
-            )
-            .await;
-    }
-    Ok((total, mutations.len()))
+                mode,
+            ));
+            if !validation_errors.is_empty() {
+                return Err(format_validation_errors(&validation_errors));
+            }
+            let staged = stage_station_import(stations, rows, common_address, mode)?;
+            let total_points = staged.data_points.len();
+            stations.insert(common_address, staged);
+            Ok(total_points)
+        })
+        .await
 }
 
 #[tauri::command]
@@ -953,19 +1094,24 @@ pub async fn save_point_config_csv(
         let server = servers
             .get(&server_id)
             .ok_or_else(|| format!("server {server_id} not found"))?;
-        let active = server.server.list_point_mutations_with_params().await;
-        let stations = server.server.stations.read().await;
-        let station = stations
-            .get(&common_address)
+        let (definitions, active) = server
+            .server
+            .snapshot_station_with_point_mutations(common_address)
+            .await
             .ok_or_else(|| format!("station CA={common_address} not found"))?;
         let mutations = active
             .into_iter()
-            .filter(|(ca, _, _, _, _)| *ca == common_address)
-            .map(|(_, ioa, asdu_type, params, period_ms)| {
-                ((ioa, asdu_type), CsvMutation { params, period_ms })
+            .map(|(ioa, asdu_type, config)| {
+                (
+                    (ioa, asdu_type),
+                    CsvMutation {
+                        params: config.params,
+                        period_ms: config.period_ms,
+                    },
+                )
             })
             .collect();
-        (station.object_defs.clone(), mutations)
+        (definitions, mutations)
     };
     let count = definitions.len();
     run_blocking(move || {
@@ -1003,20 +1149,31 @@ pub async fn import_point_config_csv(
     mode: String,
 ) -> Result<PointCsvImportResult, String> {
     let mode = ImportMode::parse(&mode)?;
-    let rows = run_blocking(move || {
+    {
+        let servers = state.servers.read().await;
+        let server = servers
+            .get(&server_id)
+            .ok_or_else(|| format!("server {server_id} not found"))?;
+        ensure_csv_import_stopped(&server.server)?;
+    }
+    let parsed = run_blocking(move || {
         let bytes = std::fs::read(&path)
             .map_err(|error| format!("failed to read point CSV {path:?}: {error}"))?;
-        parse_point_csv(&bytes)
+        parse_point_csv_outcome(&bytes)
     })
     .await?;
-    let imported = rows.len();
+    let imported = parsed.rows.len();
 
     let (total_points, mutations_started) = {
         let servers = state.servers.read().await;
         let server = servers
             .get(&server_id)
             .ok_or_else(|| format!("server {server_id} not found"))?;
-        apply_point_import(&server.server, &rows, common_address, mode).await?
+        // Re-check under the read lock held through commit. start_server needs
+        // the corresponding application write lock, so it cannot race this
+        // authoritative state gate after validation succeeds.
+        ensure_csv_import_stopped(&server.server)?;
+        apply_point_import_outcome(&server.server, &parsed, common_address, mode).await?
     };
 
     Ok(PointCsvImportResult {
@@ -1029,6 +1186,7 @@ pub async fn import_point_config_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iec104sim_core::slave::SlaveTransportConfig;
     use std::time::{Duration, Instant};
 
     fn empty_station_map(ca: u16) -> HashMap<u16, Station> {
@@ -1127,6 +1285,83 @@ mod tests {
     }
 
     #[test]
+    fn excel_resistant_formula_guards_are_reversible_and_stable_on_reexport() {
+        let dangerous = [
+            "=SUM(A1:A2)",
+            "+cmd|' /C calc'!A0",
+            "-2+3",
+            "@SUM(1,2)",
+            "＝FULLWIDTH",
+            "＋FULLWIDTH",
+            "－FULLWIDTH",
+            "＠FULLWIDTH",
+            "   =leading spaces",
+            "\t+leading tab",
+            "\rleading carriage return",
+            "\nleading line feed",
+        ];
+        let mut definitions = Vec::new();
+        for (index, value) in dangerous.iter().enumerate() {
+            let mut definition = point_definition(index as u32 + 1);
+            definition.name = (*value).to_string();
+            definition.comment = dangerous[dangerous.len() - index - 1].to_string();
+            definitions.push(definition);
+        }
+        let apostrophe_marker = "'\u{2060}=literal prefix".to_string();
+        let marker_prefix = "\u{2060}ordinary external text".to_string();
+        let original_guard = format!("{EXCEL_TEXT_GUARD}=already guarded text");
+        let mut special = point_definition(100);
+        special.name = apostrophe_marker.clone();
+        special.comment = marker_prefix.clone();
+        definitions.push(special);
+        let mut guarded_special = point_definition(101);
+        guarded_special.name = original_guard.clone();
+        definitions.push(guarded_special);
+
+        let exported = encode_point_csv(&definitions, &HashMap::new()).unwrap();
+        let raw_text = std::str::from_utf8(&exported[UTF8_BOM.len()..]).unwrap();
+        assert!(raw_text.starts_with("\"IOA\",\"ASDU Type\",\"Type ID\""));
+        assert!(raw_text.contains(&format!("\"{EXCEL_TEXT_GUARD}=SUM(A1:A2)\"")));
+
+        let mut raw_reader = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(&exported[UTF8_BOM.len()..]);
+        let raw_records: Vec<StringRecord> =
+            raw_reader.records().map(Result::unwrap).collect();
+        for record in raw_records.iter().take(dangerous.len()) {
+            assert!(record_field(record, 3).starts_with(EXCEL_TEXT_GUARD));
+            assert!(record_field(record, 4).starts_with(EXCEL_TEXT_GUARD));
+        }
+        assert_eq!(
+            record_field(raw_records.last().unwrap(), 3),
+            format!("{EXCEL_TEXT_GUARD}{original_guard}")
+        );
+
+        let parsed = parse_point_csv(&exported).unwrap();
+        for (index, value) in dangerous.iter().enumerate() {
+            assert_eq!(parsed[index].definition.name, *value);
+            assert_eq!(
+                parsed[index].definition.comment,
+                dangerous[dangerous.len() - index - 1]
+            );
+        }
+        assert_eq!(parsed[dangerous.len()].definition.name, apostrophe_marker);
+        assert_eq!(parsed[dangerous.len()].definition.comment, marker_prefix);
+        assert_eq!(parsed.last().unwrap().definition.name, original_guard);
+
+        let parsed_definitions: Vec<InformationObjectDef> = parsed
+            .iter()
+            .map(|row| row.definition.clone())
+            .collect();
+        let reexported = encode_point_csv(&parsed_definitions, &HashMap::new()).unwrap();
+        assert_eq!(reexported, exported);
+
+        // A manually authored U+2060 without the exact TAB+marker guard is not
+        // our transport prefix and must remain untouched.
+        assert_eq!(decode_excel_safe_text(&marker_prefix), marker_prefix);
+    }
+
+    #[test]
     fn rejects_non_utf8_before_csv_parsing() {
         let error = parse_point_csv(&[0xF0, 0x28, 0x8C, 0x28]).unwrap_err();
         assert!(error.contains("not valid UTF-8"));
@@ -1152,13 +1387,111 @@ mod tests {
         bad_ioa[0] = (IOA_MAX as u64 + 1).to_string();
         let duplicate_a = monitor_row(9);
         let duplicate_b = monitor_row(9);
-        let error = parse_point_csv(&csv_bytes(&[bad_type, bad_ioa, duplicate_a, duplicate_b]))
-            .unwrap_err();
+        let duplicate_c = monitor_row(9);
+        let error = parse_point_csv(&csv_bytes(&[
+            bad_type,
+            bad_ioa,
+            duplicate_a,
+            duplicate_b,
+            duplicate_c,
+        ]))
+        .unwrap_err();
 
         assert!(error.contains("Row 2 [ASDU Type/Type ID]"));
         assert!(error.contains("Row 3 [IOA]"));
         assert!(error.contains("Row 5 [IOA/Type ID]"));
-        assert!(error.contains("first declared on row 4"));
+        assert!(error.contains("Row 6 [IOA/Type ID]"));
+        assert_eq!(error.matches("first declared on row 4").count(), 2);
+        assert!(!error.contains("first declared on row 5"));
+    }
+
+    #[test]
+    fn duplicate_detection_includes_rows_with_other_validation_errors() {
+        let mut first = active_monitor_row(19, 500);
+        first[11] = "not-a-period".into();
+        let duplicate = monitor_row(19);
+
+        let error = parse_point_csv(&csv_bytes(&[first, duplicate])).unwrap_err();
+        assert!(error.contains("Row 2 [Period]"), "unexpected error: {error}");
+        assert!(error.contains("Row 3 [IOA/Type ID]"), "unexpected error: {error}");
+        assert!(
+            error.contains("first declared on row 2"),
+            "the invalid row still owns the first valid key declaration: {error}"
+        );
+    }
+
+    #[test]
+    fn validation_report_keeps_every_row_beyond_fifty_errors() {
+        let records: Vec<Vec<String>> = (0..51)
+            .map(|ioa| {
+                let mut row = monitor_row(ioa);
+                row[2] = "3".into();
+                row
+            })
+            .collect();
+        let error = parse_point_csv(&csv_bytes(&records)).unwrap_err();
+        assert!(error.starts_with("CSV validation failed (51 error(s)):"));
+        assert!(error.contains("Row 52 [ASDU Type/Type ID]"));
+        assert_eq!(error.matches("[ASDU Type/Type ID]").count(), 51);
+    }
+
+    #[tokio::test]
+    async fn import_combines_parse_and_projected_station_errors_in_one_report() {
+        let server = SlaveServer::new(SlaveTransportConfig::default());
+        let mut station = Station::new(21, "existing");
+        station.add_point(point_definition(1)).unwrap();
+        server.add_station(station).await.unwrap();
+        server
+            .start_point_mutation(
+                21,
+                1,
+                AsduTypeId::MSpNa1,
+                700,
+                MutationParams::default(),
+            )
+            .await
+            .unwrap();
+
+        let mut unrelated_bad_type = monitor_row(2);
+        unrelated_bad_type[2] = "255".into();
+        let parsed = parse_point_csv_outcome(&csv_bytes(&[
+            monitor_row(1),
+            unrelated_bad_type,
+        ]))
+        .unwrap();
+        let error = apply_point_import_outcome(&server, &parsed, 21, ImportMode::Merge)
+            .await
+            .unwrap_err();
+        assert!(error.contains("Row 2 [IOA/Type ID]"), "unexpected: {error}");
+        assert!(error.contains("Merge collision"), "unexpected: {error}");
+        assert!(error.contains("Row 3 [Type ID]"), "unexpected: {error}");
+
+        let mut bad_period_collision = active_monitor_row(1, 500);
+        bad_period_collision[11] = "invalid-period".into();
+        let parsed = parse_point_csv_outcome(&csv_bytes(&[bad_period_collision])).unwrap();
+        let error = apply_point_import_outcome(&server, &parsed, 21, ImportMode::Merge)
+            .await
+            .unwrap_err();
+        assert!(error.contains("Row 2 [Period]"), "unexpected: {error}");
+        assert!(error.contains("Merge collision"), "unexpected: {error}");
+
+        assert_eq!(
+            server.list_point_mutations_with_period().await,
+            vec![(21, 1, AsduTypeId::MSpNa1, MutationMode::Flip, 700)],
+            "a failed combined validation must not disturb active tasks"
+        );
+        assert_eq!(
+            server
+                .stations
+                .read()
+                .await
+                .get(&21)
+                .unwrap()
+                .data_points
+                .len(),
+            1,
+            "a failed combined validation must not mutate station data"
+        );
     }
 
     #[test]
@@ -1242,16 +1575,32 @@ mod tests {
         );
     }
 
-    #[test]
-    fn header_only_replace_is_rejected_but_empty_merge_is_a_noop() {
+    #[tokio::test]
+    async fn header_only_replace_clears_points_and_tasks_but_empty_merge_is_a_noop() {
         let rows = parse_point_csv(&csv_bytes(&[])).unwrap();
-        let stations = empty_station_map(4);
-        let replace_error =
-            stage_station_import(&stations, &rows, 4, ImportMode::Replace).unwrap_err();
-        assert!(replace_error.contains("header-only CSV cannot clear a station"));
+        let server = SlaveServer::new(Default::default());
+        let mut station = Station::new(4, "Clear me");
+        station.add_point(point_definition(1)).unwrap();
+        server.add_station(station).await.unwrap();
+        server
+            .start_point_mutation(4, 1, AsduTypeId::MSpNa1, 500, MutationParams::default())
+            .await
+            .unwrap();
 
-        let merged = stage_station_import(&stations, &rows, 4, ImportMode::Merge).unwrap();
-        assert_eq!(merged.data_points.len(), 0);
+        let (total, started) = apply_point_import(&server, &rows, 4, ImportMode::Merge)
+            .await
+            .unwrap();
+        assert_eq!((total, started), (1, 0));
+        assert_eq!(server.list_point_mutations().await.len(), 1);
+
+        let (total, started) = apply_point_import(&server, &rows, 4, ImportMode::Replace)
+            .await
+            .unwrap();
+        assert_eq!((total, started), (0, 0));
+        let stations = server.stations.read().await;
+        assert_eq!(stations.get(&4).unwrap().data_points.len(), 0);
+        drop(stations);
+        assert!(server.list_point_mutations().await.is_empty());
     }
 
     #[tokio::test]
@@ -1262,7 +1611,8 @@ mod tests {
         server.add_station(station).await.unwrap();
         server
             .start_point_mutation(8, 90, AsduTypeId::MSpNa1, 500, MutationParams::default())
-            .await;
+            .await
+            .unwrap();
 
         let rows = parse_point_csv(&csv_bytes(&[active_monitor_row(1, 750)])).unwrap();
         let (total, started) = apply_point_import(&server, &rows, 8, ImportMode::Replace)
@@ -1285,6 +1635,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stopped_import_survives_restart_and_sends_spontaneous_frame_to_new_client() {
+        use iec104sim_core::slave::{SlaveTlsConfig, SlaveTransportConfig};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let transport = SlaveTransportConfig {
+            bind_address: "127.0.0.1".into(),
+            port,
+            tls: SlaveTlsConfig::default(),
+        };
+        let mut server = SlaveServer::new(transport);
+        server
+            .add_station(Station::new(8, "Restart"))
+            .await
+            .unwrap();
+        server.start().await.unwrap();
+        assert!(ensure_csv_import_stopped(&server)
+            .unwrap_err()
+            .contains("requires a stopped server"));
+        server.stop().await.unwrap();
+        ensure_csv_import_stopped(&server).unwrap();
+
+        let rows = parse_point_csv(&csv_bytes(&[active_monitor_row(1, 200)])).unwrap();
+        apply_point_import(&server, &rows, 8, ImportMode::Replace)
+            .await
+            .unwrap();
+        assert_eq!(server.list_point_mutations().await.len(), 1);
+
+        server.start().await.unwrap();
+        let initial_seq = server
+            .stations
+            .read()
+            .await
+            .get(&8)
+            .unwrap()
+            .data_points
+            .current_seq();
+        let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        client
+            .write_all(&[0x68, 0x04, 0x07, 0x00, 0x00, 0x00])
+            .await
+            .unwrap();
+        let mut start_confirm = [0u8; 6];
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            client.read_exact(&mut start_confirm),
+        )
+        .await
+        .expect("STARTDT confirmation should arrive")
+        .unwrap();
+        assert_eq!(start_confirm, [0x68, 0x04, 0x0B, 0x00, 0x00, 0x00]);
+
+        let frame = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let mut header = [0u8; 2];
+                client.read_exact(&mut header).await.unwrap();
+                assert_eq!(header[0], 0x68);
+                let mut frame = vec![0x68, header[1]];
+                frame.resize(header[1] as usize + 2, 0);
+                client.read_exact(&mut frame[2..]).await.unwrap();
+                if frame[2] & 0x01 == 0 {
+                    break frame;
+                }
+            }
+        })
+        .await
+        .expect("an imported mutation should send through the restarted listener");
+        assert!(frame.len() >= 16);
+        assert_eq!(frame[6], AsduTypeId::MSpNa1 as u8);
+        assert_eq!(u16::from_le_bytes([frame[10], frame[11]]), 8);
+        assert_eq!(u32::from_le_bytes([frame[12], frame[13], frame[14], 0]), 1);
+        assert!(
+            server
+                .stations
+                .read()
+                .await
+                .get(&8)
+                .unwrap()
+                .data_points
+                .current_seq()
+                > initial_seq
+        );
+
+        server.stop().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn merge_apply_preserves_unrelated_tasks_and_clears_incoming_orphan() {
         let server = SlaveServer::new(Default::default());
         let mut station = Station::new(9, "Merge");
@@ -1293,10 +1735,12 @@ mod tests {
         server.add_station(station).await.unwrap();
         server
             .start_point_mutation(9, 1, AsduTypeId::MSpNa1, 500, MutationParams::default())
-            .await;
+            .await
+            .unwrap();
         server
             .start_point_mutation(9, 2, AsduTypeId::MSpNa1, 500, MutationParams::default())
-            .await;
+            .await
+            .unwrap();
         // Reproduce the pre-existing orphan condition: point removal currently
         // does not own the server's mutation-task registry.
         server
@@ -1334,7 +1778,8 @@ mod tests {
         server.add_station(station).await.unwrap();
         server
             .start_point_mutation(10, 1, AsduTypeId::MSpNa1, 650, MutationParams::default())
-            .await;
+            .await
+            .unwrap();
 
         let invalid_control = vec![
             "20".into(),

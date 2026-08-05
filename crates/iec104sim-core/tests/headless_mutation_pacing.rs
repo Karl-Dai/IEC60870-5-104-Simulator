@@ -25,7 +25,8 @@ async fn point_mutation_starts_and_stops() {
 
     pair.slave.server
         .start_point_mutation(1, 1, AsduTypeId::MSpNa1, 200, MutationParams::default())
-        .await;
+        .await
+        .unwrap();
     assert_eq!(pair.slave.server.list_point_mutations().await.len(), 1);
 
     sleep(Duration::from_secs(1)).await;
@@ -52,8 +53,8 @@ async fn multi_point_mutation_independent() {
     pair.master.conn.send_interrogation(1).await.unwrap();
     let _ = wait_for_ioa_count(&pair.master.conn, 1, 2, DEFAULT_TIMEOUT).await;
 
-    pair.slave.server.start_point_mutation(1, 1, AsduTypeId::MSpNa1, 150, MutationParams::default()).await;
-    pair.slave.server.start_point_mutation(1, 2, AsduTypeId::MSpNa1, 150, MutationParams::default()).await;
+    pair.slave.server.start_point_mutation(1, 1, AsduTypeId::MSpNa1, 150, MutationParams::default()).await.unwrap();
+    pair.slave.server.start_point_mutation(1, 2, AsduTypeId::MSpNa1, 150, MutationParams::default()).await.unwrap();
     assert_eq!(pair.slave.server.list_point_mutations().await.len(), 2);
 
     let count_ioa = |frames: &Vec<iec104sim_core::log_entry::LogEntry>, ioa: &str| {
@@ -98,7 +99,7 @@ async fn point_mutation_actually_flips_value() {
         }
     };
 
-    pair.slave.server.start_point_mutation(1, 1, AsduTypeId::MSpNa1, 150, MutationParams::default()).await;
+    pair.slave.server.start_point_mutation(1, 1, AsduTypeId::MSpNa1, 150, MutationParams::default()).await.unwrap();
     sleep(Duration::from_millis(200)).await;
     let after_one = {
         let stations = pair.slave.server.stations.read().await;
@@ -129,7 +130,7 @@ async fn point_mutation_increment_raises_float_value() {
     };
 
     let params = MutationParams { mode: MutationMode::Increment, step: 1.0, min: -100.0, max: 100.0 };
-    pair.slave.server.start_point_mutation(1, 1, AsduTypeId::MMeNc1, 50, params).await;
+    pair.slave.server.start_point_mutation(1, 1, AsduTypeId::MMeNc1, 50, params).await.unwrap();
     sleep(Duration::from_millis(300)).await; // 约 5~6 个周期,每周期 +1
     let after = {
         let stations = pair.slave.server.stations.read().await;

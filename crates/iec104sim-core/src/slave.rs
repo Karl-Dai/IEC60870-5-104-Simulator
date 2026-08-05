@@ -1279,10 +1279,16 @@ pub struct SlaveServer {
     point_mutation_handles:
         tokio::sync::Mutex<HashMap<(u16, u32, AsduTypeId), PointMutationTask>>,
     connections: SharedConnections,
+    /// Indirection used only by long-lived mutation tasks. Listener restarts
+    /// replace `connections` to isolate old socket tasks; this registry lets a
+    /// mutation created while stopped resolve the current generation at send
+    /// time instead of retaining an abandoned map forever.
+    mutation_connections: Arc<RwLock<SharedConnections>>,
 }
 
 impl SlaveServer {
     pub fn new(transport: SlaveTransportConfig) -> Self {
+        let connections = Arc::new(RwLock::new(HashMap::new()));
         Self {
             transport,
             stations: Arc::new(RwLock::new(HashMap::new())),
@@ -1295,7 +1301,8 @@ impl SlaveServer {
             server_handle: None,
             cyclic_handle: None,
             point_mutation_handles: tokio::sync::Mutex::new(HashMap::new()),
-            connections: Arc::new(RwLock::new(HashMap::new())),
+            connections: Arc::clone(&connections),
+            mutation_connections: Arc::new(RwLock::new(connections)),
         }
     }
 
@@ -1375,7 +1382,17 @@ impl SlaveServer {
             return Err(SlaveError::StationAddressChangeWhileRunning);
         }
 
+        if current_ca == new_ca {
+            let mut stations = self.stations.write().await;
+            let station = stations
+                .get_mut(&current_ca)
+                .ok_or(SlaveError::StationNotFound(current_ca))?;
+            station.name = name;
+            return Ok(());
+        }
+
         let mut stations = self.stations.write().await;
+        let mut tasks = self.point_mutation_handles.lock().await;
         if !stations.contains_key(&current_ca) {
             return Err(SlaveError::StationNotFound(current_ca));
         }
@@ -1409,12 +1426,56 @@ impl SlaveServer {
         }
 
         stations.insert(new_ca, station);
+        let task_keys: Vec<(u16, u32, AsduTypeId)> = tasks
+            .keys()
+            .filter(|(ca, _, _)| *ca == current_ca || *ca == new_ca)
+            .copied()
+            .collect();
+        let mut preserved = Vec::new();
+        let mut aborted = Vec::new();
+        for key in task_keys {
+            if let Some(task) = tasks.remove(&key) {
+                if key.0 == current_ca {
+                    preserved.push((
+                        key.1,
+                        key.2,
+                        PointMutationConfig {
+                            params: task.params,
+                            period_ms: task.period_ms,
+                        },
+                    ));
+                }
+                task.handle.abort();
+                aborted.push(task.handle);
+            }
+        }
+        for (ioa, asdu_type, config) in preserved {
+            let task = self.spawn_point_mutation_task(
+                new_ca,
+                ioa,
+                asdu_type,
+                config.period_ms,
+                config.params,
+            );
+            tasks.insert((new_ca, ioa, asdu_type), task);
+        }
+        drop(stations);
+        drop(tasks);
+        for handle in aborted {
+            let _ = handle.await;
+        }
         Ok(())
     }
 
     pub async fn remove_station(&self, ca: u16) -> Result<Station, SlaveError> {
-        let mut stations = self.stations.write().await;
-        stations.remove(&ca).ok_or(SlaveError::StationNotFound(ca))
+        self.transact_station_point_mutations(
+            ca,
+            StationMutationBatchMode::Replace,
+            &[],
+            |stations| stations.remove(&ca).ok_or(SlaveError::StationNotFound(ca)),
+        )
+        .await
+        .map(|(station, _)| station)
     }
 
     pub async fn set_cyclic_config(&self, common_address: u16, config: CyclicConfig) -> Result<(), SlaveError> {
@@ -1436,27 +1497,19 @@ impl SlaveServer {
         ).await;
     }
 
-    /// 启动单个点位的周期变位。同 (ca, ioa, asdu_type) 已有任务则先 abort 再起新的。
-    /// period_ms 下限 50ms。任务按 `params` 周期性变位(翻转 / 递增 / 递减)该点
-    /// 并上送 spontaneous。递增/递减的三角波方向是任务局部状态。
-    pub async fn start_point_mutation(
+    fn spawn_point_mutation_task(
         &self,
         ca: u16,
         ioa: u32,
         asdu_type: AsduTypeId,
         period_ms: u32,
         params: MutationParams,
-    ) {
-        let key = (ca, ioa, asdu_type);
-        let mut guard = self.point_mutation_handles.lock().await;
-        if let Some(task) = guard.remove(&key) { task.handle.abort(); }
-
+    ) -> PointMutationTask {
         let params = normalize_mutation_params(asdu_type, params);
         let stations = self.stations.clone();
-        let connections = self.connections.clone();
+        let mutation_connections = Arc::clone(&self.mutation_connections);
         let remote_ops = self.remote_ops.clone();
         let log_collector = self.log_collector.clone();
-        let shutdown_flag = self.shutdown_flag.clone();
         let period_ms = period_ms.max(50);
         let handle = tokio::spawn(async move {
             let period = std::time::Duration::from_millis(period_ms as u64);
@@ -1469,7 +1522,6 @@ impl SlaveServer {
             let mut dir = params.mode.initial_dir();
             loop {
                 interval.tick().await;
-                if shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) { break; }
                 let mutated = {
                     let mut st_guard = stations.write().await;
                     if let Some(station) = st_guard.get_mut(&ca) {
@@ -1494,6 +1546,7 @@ impl SlaveServer {
                 // that lock (or another pre-mutation delay) is released.
                 interval.reset_after(period);
                 if mutated {
+                    let connections = mutation_connections.read().await.clone();
                     do_queue_spontaneous(
                         &stations, &connections, &remote_ops, &log_collector,
                         ca, &[(ioa, asdu_type)],
@@ -1501,20 +1554,174 @@ impl SlaveServer {
                 }
             }
         });
-        guard.insert(key, PointMutationTask { handle, params, period_ms });
+        PointMutationTask { handle, params, period_ms }
+    }
+
+    /// 启动单个点位的周期变位。同 (ca, ioa, asdu_type) 已有任务则先 abort 再起新的。
+    /// period_ms 下限 50ms。任务按 `params` 周期性变位(翻转 / 递增 / 递减)该点
+    /// 并上送 spontaneous。递增/递减的三角波方向是任务局部状态。
+    ///
+    /// This method acquires `stations.read()` and then the mutation registry so
+    /// point existence and task installation are atomic with station mutation
+    /// transactions. Callers must not retain a `stations.write()` guard while
+    /// awaiting it.
+    ///
+    /// Mutation tasks are intentionally independent from the listener's
+    /// shutdown flag. `stop()` aborts the tasks that exist at that instant, but
+    /// a task configured while the listener is stopped must survive the next
+    /// `start()` call.
+    pub async fn start_point_mutation(
+        &self,
+        ca: u16,
+        ioa: u32,
+        asdu_type: AsduTypeId,
+        period_ms: u32,
+        params: MutationParams,
+    ) -> Result<(), SlaveError> {
+        let stations = self.stations.read().await;
+        let station = stations
+            .get(&ca)
+            .ok_or(SlaveError::StationNotFound(ca))?;
+        if !station.data_points.contains(ioa, asdu_type) {
+            return Err(SlaveError::IoaNotFound(ioa));
+        }
+        let key = (ca, ioa, asdu_type);
+        let mut guard = self.point_mutation_handles.lock().await;
+        let replaced = guard.remove(&key);
+        if let Some(task) = replaced.as_ref() {
+            task.handle.abort();
+        }
+        let task = self.spawn_point_mutation_task(ca, ioa, asdu_type, period_ms, params);
+        guard.insert(key, task);
+        drop(guard);
+        drop(stations);
+        if let Some(task) = replaced {
+            // Returning before the cancelled task has completed permits one
+            // final stale mutation/send to escape after the replacement is
+            // reported as active. The registry update above is the
+            // linearization point; the join makes that ordering observable.
+            let _ = task.handle.await;
+        }
+        Ok(())
+    }
+
+    /// Atomically update station state and its point-mutation registry. The lock
+    /// order is station map -> task registry, matching checked mutation start.
+    /// Callers must not re-enter this API while retaining a station guard.
+    /// `update_stations` executes under both locks, so validation, multi-station
+    /// mapping edits, and task migration commit as one externally visible
+    /// operation.
+    pub async fn transact_station_point_mutations<R, E, F>(
+        &self,
+        common_address: u16,
+        mode: StationMutationBatchMode,
+        updates: &[PointMutationUpdate],
+        update_stations: F,
+    ) -> Result<(R, usize), E>
+    where
+        F: FnOnce(&mut HashMap<u16, Station>) -> Result<R, E>,
+    {
+        let mut stations = self.stations.write().await;
+        let mut tasks = self.point_mutation_handles.lock().await;
+        let result = update_stations(&mut stations)?;
+        let mut aborted = Vec::new();
+        let mut desired = Vec::with_capacity(updates.len());
+
+        match mode {
+            StationMutationBatchMode::Replace => {
+                let keys: Vec<(u16, u32, AsduTypeId)> = tasks
+                    .keys()
+                    .filter(|(ca, _, _)| *ca == common_address)
+                    .copied()
+                    .collect();
+                for key in keys {
+                    if let Some(task) = tasks.remove(&key) {
+                        task.handle.abort();
+                        aborted.push(task.handle);
+                    }
+                }
+                desired.extend(
+                    updates
+                        .iter()
+                        .filter_map(|update| update.mutation.map(|config| (*update, config))),
+                );
+            }
+            StationMutationBatchMode::Merge => {
+                for update in updates {
+                    let preserved = if let Some((source_ioa, source_type)) = update.preserve_from {
+                        tasks
+                            .remove(&(common_address, source_ioa, source_type))
+                            .map(|task| {
+                                let config = PointMutationConfig {
+                                    params: task.params,
+                                    period_ms: task.period_ms,
+                                };
+                                task.handle.abort();
+                                aborted.push(task.handle);
+                                config
+                            })
+                    } else {
+                        update.mutation
+                    };
+                    let destination = (common_address, update.ioa, update.asdu_type);
+                    let source = update
+                        .preserve_from
+                        .map(|(ioa, asdu_type)| (common_address, ioa, asdu_type));
+                    if source != Some(destination) {
+                        if let Some(task) = tasks.remove(&destination) {
+                            task.handle.abort();
+                            aborted.push(task.handle);
+                        }
+                    }
+                    if let Some(config) = preserved {
+                        desired.push((*update, config));
+                    }
+                }
+            }
+        }
+
+        let mut mutations_started = 0;
+        for (update, config) in desired {
+            let key = (common_address, update.ioa, update.asdu_type);
+            if let Some(task) = tasks.remove(&key) {
+                task.handle.abort();
+                aborted.push(task.handle);
+            }
+            let task = self.spawn_point_mutation_task(
+                common_address,
+                update.ioa,
+                update.asdu_type,
+                config.period_ms,
+                config.params,
+            );
+            tasks.insert(key, task);
+            mutations_started += 1;
+        }
+        drop(stations);
+        drop(tasks);
+        for handle in aborted {
+            let _ = handle.await;
+        }
+        Ok((result, mutations_started))
     }
 
     /// 停止单个点位的周期变位。
     pub async fn stop_point_mutation(&self, ca: u16, ioa: u32, asdu_type: AsduTypeId) {
-        let mut guard = self.point_mutation_handles.lock().await;
-        if let Some(task) = guard.remove(&(ca, ioa, asdu_type)) { task.handle.abort(); }
+        let task = self
+            .point_mutation_handles
+            .lock()
+            .await
+            .remove(&(ca, ioa, asdu_type));
+        if let Some(task) = task {
+            task.handle.abort();
+            let _ = task.handle.await;
+        }
     }
 
     /// Stop and forget every point-mutation task owned by one station.
     ///
-    /// Bulk station replacement uses this while holding the station write lock,
-    /// so an old task cannot wake up after the point table has been swapped and
-    /// mutate a newly imported point that happens to reuse the same key.
+    /// This operation only acquires the task registry, so it is also safe for a
+    /// caller that already holds the public station lock.
     pub async fn stop_point_mutations_for_station(&self, ca: u16) -> usize {
         let mut guard = self.point_mutation_handles.lock().await;
         let keys: Vec<(u16, u32, AsduTypeId)> = guard
@@ -1522,31 +1729,32 @@ impl SlaveServer {
             .filter(|(task_ca, _, _)| *task_ca == ca)
             .copied()
             .collect();
+        let mut handles = Vec::with_capacity(keys.len());
         for key in &keys {
             if let Some(task) = guard.remove(key) {
                 task.handle.abort();
+                handles.push(task.handle);
             }
+        }
+        drop(guard);
+        for handle in handles {
+            let _ = handle.await;
         }
         keys.len()
     }
 
-    /// Stop point-mutation tasks for a batch of keys while taking the task-map
-    /// mutex only once. CSV Merge uses this to remove stale/orphan handles for
-    /// incoming points, including rows whose imported simulation mode is off.
-    pub async fn stop_point_mutations_for_keys(
-        &self,
-        ca: u16,
-        targets: &[(u32, AsduTypeId)],
-    ) -> usize {
+    /// Abort and join every point-mutation task, including tasks configured
+    /// while the network listener is stopped.
+    pub async fn stop_all_point_mutations(&self) -> usize {
         let mut guard = self.point_mutation_handles.lock().await;
-        let mut removed = 0;
-        for &(ioa, asdu_type) in targets {
-            if let Some(task) = guard.remove(&(ca, ioa, asdu_type)) {
-                task.handle.abort();
-                removed += 1;
-            }
+        let tasks: Vec<PointMutationTask> = guard.drain().map(|(_, task)| task).collect();
+        drop(guard);
+        let count = tasks.len();
+        for task in tasks {
+            task.handle.abort();
+            let _ = task.handle.await;
         }
-        removed
+        count
     }
 
     /// 返回当前活跃的周期变位点位 (ca, ioa, asdu_type, mode)。
@@ -1581,6 +1789,36 @@ impl SlaveServer {
             .iter()
             .map(|(&(ca, ioa, t), task)| (ca, ioa, t, task.params, task.period_ms))
             .collect()
+    }
+
+    /// Capture one station's definitions and mutation settings under the same
+    /// station -> registry lock order used by mutation transactions. This keeps
+    /// CSV export from pairing point definitions from one revision with task
+    /// settings from another.
+    pub async fn snapshot_station_with_point_mutations(
+        &self,
+        common_address: u16,
+    ) -> Option<(
+        Vec<InformationObjectDef>,
+        Vec<(u32, AsduTypeId, PointMutationConfig)>,
+    )> {
+        let stations = self.stations.read().await;
+        let station = stations.get(&common_address)?;
+        let tasks = self.point_mutation_handles.lock().await;
+        let mutations = tasks
+            .iter()
+            .filter_map(|(&(ca, ioa, asdu_type), task)| {
+                (ca == common_address).then_some((
+                    ioa,
+                    asdu_type,
+                    PointMutationConfig {
+                        params: task.params,
+                        period_ms: task.period_ms,
+                    },
+                ))
+            })
+            .collect();
+        Some((station.object_defs.clone(), mutations))
     }
 
     pub async fn start(&mut self) -> Result<(), SlaveError> {
@@ -1627,8 +1865,11 @@ impl SlaveServer {
         let log_collector = self.log_collector.clone();
         let is_tls = self.transport.tls.enabled;
 
-        // Shared connections map.
+        // A fresh map isolates this listener generation from delayed cleanup in
+        // old socket tasks. Publish it through the mutation indirection so tasks
+        // configured while stopped send to the current generation after restart.
         self.connections = Arc::new(RwLock::new(HashMap::new()));
+        *self.mutation_connections.write().await = self.connections.clone();
         let connections = self.connections.clone();
         let cyclic_connections = connections.clone();
         let remote_ops = self.remote_ops.clone();
@@ -1912,15 +2153,25 @@ impl SlaveServer {
             connections.clear();
         }
         if let Some(h) = self.cyclic_handle.take() { let _ = h.await; }
-        {
-            let mut handles = self.point_mutation_handles.lock().await;
-            for (_key, task) in handles.drain() { task.handle.abort(); }
-        }
+        self.stop_all_point_mutations().await;
         self.state = ServerState::Stopped;
         if let Some(ref lc) = self.log_collector {
             lc.try_add(slave_server_log(false, None, false));
         }
         Ok(())
+    }
+}
+
+impl Drop for SlaveServer {
+    fn drop(&mut self) {
+        // Explicit lifecycle methods abort and join. This is a last-resort
+        // guard for callers that drop a stopped server without cleanup; dropping
+        // a Tokio JoinHandle alone would detach the mutation task.
+        if let Ok(mut tasks) = self.point_mutation_handles.try_lock() {
+            for (_, task) in tasks.drain() {
+                task.handle.abort();
+            }
+        }
     }
 }
 
@@ -3065,6 +3316,33 @@ pub struct MutationParams {
     pub max: f64,
 }
 
+/// One active periodic-mutation configuration installed as part of a station
+/// transaction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointMutationConfig {
+    pub params: MutationParams,
+    pub period_ms: u32,
+}
+
+/// Mutation state requested for one incoming point. `None` explicitly disables
+/// any task for that key, which is important when a Merge repairs an orphaned
+/// task left behind by an earlier point deletion.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointMutationUpdate {
+    pub ioa: u32,
+    pub asdu_type: AsduTypeId,
+    pub mutation: Option<PointMutationConfig>,
+    /// Move an active task from this source key to the destination key above,
+    /// preserving its effective parameters. When set, `mutation` is ignored.
+    pub preserve_from: Option<(u32, AsduTypeId)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StationMutationBatchMode {
+    Replace,
+    Merge,
+}
+
 fn normalize_mutation_params(
     asdu_type: AsduTypeId,
     mut params: MutationParams,
@@ -3418,7 +3696,7 @@ mod tests {
             AsduTypeId::MSpNa1,
             100,
             MutationParams::default(),
-        ).await;
+        ).await.unwrap();
         tokio::task::yield_now().await;
         assert_eq!(
             server.list_point_mutations_with_period().await,
@@ -3474,6 +3752,25 @@ mod tests {
     #[tokio::test]
     async fn point_mutation_reports_effective_parameters() {
         let server = SlaveServer::new(SlaveTransportConfig::default());
+        let mut station = Station::new(1, "parameters");
+        for (ioa, asdu_type) in [
+            (9, AsduTypeId::MMeNa1),
+            (1, AsduTypeId::MSpNa1),
+        ] {
+            station
+                .add_point(InformationObjectDef {
+                    ioa,
+                    asdu_type,
+                    category: asdu_type.category(),
+                    name: String::new(),
+                    comment: String::new(),
+                    mapping: None,
+                    command_qualifier: None,
+                    select_before_operate: None,
+                })
+                .unwrap();
+        }
+        server.add_station(station).await.unwrap();
         server
             .start_point_mutation(
                 1,
@@ -3487,7 +3784,8 @@ mod tests {
                     max: -5.0,
                 },
             )
-            .await;
+            .await
+            .unwrap();
         assert_eq!(
             server.list_point_mutations_with_params().await,
             vec![(
@@ -3517,11 +3815,127 @@ mod tests {
                     max: 1.0,
                 },
             )
-            .await;
+            .await
+            .unwrap();
         let mut active = server.list_point_mutations_with_params().await;
         active.sort_by_key(|(_, ioa, _, _, _)| *ioa);
         assert_eq!(active[0].3.mode, MutationMode::Flip);
         assert_eq!(active[0].3.step, 2.0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn station_transaction_linearizes_concurrent_mutation_start_and_stop() {
+        use std::sync::{mpsc, Arc};
+
+        let server = Arc::new(SlaveServer::new(SlaveTransportConfig::default()));
+        let mut station = Station::new(1, "atomic");
+        station
+            .add_point(InformationObjectDef {
+                ioa: 1,
+                asdu_type: AsduTypeId::MSpNa1,
+                category: DataCategory::SinglePoint,
+                name: String::new(),
+                comment: String::new(),
+                mapping: None,
+                command_qualifier: None,
+                select_before_operate: None,
+            })
+            .unwrap();
+        server.add_station(station).await.unwrap();
+
+        let imported = [PointMutationUpdate {
+            ioa: 1,
+            asdu_type: AsduTypeId::MSpNa1,
+            mutation: Some(PointMutationConfig {
+                params: MutationParams::default(),
+                period_ms: 100,
+            }),
+            preserve_from: None,
+        }];
+
+        // Hold the transaction inside its staging closure. Both the station
+        // and task-map locks are held, so an ordinary start for the same key
+        // must wait and then become the unambiguous later operation.
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let transaction_server = Arc::clone(&server);
+        let transaction = tokio::spawn(async move {
+            transaction_server
+                .transact_station_point_mutations(
+                    1,
+                    StationMutationBatchMode::Replace,
+                    &imported,
+                    move |stations| {
+                        entered_tx.send(()).unwrap();
+                        release_rx.recv().unwrap();
+                        Ok::<Station, ()>(stations.get(&1).unwrap().clone())
+                    },
+                )
+                .await
+                .unwrap();
+        });
+        tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+            .await
+            .unwrap();
+
+        let start_server = Arc::clone(&server);
+        let later_start = tokio::spawn(async move {
+            start_server
+                .start_point_mutation(
+                    1,
+                    1,
+                    AsduTypeId::MSpNa1,
+                    900,
+                    MutationParams::default(),
+                )
+                .await
+                .unwrap();
+        });
+        tokio::task::yield_now().await;
+        assert!(!later_start.is_finished());
+        release_tx.send(()).unwrap();
+        transaction.await.unwrap();
+        later_start.await.unwrap();
+        assert_eq!(
+            server.list_point_mutations_with_period().await,
+            vec![(1, 1, AsduTypeId::MSpNa1, MutationMode::Flip, 900)],
+        );
+
+        // Repeat with stop as the later operation. It must run after the
+        // imported task is registered and remove it deterministically.
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let transaction_server = Arc::clone(&server);
+        let transaction = tokio::spawn(async move {
+            transaction_server
+                .transact_station_point_mutations(
+                    1,
+                    StationMutationBatchMode::Replace,
+                    &imported,
+                    move |stations| {
+                        entered_tx.send(()).unwrap();
+                        release_rx.recv().unwrap();
+                        Ok::<Station, ()>(stations.get(&1).unwrap().clone())
+                    },
+                )
+                .await
+                .unwrap();
+        });
+        tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+            .await
+            .unwrap();
+        let stop_server = Arc::clone(&server);
+        let later_stop = tokio::spawn(async move {
+            stop_server
+                .stop_point_mutation(1, 1, AsduTypeId::MSpNa1)
+                .await;
+        });
+        tokio::task::yield_now().await;
+        assert!(!later_stop.is_finished());
+        release_tx.send(()).unwrap();
+        transaction.await.unwrap();
+        later_stop.await.unwrap();
+        assert!(server.list_point_mutations().await.is_empty());
     }
 
     #[tokio::test(start_paused = true)]
@@ -3542,15 +3956,15 @@ mod tests {
 
         let initial_seq = server.stations.read().await
             .get(&1).unwrap().data_points.current_seq();
-        let stations_guard = server.stations.write().await;
         server.start_point_mutation(
             1,
             1,
             AsduTypeId::MSpNa1,
             100,
             MutationParams::default(),
-        ).await;
+        ).await.unwrap();
         tokio::task::yield_now().await;
+        let stations_guard = server.stations.write().await;
 
         // The first tick is consumed at 100ms, then waits on stations.write()
         // while two more deadlines pass.
@@ -3822,6 +4236,16 @@ mod tests {
         }).unwrap();
         server.add_station(control).await.unwrap();
         server.add_station(monitor).await.unwrap();
+        server
+            .start_point_mutation(
+                2,
+                10,
+                AsduTypeId::MSpNa1,
+                1_000,
+                MutationParams::default(),
+            )
+            .await
+            .unwrap();
 
         server.update_station(2, 20, "renamed".to_string()).await.unwrap();
 
@@ -3839,6 +4263,81 @@ mod tests {
             .find_map(|def| def.mapping)
             .unwrap();
         assert_eq!(mapping.common_address, 20);
+        drop(stations);
+        assert_eq!(
+            server.list_point_mutations_with_period().await,
+            vec![(20, 10, AsduTypeId::MSpNa1, MutationMode::Flip, 1_000)],
+            "renaming a station must migrate its mutation tasks to the new CA",
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn remove_and_recreate_station_cannot_leave_old_mutation_task() {
+        let server = SlaveServer::new(SlaveTransportConfig::default());
+        let mut station = Station::new(7, "old");
+        station
+            .add_point(InformationObjectDef {
+                ioa: 11,
+                asdu_type: AsduTypeId::MSpNa1,
+                category: DataCategory::SinglePoint,
+                name: String::new(),
+                comment: String::new(),
+                mapping: None,
+                command_qualifier: None,
+                select_before_operate: None,
+            })
+            .unwrap();
+        server.add_station(station).await.unwrap();
+        server
+            .start_point_mutation(
+                7,
+                11,
+                AsduTypeId::MSpNa1,
+                50,
+                MutationParams::default(),
+            )
+            .await
+            .unwrap();
+
+        server.remove_station(7).await.unwrap();
+        assert!(server.list_point_mutations().await.is_empty());
+
+        let mut replacement = Station::new(7, "replacement");
+        replacement
+            .add_point(InformationObjectDef {
+                ioa: 11,
+                asdu_type: AsduTypeId::MSpNa1,
+                category: DataCategory::SinglePoint,
+                name: String::new(),
+                comment: String::new(),
+                mapping: None,
+                command_qualifier: None,
+                select_before_operate: None,
+            })
+            .unwrap();
+        server.add_station(replacement).await.unwrap();
+        let seq = server
+            .stations
+            .read()
+            .await
+            .get(&7)
+            .unwrap()
+            .data_points
+            .current_seq();
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            server
+                .stations
+                .read()
+                .await
+                .get(&7)
+                .unwrap()
+                .data_points
+                .current_seq(),
+            seq,
+            "a detached task from the removed station must not mutate a reused CA/IOA",
+        );
     }
 
     #[tokio::test]

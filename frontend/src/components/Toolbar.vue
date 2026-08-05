@@ -155,7 +155,12 @@ async function openConfig() {
 }
 
 async function chooseCsvImport() {
-  if (!selectedServerId.value || selectedCA.value === null || csvActionPending.value) return
+  if (
+    !selectedServerId.value
+    || selectedCA.value === null
+    || selectedServerState.value !== 'Stopped'
+    || csvActionPending.value
+  ) return
   const path = await open({
     multiple: false,
     filters: [{ name: 'Point Configuration CSV', extensions: ['csv'] }],
@@ -177,6 +182,10 @@ async function importCsv(mode: 'merge' | 'replace') {
   showCsvImportMode.value = false
   csvImportPath.value = null
   if (!path || !serverId || commonAddress === null || csvActionPending.value) return
+  if (selectedServerState.value !== 'Stopped') {
+    await showAlert(t('toolbar.csvImportStoppedOnly'))
+    return
+  }
   if (mode === 'replace' && !await showConfirm(t('toolbar.csvReplaceConfirm'))) return
 
   csvActionPending.value = true
@@ -195,7 +204,11 @@ async function importCsv(mode: 'merge' | 'replace') {
       mutations: result.mutations_started,
     }))
   } catch (error) {
-    await showAlert(`${t('toolbar.csvImportFailed')}: ${error}`)
+    await showAlert([
+      t('toolbar.csvImportFailed'),
+      t('toolbar.csvImportErrorHint'),
+      String(error),
+    ].join('\n'))
   } finally {
     csvActionPending.value = false
   }
@@ -316,9 +329,9 @@ async function downloadCsvTemplate() {
       <button
         class="toolbar-btn"
         data-testid="import-point-csv"
-        :disabled="csvActionPending || !selectedServerId || selectedCA === null"
+        :disabled="csvActionPending || !selectedServerId || selectedCA === null || selectedServerState !== 'Stopped'"
         @click="chooseCsvImport"
-        :title="t('toolbar.importCsv')"
+        :title="selectedServerState === 'Stopped' ? t('toolbar.importCsv') : t('toolbar.csvImportStoppedOnly')"
       >
         <span class="toolbar-label">{{ t('toolbar.importCsv') }}</span>
       </button>

@@ -38,12 +38,12 @@ function handleKeydown(e: KeyboardEvent) {
   <Teleport to="body">
     <Transition name="dialog-pop">
     <div v-if="state.visible" class="dialog-backdrop dialog-blur" @mousedown.self="dialogCancel" @keydown="handleKeydown">
-      <div class="dialog" role="dialog" aria-modal="true">
+      <div class="dialog" :class="{ 'dialog--alert': state.mode === 'alert' }" role="dialog" aria-modal="true">
         <div class="dialog-header">
           <span class="dialog-title">{{ state.title }}</span>
         </div>
         <div class="dialog-body">
-          <p class="dialog-message">{{ state.message }}</p>
+          <p class="dialog-message" data-testid="app-dialog-message" tabindex="0">{{ state.message }}</p>
           <input
             v-if="state.mode === 'prompt'"
             ref="inputRef"
@@ -88,7 +88,14 @@ function handleKeydown(e: KeyboardEvent) {
   border-radius: 8px;
   width: 360px;
   max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.dialog--alert {
+  width: 520px;
 }
 
 .dialog-header {
@@ -103,6 +110,7 @@ function handleKeydown(e: KeyboardEvent) {
 
 .dialog-body {
   padding: 12px 20px 16px;
+  min-height: 0;
 }
 
 .dialog-message {
@@ -110,7 +118,10 @@ function handleKeydown(e: KeyboardEvent) {
   color: var(--c-subtext1);
   line-height: 1.5;
   margin: 0 0 8px;
-  word-break: break-word;
+  max-height: min(60vh, 480px);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .dialog-input {

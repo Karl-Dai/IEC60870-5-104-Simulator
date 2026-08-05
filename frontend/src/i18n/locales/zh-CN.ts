@@ -53,6 +53,8 @@ export type DictShape = {
     csvExportFailed: string
     csvTemplateFailed: string
     csvImportFailed: string
+    csvImportErrorHint: string
+    csvImportStoppedOnly: string
     csvImportModeTitle: string
     csvImportModeHint: string
     csvMerge: string
@@ -624,6 +626,8 @@ const dict: DictShape = {
     csvExportFailed: '导出 CSV 失败',
     csvTemplateFailed: '保存 CSV 模板失败',
     csvImportFailed: '导入 CSV 失败',
+    csvImportErrorHint: '本次导入未写入任何点位。下方保留完整错误明细；校验错误包含对应行号和原因，可滚动查看并复制修正。',
+    csvImportStoppedOnly: 'CSV 导入会替换点位定义，请先停止当前服务器再导入',
     csvImportModeTitle: '选择 CSV 导入方式',
     csvImportModeHint: 'CSV 将导入当前选中的站点。所有行会先完整校验；任何错误都会取消整次导入。',
     csvMerge: '合并',
