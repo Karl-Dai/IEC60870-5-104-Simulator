@@ -383,6 +383,16 @@ export type DictShape = {
     loading: string
     chooseServer: string
     noLogs: string
+    noMatches: string
+    autoScroll: string
+    allDirections: string
+    allFrames: string
+    iFrames: string
+    sFrames: string
+    uFrames: string
+    searchPlaceholder: string
+    filteredCount: string
+    resizeColumn: string
     timeCol: string
     directionCol: string
     frameCol: string
@@ -934,6 +944,16 @@ const dict: DictShape = {
     loading: '加载中...',
     chooseServer: '请先选择一个服务器',
     noLogs: '暂无日志',
+    noMatches: '没有符合当前筛选条件的日志',
+    autoScroll: '自动滚动',
+    allDirections: '全部方向',
+    allFrames: '全部帧',
+    iFrames: 'I 帧',
+    sFrames: 'S 帧',
+    uFrames: 'U 帧',
+    searchPlaceholder: '搜索时间、方向、帧、详情或原始报文',
+    filteredCount: '{visible} / {total}',
+    resizeColumn: '调整“{column}”列宽',
     timeCol: '时间',
     directionCol: '方向',
     frameCol: '帧类型',

@@ -1131,6 +1131,10 @@ pub async fn export_logs_csv(
     Ok(conn.log_collector.export_csv().await)
 }
 
+fn selected_logs_csv(entries: Option<Vec<LogEntry>>) -> Option<String> {
+    entries.map(|entries| LogCollector::export_entries_csv(&entries))
+}
+
 /// 将日志直接写入用户通过原生保存对话框选择的路径。WebView 中使用 Blob +
 /// `<a download>` 在 Tauri/Windows WebView2 下不会可靠触发系统下载，因此文件写入
 /// 必须由 Rust 后端完成。UTF-8 BOM 让 Windows Excel 能正确识别中英文详情。
@@ -1139,8 +1143,12 @@ pub async fn save_logs_csv(
     state: State<'_, AppState>,
     connection_id: String,
     path: String,
+    entries: Option<Vec<LogEntry>>,
 ) -> Result<(), String> {
-    let csv = export_logs_csv(state, connection_id).await?;
+    let csv = match selected_logs_csv(entries) {
+        Some(csv) => csv,
+        None => export_logs_csv(state, connection_id).await?,
+    };
     std::fs::write(&path, format!("\u{FEFF}{csv}"))
         .map_err(|e| format!("写入 CSV 失败: {e}"))
 }
@@ -1302,6 +1310,15 @@ struct TimingCorrectedEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_log_export_distinguishes_missing_and_empty_entries() {
+        assert!(selected_logs_csv(None).is_none());
+        assert_eq!(
+            selected_logs_csv(Some(Vec::new())).unwrap(),
+            "Timestamp,Direction,FrameType,Detail,RawBytes\n",
+        );
+    }
 
     #[test]
     fn create_request_deserializes_broadcast_address() {

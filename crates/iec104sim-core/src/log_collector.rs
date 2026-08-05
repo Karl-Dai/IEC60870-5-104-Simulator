@@ -107,10 +107,20 @@ impl LogCollector {
     /// Export all entries to CSV format.
     pub async fn export_csv(&self) -> String {
         let entries = self.entries.read().await;
+        Self::entries_to_csv(entries.iter())
+    }
+
+    /// Export a caller-selected set of entries while keeping the same CSV
+    /// schema, escaping, and millisecond timestamp precision as a full export.
+    pub fn export_entries_csv(entries: &[LogEntry]) -> String {
+        Self::entries_to_csv(entries.iter())
+    }
+
+    fn entries_to_csv<'a>(entries: impl IntoIterator<Item = &'a LogEntry>) -> String {
         let mut output = String::new();
         output.push_str(LogEntry::csv_header());
         output.push('\n');
-        for entry in entries.iter() {
+        for entry in entries {
             output.push_str(&entry.to_csv_row());
             output.push('\n');
         }
@@ -233,6 +243,36 @@ mod tests {
 
         collector.clear().await;
         assert!(collector.is_empty().await);
+    }
+
+    #[test]
+    fn selected_entry_export_keeps_milliseconds_and_only_selected_rows() {
+        use chrono::{TimeZone, Utc};
+
+        let mut included = LogEntry::new(
+            Direction::Rx,
+            FrameLabel::IFrame("M_SP_NA_1".to_string()),
+            "IOA=7, value=1",
+        );
+        included.timestamp =
+            Utc.with_ymd_and_hms(2026, 8, 4, 9, 10, 11).unwrap()
+                + chrono::Duration::milliseconds(123);
+        let excluded = LogEntry::new(Direction::Tx, FrameLabel::SFrame, "excluded");
+
+        let csv = LogCollector::export_entries_csv(&[included]);
+
+        assert!(csv.starts_with("Timestamp,Direction,FrameType,Detail,RawBytes\n"));
+        assert!(csv.contains("2026-08-04 09:10:11.123"));
+        assert!(csv.contains("\"IOA=7, value=1\""));
+        assert!(!csv.contains(&excluded.detail));
+    }
+
+    #[test]
+    fn empty_selected_entry_export_still_has_header() {
+        assert_eq!(
+            LogCollector::export_entries_csv(&[]),
+            "Timestamp,Direction,FrameType,Detail,RawBytes\n",
+        );
     }
 
     /// 单对象数据帧:汇总头后追加具体值。

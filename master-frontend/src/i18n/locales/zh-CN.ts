@@ -156,6 +156,16 @@ export type DictShape = {
     title: string
     noConnections: string
     noLogs: string
+    noMatches: string
+    autoScroll: string
+    allDirections: string
+    allFrames: string
+    iFrames: string
+    sFrames: string
+    uFrames: string
+    searchPlaceholder: string
+    filteredCount: string
+    resizeColumn: string
     timeCol: string
     directionCol: string
     frameCol: string
@@ -178,6 +188,7 @@ export type DictShape = {
     frame: {
       iFrame: string
       sFrame: string
+      uFrame: string
       uStartAct: string
       uStartCon: string
       uStopAct: string
@@ -186,12 +197,16 @@ export type DictShape = {
       uTestCon: string
       generalInterrogation: string
       counterRead: string
+      counterInterrogation: string
       clockSync: string
       singleCommand: string
       doubleCommand: string
+      stepCommand: string
       setpointNormalized: string
       setpointScaled: string
       setpointFloat: string
+      bitstring: string
+      rawApdu: string
       connectionEvent: string
     }
     cot: Record<string, string>
@@ -504,6 +519,16 @@ const dict: DictShape = {
     title: '通信日志',
     noConnections: '暂无连接',
     noLogs: '暂无日志',
+    noMatches: '没有符合当前筛选条件的日志',
+    autoScroll: '自动滚动',
+    allDirections: '全部方向',
+    allFrames: '全部帧',
+    iFrames: 'I 帧',
+    sFrames: 'S 帧',
+    uFrames: 'U 帧',
+    searchPlaceholder: '搜索时间、方向、帧、传送原因、详情或原始报文',
+    filteredCount: '{visible} / {total}',
+    resizeColumn: '调整“{column}”列宽',
     timeCol: '时间',
     directionCol: '方向',
     frameCol: '帧类型',
@@ -526,6 +551,7 @@ const dict: DictShape = {
     frame: {
       iFrame: 'I {value}',
       sFrame: 'S 帧',
+      uFrame: 'U 帧',
       uStartAct: 'U 启动激活',
       uStartCon: 'U 启动确认',
       uStopAct: 'U 停止激活',
@@ -534,12 +560,16 @@ const dict: DictShape = {
       uTestCon: 'U 测试确认',
       generalInterrogation: '总召',
       counterRead: '计数召唤',
+      counterInterrogation: '累计量召唤',
       clockSync: '对时',
       singleCommand: '单点命令',
       doubleCommand: '双点命令',
+      stepCommand: '步调节命令',
       setpointNormalized: '归一设定值',
       setpointScaled: '标度设定值',
       setpointFloat: '浮点设定值',
+      bitstring: '位串命令',
+      rawApdu: '原始 APDU',
       connectionEvent: '连接事件',
     },
     cot: {
