@@ -9,6 +9,7 @@ import AboutDialog from '@shared/components/AboutDialog.vue'
 import LangSwitch from '@shared/components/LangSwitch.vue'
 import VersionBadge from '@shared/components/VersionBadge.vue'
 import NewServerModal from './NewServerModal.vue'
+import CsvImportModeModal from './CsvImportModeModal.vue'
 import { useI18n } from '@shared/i18n'
 import { formatStartServerError } from '../errors'
 
@@ -17,8 +18,10 @@ const showAbout = ref(false)
 
 const selectedServerId = inject<Ref<string | null>>('selectedServerId')!
 const selectedServerState = inject<Ref<string>>('selectedServerState')!
+const selectedCA = inject<Ref<number | null>>('selectedCA')!
 const refreshTree = inject<() => void>('refreshTree')!
 const refreshData = inject<() => void>('refreshData')!
+const resetData = inject<() => Promise<void>>('resetData')!
 const { showAlert, showPrompt, showConfirm } = inject<{
   showAlert: typeof ShowAlert
   showPrompt: typeof ShowPrompt
@@ -55,6 +58,15 @@ async function manualCheckUpdate() {
 
 const showNewServerModal = ref(false)
 const serverActionPending = ref(false)
+const csvActionPending = ref(false)
+const csvImportPath = ref<string | null>(null)
+const showCsvImportMode = ref(false)
+
+type PointCsvImportResult = {
+  imported: number
+  total_points: number
+  mutations_started: number
+}
 
 async function startServer() {
   if (!selectedServerId.value || serverActionPending.value) return
@@ -142,6 +154,98 @@ async function openConfig() {
   }
 }
 
+async function chooseCsvImport() {
+  if (!selectedServerId.value || selectedCA.value === null || csvActionPending.value) return
+  const path = await open({
+    multiple: false,
+    filters: [{ name: 'Point Configuration CSV', extensions: ['csv'] }],
+  })
+  if (!path || typeof path !== 'string') return
+  csvImportPath.value = path
+  showCsvImportMode.value = true
+}
+
+function cancelCsvImport() {
+  showCsvImportMode.value = false
+  csvImportPath.value = null
+}
+
+async function importCsv(mode: 'merge' | 'replace') {
+  const path = csvImportPath.value
+  const serverId = selectedServerId.value
+  const commonAddress = selectedCA.value
+  showCsvImportMode.value = false
+  csvImportPath.value = null
+  if (!path || !serverId || commonAddress === null || csvActionPending.value) return
+  if (mode === 'replace' && !await showConfirm(t('toolbar.csvReplaceConfirm'))) return
+
+  csvActionPending.value = true
+  try {
+    const result = await invoke<PointCsvImportResult>('import_point_config_csv', {
+      serverId,
+      commonAddress,
+      path,
+      mode,
+    })
+    refreshTree()
+    await resetData()
+    await showAlert(t('toolbar.csvImported', {
+      count: result.imported,
+      total: result.total_points,
+      mutations: result.mutations_started,
+    }))
+  } catch (error) {
+    await showAlert(`${t('toolbar.csvImportFailed')}: ${error}`)
+  } finally {
+    csvActionPending.value = false
+  }
+}
+
+async function exportCsv() {
+  const serverId = selectedServerId.value
+  const commonAddress = selectedCA.value
+  if (!serverId || commonAddress === null || csvActionPending.value) return
+  const path = await save({
+    filters: [{ name: 'Point Configuration CSV', extensions: ['csv'] }],
+    defaultPath: `iec104-points-ca-${commonAddress}.csv`,
+  })
+  if (!path) return
+
+  csvActionPending.value = true
+  try {
+    const count = await invoke<number>('save_point_config_csv', {
+      serverId,
+      commonAddress,
+      path,
+    })
+    await showAlert(t('toolbar.csvExported', { count }))
+  } catch (error) {
+    await showAlert(`${t('toolbar.csvExportFailed')}: ${error}`)
+  } finally {
+    csvActionPending.value = false
+  }
+}
+
+async function downloadCsvTemplate() {
+  const commonAddress = selectedCA.value
+  if (!selectedServerId.value || commonAddress === null || csvActionPending.value) return
+  const path = await save({
+    filters: [{ name: 'Point Configuration CSV', extensions: ['csv'] }],
+    defaultPath: `iec104-point-template-ca-${commonAddress}.csv`,
+  })
+  if (!path) return
+
+  csvActionPending.value = true
+  try {
+    await invoke('save_point_config_csv_template', { commonAddress, path })
+    await showAlert(t('toolbar.csvTemplateSaved'))
+  } catch (error) {
+    await showAlert(`${t('toolbar.csvTemplateFailed')}: ${error}`)
+  } finally {
+    csvActionPending.value = false
+  }
+}
+
 </script>
 
 <template>
@@ -206,8 +310,35 @@ async function openConfig() {
       <button class="toolbar-btn" @click="saveConfig" :title="t('toolbar.saveConfig')">
         <span class="toolbar-label">{{ t('toolbar.saveConfig') }}</span>
       </button>
-      <button class="toolbar-btn" @click="openConfig" :title="t('toolbar.openConfig')">
+      <button class="toolbar-btn" data-testid="open-config" @click="openConfig" :title="t('toolbar.openConfig')">
         <span class="toolbar-label">{{ t('toolbar.openConfig') }}</span>
+      </button>
+      <button
+        class="toolbar-btn"
+        data-testid="import-point-csv"
+        :disabled="csvActionPending || !selectedServerId || selectedCA === null"
+        @click="chooseCsvImport"
+        :title="t('toolbar.importCsv')"
+      >
+        <span class="toolbar-label">{{ t('toolbar.importCsv') }}</span>
+      </button>
+      <button
+        class="toolbar-btn"
+        data-testid="export-point-csv"
+        :disabled="csvActionPending || !selectedServerId || selectedCA === null"
+        @click="exportCsv"
+        :title="t('toolbar.exportCsv')"
+      >
+        <span class="toolbar-label">{{ t('toolbar.exportCsv') }}</span>
+      </button>
+      <button
+        class="toolbar-btn"
+        data-testid="download-point-csv-template"
+        :disabled="csvActionPending || !selectedServerId || selectedCA === null"
+        @click="downloadCsvTemplate"
+        :title="t('toolbar.downloadCsvTemplate')"
+      >
+        <span class="toolbar-label">{{ t('toolbar.downloadCsvTemplate') }}</span>
       </button>
     </div>
     </div>
@@ -223,6 +354,11 @@ async function openConfig() {
 
   <AboutDialog :visible="showAbout" @close="showAbout = false" />
   <NewServerModal v-model:visible="showNewServerModal" />
+  <CsvImportModeModal
+    :visible="showCsvImportMode"
+    @choose="importCsv"
+    @cancel="cancelCsvImport"
+  />
 </template>
 
 <style scoped>

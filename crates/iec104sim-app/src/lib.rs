@@ -1,4 +1,5 @@
 mod commands;
+mod point_csv;
 mod state;
 pub mod update;
 
@@ -64,6 +65,10 @@ pub fn run() {
             // Config file save/open
             commands::save_config,
             commands::load_config,
+            // Per-station point CSV import/export (JSON config remains separate)
+            point_csv::save_point_config_csv,
+            point_csv::import_point_config_csv,
+            point_csv::save_point_config_csv_template,
             // Tool commands
             commands::parse_hex,
             commands::parse_apci,

@@ -489,7 +489,7 @@ pub async fn list_stations(
 // Data Point Commands
 // ---------------------------------------------------------------------------
 
-fn parse_asdu_type(s: &str) -> Result<AsduTypeId, String> {
+pub(crate) fn parse_asdu_type(s: &str) -> Result<AsduTypeId, String> {
     // 归一化: 小写 + 仅保留字母数字。涵盖三种来源:
     // PascalCase 枚举名 ("MSpNa1") / 小写下划线 ("m_sp_na_1") /
     // 前端从 list_data_points 拿到的显示名 ("M_SP_NA_1").
@@ -583,7 +583,7 @@ fn resolve_control_target(
     }))
 }
 
-fn validate_control_point_options(
+pub(crate) fn validate_control_point_options(
     asdu_type: AsduTypeId,
     qualifier: Option<u8>,
     select_before_operate: Option<bool>,

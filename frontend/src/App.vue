@@ -89,6 +89,14 @@ function refreshData() {
 }
 provide('refreshData', refreshData)
 
+async function resetData() {
+  await dataPointTableRef.value?.resetAndReload()
+  // The explicit reset handles the point cache; this key also refreshes
+  // server-level decorations such as the derived +TB badges.
+  dataRefreshKey.value++
+}
+provide('resetData', resetData)
+
 // Realtime category counts derived from DataPointTable's dataMap
 const categoryCounts = ref<Map<string, number>>(new Map())
 provide('categoryCounts', categoryCounts)

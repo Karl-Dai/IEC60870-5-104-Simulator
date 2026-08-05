@@ -1118,8 +1118,35 @@ async function openSimulationSettings() {
   showSimulationDrawer.value = true
 }
 
+// Station CSV Replace can rebuild the table with the same number of rows while
+// resetting the backend sequence counter. An incremental refresh cannot detect
+// that case, so callers need an explicit cache/cursor reset before reloading.
+async function resetAndReloadDataPoints() {
+  if (!currentServerId || currentCA === null) return
+  selectionEpoch++
+  clearActiveMutationState()
+  dataMap = new Map()
+  lastSeq = 0
+  displayPoints.value = []
+  categoryCounts.value = new Map()
+  selectedRows.value = []
+  lastClickedIndex.value = -1
+  editingCell.value = null
+  editingPointDefinition.value = null
+  showEditModal.value = false
+  showSimulationDrawer.value = false
+  changedKeys.value.clear()
+  for (const timer of changeTimers.values()) clearTimeout(timer)
+  changeTimers.clear()
+  scrollTop.value = 0
+  scrollContainer.value?.scrollTo?.({ top: 0 })
+  emitSelection()
+  await loadDataPoints()
+  await refreshActiveMutations()
+}
+
 // Allow parent to directly trigger data load (bypasses async watch timing issues)
-defineExpose({ loadData: loadDataPoints })
+defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoints })
 </script>
 
 <template>

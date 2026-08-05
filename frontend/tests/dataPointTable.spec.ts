@@ -184,6 +184,47 @@ describe('DataPointTable 子站数据表', () => {
     wrapper.unmount()
   })
 
+  it('CSV 全量重载在点数不变且后端 seq 重置时仍替换元数据并清空选区', async () => {
+    const oldPoint = { ...A, name: 'before import', comment: 'old' }
+    const importedPoint = { ...A, name: 'after import', comment: 'new' }
+    let imported = false
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_remote_operation_config') {
+        return Promise.resolve({ sync_tb_by_category: {} })
+      }
+      if (command === 'list_point_mutations') return Promise.resolve([])
+      if (command === 'list_data_points_since') {
+        return Promise.resolve(imported
+          ? { points: [importedPoint], seq: 1, total_count: 1 }
+          : { points: [oldPoint], seq: 42, total_count: 1 })
+      }
+      return Promise.resolve([])
+    })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+    await wrapper.find('tbody input[type="checkbox"]').trigger('click')
+
+    const vm = wrapper.vm as unknown as {
+      displayPoints: DataPointInfo[]
+      selectedRows: DataPointInfo[]
+      resetAndReload: () => Promise<void>
+    }
+    expect(vm.displayPoints[0].name).toBe('before import')
+    expect(vm.selectedRows).toHaveLength(1)
+
+    imported = true
+    await vm.resetAndReload()
+    await flushPromises()
+    await nextTick()
+
+    expect(vm.displayPoints).toHaveLength(1)
+    expect(vm.displayPoints[0]).toMatchObject({ name: 'after import', comment: 'new' })
+    expect(vm.selectedRows).toEqual([])
+    const reloadCalls = invokeMock.mock.calls.filter(([command]) => command === 'list_data_points_since')
+    expect(reloadCalls.at(-1)?.[1]).toMatchObject({ sinceSeq: 0 })
+    wrapper.unmount()
+  })
+
   it('首批加载不逐点高亮(避免 N 个 setTimeout 定时器风暴)', async () => {
     // 切站后 dataMap 为空,首批返回的全部点都是"新点"。这些不是值变化,
     // 不应触发高亮——否则 2000 点/类型时会瞬间挂起数千个 3s setTimeout。

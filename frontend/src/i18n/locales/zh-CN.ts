@@ -44,6 +44,22 @@ export type DictShape = {
     configLoaded: string
     configSaveFailed: string
     configLoadFailed: string
+    importCsv: string
+    exportCsv: string
+    downloadCsvTemplate: string
+    csvExported: string
+    csvTemplateSaved: string
+    csvImported: string
+    csvExportFailed: string
+    csvTemplateFailed: string
+    csvImportFailed: string
+    csvImportModeTitle: string
+    csvImportModeHint: string
+    csvMerge: string
+    csvMergeHint: string
+    csvReplace: string
+    csvReplaceHint: string
+    csvReplaceConfirm: string
   }
   newServer: {
     title: string
@@ -599,6 +615,22 @@ const dict: DictShape = {
     configLoaded: '已导入 {count} 个服务器',
     configSaveFailed: '保存失败',
     configLoadFailed: '打开失败',
+    importCsv: '导入 CSV',
+    exportCsv: '导出 CSV',
+    downloadCsvTemplate: '下载模板',
+    csvExported: '已导出 {count} 个点位',
+    csvTemplateSaved: 'CSV 模板已保存',
+    csvImported: '已导入 {count} 个点位，当前站共 {total} 个点位，恢复 {mutations} 个模拟任务',
+    csvExportFailed: '导出 CSV 失败',
+    csvTemplateFailed: '保存 CSV 模板失败',
+    csvImportFailed: '导入 CSV 失败',
+    csvImportModeTitle: '选择 CSV 导入方式',
+    csvImportModeHint: 'CSV 将导入当前选中的站点。所有行会先完整校验；任何错误都会取消整次导入。',
+    csvMerge: '合并',
+    csvMergeHint: '保留当前点位，只添加 CSV 中的新点位；遇到重复点位会整批拒绝。',
+    csvReplace: '替换',
+    csvReplaceHint: '清空当前站点的点位和模拟任务，再按 CSV 完整重建。',
+    csvReplaceConfirm: '替换会清空当前站点的全部点位和模拟任务，然后按 CSV 重建。确定继续吗？',
   },
   newServer: {
     title: '新建服务器',

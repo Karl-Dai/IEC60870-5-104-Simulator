@@ -1510,6 +1510,45 @@ impl SlaveServer {
         if let Some(task) = guard.remove(&(ca, ioa, asdu_type)) { task.handle.abort(); }
     }
 
+    /// Stop and forget every point-mutation task owned by one station.
+    ///
+    /// Bulk station replacement uses this while holding the station write lock,
+    /// so an old task cannot wake up after the point table has been swapped and
+    /// mutate a newly imported point that happens to reuse the same key.
+    pub async fn stop_point_mutations_for_station(&self, ca: u16) -> usize {
+        let mut guard = self.point_mutation_handles.lock().await;
+        let keys: Vec<(u16, u32, AsduTypeId)> = guard
+            .keys()
+            .filter(|(task_ca, _, _)| *task_ca == ca)
+            .copied()
+            .collect();
+        for key in &keys {
+            if let Some(task) = guard.remove(key) {
+                task.handle.abort();
+            }
+        }
+        keys.len()
+    }
+
+    /// Stop point-mutation tasks for a batch of keys while taking the task-map
+    /// mutex only once. CSV Merge uses this to remove stale/orphan handles for
+    /// incoming points, including rows whose imported simulation mode is off.
+    pub async fn stop_point_mutations_for_keys(
+        &self,
+        ca: u16,
+        targets: &[(u32, AsduTypeId)],
+    ) -> usize {
+        let mut guard = self.point_mutation_handles.lock().await;
+        let mut removed = 0;
+        for &(ioa, asdu_type) in targets {
+            if let Some(task) = guard.remove(&(ca, ioa, asdu_type)) {
+                task.handle.abort();
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     /// 返回当前活跃的周期变位点位 (ca, ioa, asdu_type, mode)。
     pub async fn list_point_mutations(&self) -> Vec<(u16, u32, AsduTypeId, MutationMode)> {
         self.list_point_mutations_with_period()

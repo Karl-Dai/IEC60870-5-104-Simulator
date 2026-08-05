@@ -25,8 +25,10 @@ function mountToolbar() {
       provide: {
         selectedServerId: ref<string | null>('s1'),
         selectedServerState: ref('Stopped'),
+        selectedCA: ref<number | null>(1),
         refreshTree,
         refreshData,
+        resetData: () => Promise.resolve(),
         openParseFrame: () => {},
         openRuntimeParamsDrawer: () => {},
         checkUpdate: () => Promise.resolve(null),
@@ -43,8 +45,7 @@ function mountToolbar() {
 
 // 「保存配置 · 加载配置」是同一组里的两个按钮,加载在后
 function loadConfigButton(w: ReturnType<typeof mountToolbar>) {
-  const group = w.findAll('.toolbar-group').at(-1)!
-  return group.findAll('button').at(-1)!
+  return w.find('[data-testid="open-config"]')
 }
 
 beforeEach(() => {
