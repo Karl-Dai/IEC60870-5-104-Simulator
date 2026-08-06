@@ -445,6 +445,7 @@ const dict: DictShape = {
   about: {
     whatsNew: 'What\'s New',
     homepage: 'Homepage',
+    onlineDemoLabel: 'SimLab Online',
     homepageLabel: 'Homepage',
     releasesLabel: 'Releases',
     copiedSuffix: 'copied to clipboard',

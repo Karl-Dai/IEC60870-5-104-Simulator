@@ -4,6 +4,8 @@
 
 **A cross-platform IEC 60870-5-104 protocol simulator — Slave _and_ Master, in one desktop toolkit.**
 
+### 🌐 [Try SimLab Online — simlab.carldai.cloud](https://simlab.carldai.cloud)
+
 [![Release](https://img.shields.io/github/v/release/Karl-Dai/IEC60870-5-104-Simulator?label=release&color=2ea043)](https://github.com/Karl-Dai/IEC60870-5-104-Simulator/releases)
 [![Downloads](https://img.shields.io/github/downloads/Karl-Dai/IEC60870-5-104-Simulator/total?color=1f6feb)](https://github.com/Karl-Dai/IEC60870-5-104-Simulator/releases)
 [![Stars](https://img.shields.io/github/stars/Karl-Dai/IEC60870-5-104-Simulator?color=e3b341)](https://github.com/Karl-Dai/IEC60870-5-104-Simulator/stargazers)

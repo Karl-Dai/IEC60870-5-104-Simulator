@@ -13,6 +13,7 @@ vi.mock('@tauri-apps/api/app', () => ({
 }))
 
 const REPO = 'https://github.com/Karl-Dai/IEC60870-5-104-Simulator'
+const SIMLAB = 'https://simlab.carldai.cloud'
 
 describe('AboutDialog localization', () => {
   beforeEach(() => {
@@ -30,7 +31,12 @@ describe('AboutDialog localization', () => {
 
     expect(wrapper.find('.about-notes').text()).toContain('v1.15.6')
     expect(wrapper.find('.about-notes').text()).not.toMatch(/[\u3400-\u9fff]/u)
-    await wrapper.findAll('.about-links a')[0].trigger('click')
+    expect(wrapper.get('[data-testid="simlab-link"]').text()).toBe('SimLab Online')
+    await wrapper.get('[data-testid="simlab-link"]').trigger('click')
+    expect(invokeMock).toHaveBeenLastCalledWith('plugin:opener|open_url', {
+      url: SIMLAB,
+    })
+    await wrapper.get('[data-testid="documentation-link"]').trigger('click')
     expect(invokeMock).toHaveBeenLastCalledWith('plugin:opener|open_url', {
       url: `${REPO}/blob/main/README.md`,
     })
@@ -38,7 +44,8 @@ describe('AboutDialog localization', () => {
     useI18n().setLocale('zh-CN')
     await nextTick()
     expect(wrapper.find('.about-notes').text()).toContain('主站连接可见性')
-    await wrapper.findAll('.about-links a')[0].trigger('click')
+    expect(wrapper.get('[data-testid="simlab-link"]').text()).toBe('在线体验 SimLab')
+    await wrapper.get('[data-testid="documentation-link"]').trigger('click')
     expect(invokeMock).toHaveBeenLastCalledWith('plugin:opener|open_url', {
       url: `${REPO}/blob/main/README_CN.md`,
     })

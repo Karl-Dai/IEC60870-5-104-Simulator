@@ -4,6 +4,8 @@
 
 **跨平台 IEC 60870-5-104 协议仿真工具 —— 从站与主站,一套桌面工具全包。**
 
+### 🌐 [在线体验 SimLab — simlab.carldai.cloud](https://simlab.carldai.cloud)
+
 [![Release](https://img.shields.io/github/v/release/Karl-Dai/IEC60870-5-104-Simulator?label=release&color=2ea043)](https://github.com/Karl-Dai/IEC60870-5-104-Simulator/releases)
 [![Downloads](https://img.shields.io/github/downloads/Karl-Dai/IEC60870-5-104-Simulator/total?color=1f6feb)](https://github.com/Karl-Dai/IEC60870-5-104-Simulator/releases)
 [![Stars](https://img.shields.io/github/stars/Karl-Dai/IEC60870-5-104-Simulator?color=e3b341)](https://github.com/Karl-Dai/IEC60870-5-104-Simulator/stargazers)

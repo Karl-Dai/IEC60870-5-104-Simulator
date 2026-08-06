@@ -1,6 +1,7 @@
 export const APP_NAME = 'IEC104 Master'
 export const REPO_URL = 'https://github.com/Karl-Dai/IEC60870-5-104-Simulator'
 export const RELEASES_URL = 'https://github.com/Karl-Dai/IEC60870-5-104-Simulator/releases'
+export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [

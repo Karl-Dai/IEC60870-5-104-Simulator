@@ -264,6 +264,7 @@ export type DictShape = {
   about: {
     whatsNew: string
     homepage: string
+    onlineDemoLabel: string
     homepageLabel: string
     releasesLabel: string
     copiedSuffix: string
@@ -668,6 +669,7 @@ const dict: DictShape = {
   about: {
     whatsNew: '本次更新',
     homepage: '项目主页',
+    onlineDemoLabel: '在线体验 SimLab',
     homepageLabel: '项目主页',
     releasesLabel: '历史版本',
     copiedSuffix: '已复制到剪贴板',
