@@ -5,11 +5,11 @@ mod common;
 use common::harness::Pair;
 use common::helpers::{
     count_iframes, master_point_value, slave_point_value, wait_for_ioa_count,
-    DEFAULT_TIMEOUT, SHORT_TIMEOUT,
+    wait_for_log_event, DEFAULT_TIMEOUT, SHORT_TIMEOUT,
 };
 
-use iec104sim_core::data_point::DataPointValue;
-use iec104sim_core::log_entry::Direction;
+use iec104sim_core::data_point::{DataPoint, DataPointValue};
+use iec104sim_core::log_entry::{Direction, FrameLabel};
 use iec104sim_core::slave::{CommandAckCot, RemoteOperationConfig, SyncTbByCategory, UploadMode};
 use iec104sim_core::types::AsduTypeId;
 use tokio::time::{sleep, Duration};
@@ -172,6 +172,57 @@ async fn sp_sync_with_tb_emits_both_frames() {
     let tb = count_iframes(&pair.log, Direction::Rx, "M_SP_TB_1").await;
     assert!(na >= 1, "应至少 1 帧 NA, got {}", na);
     assert!(tb >= 1, "应至少 1 帧 TB, got {}", tb);
+
+    pair.shutdown().await;
+}
+
+/// 单个监视信号的突发上送日志应直接显示当前值，避免测试人员再去点表交叉核对。
+#[tokio::test]
+async fn spontaneous_monitoring_log_includes_current_value() {
+    let pair = Pair::spawn(RemoteOperationConfig::default()).await;
+    wait_for_log_event(
+        &pair.log,
+        |entry| entry.direction == Direction::Tx && entry.frame_label == FrameLabel::UStartCon,
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    .expect("slave STARTDT confirmation");
+    pair.log.clear().await;
+
+    {
+        let mut stations = pair.slave.server.stations.write().await;
+        let station = stations.get_mut(&1).unwrap();
+        station.data_points.insert(DataPoint::with_value(
+            512,
+            AsduTypeId::MSpTb1,
+            DataPointValue::SinglePoint { value: true },
+        ));
+    }
+    pair.slave.server
+        .queue_spontaneous(1, &[(512, AsduTypeId::MSpTb1)])
+        .await;
+
+    let event = wait_for_log_event(
+        &pair.log,
+        |entry| {
+            entry.direction == Direction::Tx
+                && entry.raw_bytes.is_none()
+                && matches!(
+                    &entry.frame_label,
+                    FrameLabel::IFrame(name) if name == "M_SP_TB_1"
+                )
+                && entry.detail.contains("突发上送")
+        },
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    .expect("spontaneous monitoring log");
+
+    assert!(
+        event.detail.contains("IOA=512 M_SP_TB_1 val=ON CA=1"),
+        "detail should include the signal value: {}",
+        event.detail,
+    );
 
     pair.shutdown().await;
 }

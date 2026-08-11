@@ -3573,7 +3573,23 @@ async fn do_queue_spontaneous(
         if let Some(ref lc) = log_collector {
             let detail = if changed.len() == 1 {
                 let (ioa, asdu_type) = changed[0];
-                format!("突发上送 (COT=3) IOA={} {} CA={} → {} 个客户端", ioa, asdu_type.name(), common_address, total_sent)
+                match station.data_points.get(ioa, asdu_type) {
+                    Some(point) => format!(
+                        "突发上送 (COT=3) IOA={} {} val={} CA={} → {} 个客户端",
+                        ioa,
+                        asdu_type.name(),
+                        point.value.display(),
+                        common_address,
+                        total_sent,
+                    ),
+                    None => format!(
+                        "突发上送 (COT=3) IOA={} {} CA={} → {} 个客户端",
+                        ioa,
+                        asdu_type.name(),
+                        common_address,
+                        total_sent,
+                    ),
+                }
             } else {
                 format!("突发上送 (COT=3) {} 个 IOA CA={} → {} 个客户端", changed.len(), common_address, total_sent)
             };
