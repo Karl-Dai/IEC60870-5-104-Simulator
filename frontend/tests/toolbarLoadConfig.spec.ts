@@ -1,10 +1,11 @@
-// issue #28 同类残余:「加载配置」保存后只 refreshTree(),从不 refreshData()。
-// 导入一份 sync_tb_by_category 已开的配置后,数据表沿用旧快照 —— 点位与 +TB 徽标
-// 都按老配置显示。断言 load_config 成功后两个刷新钩子都被调用。
+// issue #64: configuration files are complete workspace snapshots. A
+// successful open must reset every workspace-bound view before refreshing it;
+// cancellation or a rejected load must leave the current view untouched.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import { dialogKey } from '@shared/composables/useDialog'
+import { useI18n } from '@shared/i18n'
 import Toolbar from '../src/components/Toolbar.vue'
 
 const invokeMock = vi.fn()
@@ -18,6 +19,8 @@ vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: () => Promise.resolve() }
 
 const refreshTree = vi.fn()
 const refreshData = vi.fn()
+const resetWorkspaceView = vi.fn()
+const showAlert = vi.fn(() => Promise.resolve())
 
 function mountToolbar() {
   return mount(Toolbar, {
@@ -29,11 +32,12 @@ function mountToolbar() {
         refreshTree,
         refreshData,
         resetData: () => Promise.resolve(),
+        resetWorkspaceView,
         openParseFrame: () => {},
         openRuntimeParamsDrawer: () => {},
         checkUpdate: () => Promise.resolve(null),
         [dialogKey as symbol]: {
-          showAlert: () => Promise.resolve(),
+          showAlert,
           showPrompt: () => Promise.resolve(null),
           showConfirm: () => Promise.resolve(false),
         },
@@ -54,10 +58,13 @@ beforeEach(() => {
   openMock.mockReset()
   refreshTree.mockClear()
   refreshData.mockClear()
+  resetWorkspaceView.mockClear()
+  showAlert.mockClear()
+  useI18n().setLocale('en-US')
 })
 
-describe('Toolbar 加载配置', () => {
-  it('load_config 成功后同时刷新树与数据(+TB 徽标不再按老快照)', async () => {
+describe('Toolbar full-workspace config loading', () => {
+  it('resets the old workspace before refreshing the newly loaded snapshot', async () => {
     openMock.mockResolvedValue('/tmp/cfg.json')
     const w = mountToolbar()
 
@@ -65,12 +72,18 @@ describe('Toolbar 加载配置', () => {
     await flushPromises()
 
     expect(invokeMock).toHaveBeenCalledWith('load_config', { path: '/tmp/cfg.json' })
+    expect(resetWorkspaceView).toHaveBeenCalledTimes(1)
     expect(refreshTree).toHaveBeenCalledTimes(1)
     expect(refreshData).toHaveBeenCalledTimes(1)
+    expect(resetWorkspaceView.mock.invocationCallOrder[0])
+      .toBeLessThan(refreshTree.mock.invocationCallOrder[0])
+    expect(resetWorkspaceView.mock.invocationCallOrder[0])
+      .toBeLessThan(refreshData.mock.invocationCallOrder[0])
+    expect(showAlert).toHaveBeenCalledWith('Loaded 3 server(s)')
     w.unmount()
   })
 
-  it('取消选择文件时不刷新', async () => {
+  it('does not reset or refresh when file selection is cancelled', async () => {
     openMock.mockResolvedValue(null)
     const w = mountToolbar()
 
@@ -79,6 +92,22 @@ describe('Toolbar 加载配置', () => {
 
     expect(refreshTree).not.toHaveBeenCalled()
     expect(refreshData).not.toHaveBeenCalled()
+    expect(resetWorkspaceView).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('keeps the current workspace view when the file is rejected', async () => {
+    openMock.mockResolvedValue('/tmp/bad.json')
+    invokeMock.mockRejectedValueOnce(new Error('wrong app'))
+    const w = mountToolbar()
+
+    await loadConfigButton(w).trigger('click')
+    await flushPromises()
+
+    expect(resetWorkspaceView).not.toHaveBeenCalled()
+    expect(refreshTree).not.toHaveBeenCalled()
+    expect(refreshData).not.toHaveBeenCalled()
+    expect(showAlert.mock.calls.at(-1)?.[0]).toContain('Open failed')
     w.unmount()
   })
 })

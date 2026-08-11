@@ -11,9 +11,14 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(() => Promise.resolve([])
 interface AppVm {
   selectedCategory: string | null
   selectedConnectionId: string | null
+  selectedConnectionState: string
   selectedCA: number | null
+  selectedPoints: unknown[]
+  workspaceEpoch: number
   handleConnectionSelect: (id: string, state: string) => void
   handleCategorySelect: (connId: string, category: string, ca: number | null) => void
+  handlePointSelect: (points: unknown[]) => void
+  resetWorkspaceView: () => void
 }
 
 describe('App.handleConnectionSelect 分类筛选稳定 (4.5)', () => {
@@ -37,5 +42,26 @@ describe('App.handleConnectionSelect 分类筛选稳定 (4.5)', () => {
     vm.handleConnectionSelect('conn-B', 'Connected') // 不同连接,changed=true
     expect(vm.selectedCategory).toBeNull()
     expect(vm.selectedCA).toBeNull()
+  })
+
+  it('全量加载后清空旧选择并为每次加载切换工作区世代', () => {
+    vm.handleCategorySelect('conn-A', 'single_point', 1)
+    vm.handleConnectionSelect('conn-A', 'Connected')
+    vm.handlePointSelect([{ ioa: 1 }])
+    const initialEpoch = vm.workspaceEpoch
+
+    vm.resetWorkspaceView()
+
+    expect(vm.selectedConnectionId).toBeNull()
+    expect(vm.selectedConnectionState).toBe('Disconnected')
+    expect(vm.selectedCA).toBeNull()
+    expect(vm.selectedCategory).toBeNull()
+    expect(vm.selectedPoints).toEqual([])
+    expect(vm.workspaceEpoch).toBe(initialEpoch + 1)
+
+    // Loading the same full snapshot again still gets a fresh component tree;
+    // no selection/cache from the first load is eligible for reuse.
+    vm.resetWorkspaceView()
+    expect(vm.workspaceEpoch).toBe(initialEpoch + 2)
   })
 })

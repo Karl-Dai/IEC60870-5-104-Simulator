@@ -29,6 +29,10 @@ const selectedStationName = ref('')
 const selectedCategory = ref<string | null>(null)
 const selectedPoints = ref<{ ioa: number; asdu_type: string; category: string; value: string }[]>([])
 const logExpanded = ref(false)
+// Bumped after a configuration file replaces the whole workspace. Keying the
+// workspace-bound views tears down every local cache and makes late responses
+// from the previous workspace unable to repaint the new one.
+const workspaceEpoch = ref(0)
 
 // Resizable layout — widths persisted to localStorage
 const LS_TREE_W = 'iec104.layout.treeWidth'
@@ -229,6 +233,25 @@ function onRuntimeParamsSaved() {
   refreshData()
 }
 provide('openRuntimeParamsDrawer', openRuntimeParamsDrawer)
+
+function resetWorkspaceView() {
+  selectedServerId.value = null
+  selectedServerState.value = 'Stopped'
+  selectedCA.value = null
+  selectedStationName.value = ''
+  selectedCategory.value = null
+  selectedPoints.value = []
+  categoryCounts.value = new Map()
+
+  // These editors are bound to a server from the replaced workspace.
+  runtimeParamsModalVisible.value = false
+  runtimeParamsModalServerId.value = null
+  runtimeParamsModalLabel.value = ''
+  runtimeParamsDrawerVisible.value = false
+
+  workspaceEpoch.value++
+}
+provide('resetWorkspaceView', resetWorkspaceView)
 </script>
 
 <template>
@@ -246,6 +269,7 @@ provide('openRuntimeParamsDrawer', openRuntimeParamsDrawer)
 
     <aside class="tree-area">
       <ConnectionTree
+        :key="workspaceEpoch"
         @server-select="handleServerSelect"
         @station-select="handleStationSelect"
         @category-select="handleCategorySelect"
@@ -261,6 +285,7 @@ provide('openRuntimeParamsDrawer', openRuntimeParamsDrawer)
     />
     <main class="content-area">
       <DataPointTable
+        :key="workspaceEpoch"
         ref="dataPointTableRef"
         @point-select="handlePointSelect"
       />
@@ -274,7 +299,7 @@ provide('openRuntimeParamsDrawer', openRuntimeParamsDrawer)
       reverse
     />
     <aside class="panel-area">
-      <ValuePanel />
+      <ValuePanel :key="workspaceEpoch" />
     </aside>
 
     <Splitter
@@ -287,7 +312,7 @@ provide('openRuntimeParamsDrawer', openRuntimeParamsDrawer)
       reverse
     />
     <footer class="log-area">
-      <LogPanel :expanded="logExpanded" @toggle="toggleLog" />
+      <LogPanel :key="workspaceEpoch" :expanded="logExpanded" @toggle="toggleLog" />
     </footer>
     <AppDialog />
     <ParseFrameDialog
@@ -303,6 +328,7 @@ provide('openRuntimeParamsDrawer', openRuntimeParamsDrawer)
       @snooze="snoozeUpdate"
     />
     <RemoteParamsModal
+      :key="`remote-params-modal-${workspaceEpoch}`"
       :visible="runtimeParamsModalVisible"
       :server-id="runtimeParamsModalServerId"
       :server-label="runtimeParamsModalLabel"
@@ -310,6 +336,7 @@ provide('openRuntimeParamsDrawer', openRuntimeParamsDrawer)
       @close="closeRuntimeParamsModal"
     />
     <RemoteParamsDrawer
+      :key="`remote-params-drawer-${workspaceEpoch}`"
       :visible="runtimeParamsDrawerVisible"
       @saved="onRuntimeParamsSaved"
       @close="closeRuntimeParamsDrawer"

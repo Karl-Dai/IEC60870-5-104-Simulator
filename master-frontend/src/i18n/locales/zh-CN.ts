@@ -381,7 +381,7 @@ const dict: DictShape = {
     saveConfig: '保存配置',
     openConfig: '打开配置',
     configSaved: '配置已保存',
-    configLoaded: '已导入 {count} 个连接',
+    configLoaded: '已加载 {count} 个连接',
     configSaveFailed: '保存失败',
     configLoadFailed: '打开失败',
     broadcast: '广播',

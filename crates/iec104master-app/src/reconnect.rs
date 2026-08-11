@@ -26,15 +26,36 @@ pub async fn run_state_supervisor<E, R, RF>(
     RF: Future<Output = ()>,
 {
     let mut armed = false;
-    while state_rx.changed().await.is_ok() {
+    let mut pending_change = false;
+    loop {
+        if !pending_change && state_rx.changed().await.is_err() {
+            return;
+        }
+        pending_change = false;
+
         let state = *state_rx.borrow_and_update();
         emit(state);
         match state {
             MasterState::Connected => armed = true,
             MasterState::Disconnected | MasterState::Error if armed => {
-                // on_drop 内部封装"等 Channel Retry + 重连";其间 connect() 驱动的
-                // Connecting/Connected 变化会在下一轮 changed() 被取到。
-                on_drop().await;
+                // Retry sleep/connect must not keep a retired connection's
+                // supervisor alive. Only channel closure cancels the retry:
+                // connect() itself emits Connecting/Connected and may yield
+                // between them, so cancelling on a real change could leave it
+                // half-initialized. Remember such changes and keep polling the
+                // same retry future until it completes.
+                let retry = on_drop();
+                tokio::pin!(retry);
+                loop {
+                    tokio::select! {
+                        biased;
+                        changed = state_rx.changed() => match changed {
+                            Ok(()) => pending_change = true,
+                            Err(_) => return,
+                        },
+                        _ = &mut retry => break,
+                    }
+                }
             }
             _ => {}
         }
@@ -44,10 +65,18 @@ pub async fn run_state_supervisor<E, R, RF>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::mpsc;
+
+    struct DropMarker(Arc<AtomicBool>);
+
+    impl Drop for DropMarker {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
 
     /// 首次 Connected 之前的 Error 不触发重连;Connected 之后的 Disconnected/
     /// Error 各触发一次;state 通道关闭后督导退出。
@@ -100,6 +129,103 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), sup)
             .await
             .expect("supervisor should exit when state channel closes")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn channel_close_cancels_pending_retry_and_exits_promptly() {
+        let (state_tx, state_rx) = watch::channel(MasterState::Disconnected);
+        let (emit_tx, mut emit_rx) = mpsc::unbounded_channel();
+        let (retry_started_tx, mut retry_started_rx) = mpsc::unbounded_channel();
+        let retry_dropped = Arc::new(AtomicBool::new(false));
+
+        let dropped = retry_dropped.clone();
+        let supervisor = tokio::spawn(run_state_supervisor(
+            state_rx,
+            move |state| {
+                let _ = emit_tx.send(state);
+            },
+            move || {
+                let marker = DropMarker(dropped.clone());
+                let retry_started_tx = retry_started_tx.clone();
+                async move {
+                    let _marker = marker;
+                    let _ = retry_started_tx.send(());
+                    std::future::pending::<()>().await;
+                }
+            },
+        ));
+
+        state_tx.send_replace(MasterState::Connected);
+        assert_eq!(emit_rx.recv().await.unwrap(), MasterState::Connected);
+        state_tx.send_replace(MasterState::Disconnected);
+        assert_eq!(emit_rx.recv().await.unwrap(), MasterState::Disconnected);
+        retry_started_rx
+            .recv()
+            .await
+            .expect("retry future should start");
+
+        drop(state_tx);
+        tokio::time::timeout(Duration::from_millis(500), supervisor)
+            .await
+            .expect("closed state channel should cancel a long retry promptly")
+            .unwrap();
+        assert!(
+            retry_dropped.load(Ordering::SeqCst),
+            "cancelled retry future must be dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_generated_state_change_does_not_cancel_retry() {
+        let (state_tx, state_rx) = watch::channel(MasterState::Disconnected);
+        let (emit_tx, mut emit_rx) = mpsc::unbounded_channel();
+        let (retry_completed_tx, retry_completed_rx) = tokio::sync::oneshot::channel();
+        let mut retry_state_tx = Some(state_tx.clone());
+        let mut retry_completed_tx = Some(retry_completed_tx);
+
+        let supervisor = tokio::spawn(run_state_supervisor(
+            state_rx,
+            move |state| {
+                let _ = emit_tx.send(state);
+            },
+            move || {
+                let retry_state_tx = retry_state_tx
+                    .take()
+                    .expect("test should start exactly one retry");
+                let retry_completed_tx = retry_completed_tx
+                    .take()
+                    .expect("test should complete exactly one retry");
+                async move {
+                    retry_state_tx.send_replace(MasterState::Connecting);
+                    tokio::task::yield_now().await;
+                    retry_state_tx.send_replace(MasterState::Connected);
+                    let _ = retry_completed_tx.send(());
+                }
+            },
+        ));
+
+        state_tx.send_replace(MasterState::Connected);
+        assert_eq!(emit_rx.recv().await.unwrap(), MasterState::Connected);
+        state_tx.send_replace(MasterState::Disconnected);
+        assert_eq!(emit_rx.recv().await.unwrap(), MasterState::Disconnected);
+
+        tokio::time::timeout(Duration::from_millis(500), retry_completed_rx)
+            .await
+            .expect("self-generated Connecting must not cancel the retry")
+            .expect("retry completion sender should remain alive");
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(500), emit_rx.recv())
+                .await
+                .expect("final retry state should be processed")
+                .unwrap(),
+            MasterState::Connected
+        );
+
+        drop(state_tx);
+        tokio::time::timeout(Duration::from_millis(500), supervisor)
+            .await
+            .expect("supervisor should exit after state channel closes")
             .unwrap();
     }
 }

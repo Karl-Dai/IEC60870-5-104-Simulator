@@ -3,7 +3,7 @@ use iec104sim_core::master::MasterConnection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 /// Runtime state for a master connection.
 pub struct MasterConnectionState {
@@ -20,6 +20,10 @@ pub struct MasterConnectionState {
 pub struct AppState {
     pub connections: RwLock<HashMap<String, MasterConnectionState>>,
     pub next_connection_id: RwLock<u32>,
+    /// Serializes workspace membership changes. In particular, a full config
+    /// replacement must not race a manual create that could otherwise insert
+    /// itself immediately after the replacement map is committed.
+    pub workspace_mutation: Mutex<()>,
 }
 
 impl Default for AppState {
@@ -27,6 +31,7 @@ impl Default for AppState {
         Self {
             connections: RwLock::new(HashMap::new()),
             next_connection_id: RwLock::new(1),
+            workspace_mutation: Mutex::new(()),
         }
     }
 }

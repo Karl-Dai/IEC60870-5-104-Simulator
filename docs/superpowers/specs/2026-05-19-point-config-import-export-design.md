@@ -1,4 +1,4 @@
-# 点位配置导入/导出 — 设计文档
+# 工作区配置保存/加载 — 设计文档
 
 日期:2026-05-19
 
@@ -7,11 +7,13 @@
 为主站(`iec104master-app`)、从站(`iec104sim-app`)两个 Tauri 应用各增加**手动保存/打开配置文件**功能:
 
 - **仅手动**保存/打开,无自动落盘、无启动恢复。
-- 打开(导入)文件时**追加合并**到现有工作区,不清空、不修改现有项。
+- 配置文件是**完整工作区快照**:打开文件时,在完整解析和校验成功后全量替换现有工作区。
+- 不提供 Merge/追加模式,也不弹出替换/合并选择。重复打开同一文件的结果与打开一次相同,不会产生重复服务器、站点、连接或点位。
+- 读取、解析或校验失败时保留原工作区,不做部分替换。
 - 文件格式为 JSON(pretty-print)。
 - **TLS 配置完全不写入文件**;打开后的项均为明文连接,TLS 需手动重新配置。
 
-「导出」即「保存」,「导入」即「打开」,为同一组操作。
+界面只使用「保存配置」与「打开配置」两个入口;「打开」始终是全量加载,不另设导入模式。
 
 ## 2. 文件格式
 
@@ -86,10 +88,11 @@
 
 ### `load_config(path: String) -> Result<usize, String>`
 
-读取 `path` → 解析 JSON → 校验 `app`/`version` → **追加**到现有工作区,返回导入的从站/连接数量。
+读取 `path` → 解析 JSON → 校验 `app`/`version` 及全部条目 → 构建候选工作区 → **一次性替换**现有工作区,返回加载的服务器/连接数量。空数组是合法的全量配置,会清空工作区。
 
-- 从站:为每个 server 创建 `SlaveServer`、`Station`,逐点 `add_point`(复用现有 `import_app_state` 的追加逻辑)。
-- 主站:创建 `MasterConnection`(断开态),把 snapshot 中的 `DataPoint` 预填入该连接的 `received_data`(`Arc<RwLock<MasterReceivedData>>`,通过 `MasterReceivedData::insert(ca, point)`),使 `DataTable` 立即可见;重连后被实时数据覆盖。
+- 从站:先在候选集合中为每个 server 创建 `SlaveServer`、`Station`并加载全部点位;候选集合完整成功后停止旧服务器并替换状态表。
+- 主站:先构建断开态的 `MasterConnection`,把 snapshot 中的 `DataPoint` 预填入该连接的 `received_data`(`Arc<RwLock<MasterReceivedData>>`,通过 `MasterReceivedData::insert(ca, point)`);候选集合完整成功后断开旧连接并替换状态表。
+- 替换成功后,前端清空旧树选择、数据增量游标、详情和日志缓存,再加载新树;旧工作区的延迟异步响应不得回灌新视图。
 
 ### 代码整理
 
@@ -102,7 +105,7 @@
 - 两个应用各引入 `tauri-plugin-dialog`:Cargo 依赖、`capabilities/default.json` 权限、npm 包 `@tauri-apps/plugin-dialog`。
 - `Toolbar.vue` 新增「保存配置」「打开配置」两个按钮:
   - **保存**:`dialog.save()` 选择保存路径 → `invoke('save_config', { path })` → 成功提示。
-  - **打开**:`dialog.open()` 选择文件 → `invoke('load_config', { path })` → 刷新连接树 / 列表 → 成功提示(显示导入数量)。
+  - **打开**:`dialog.open()` 选择文件 → `invoke('load_config', { path })` → 重置工作区视图与选择 → 刷新连接树 / 列表 → 成功提示(显示加载数量)。
 - 新增 i18n 词条:两个应用 × `zh-CN` / `en-US`。
 
 ## 5. 错误处理
@@ -114,6 +117,8 @@
 - `app` 判别字段不符(跨应用误加载)。
 - `version` 不受支持。
 
+上述错误都在候选工作区提交前返回;失败时不停止、不删除、不改写当前工作区。
+
 用户在文件对话框中取消选择时,不视为错误,静默返回。
 
 ## 6. 测试
@@ -122,3 +127,9 @@
   - 文件 schema 往返序列化(序列化后再反序列化,结构一致)。
   - `load_config` 对错误 `app`、错误 `version`、损坏 JSON 的拒绝行为。
   - 主站快照往返:`DataPoint` 的值与质量在序列化 / 反序列化后保真。
+  - A 工作区连续加载同一份 B 配置两次,最终数量与 B 文件一致,没有重复项。
+  - 依次加载 A、B 后仅 B 可见;加载空配置后工作区为空。
+  - 候选配置构建失败时,原工作区的数量、配置和运行状态不变。
+- 前端测试:
+  - `load_config` 成功后先重置工作区视图,再刷新树与数据;取消或失败时不重置。
+  - 主、从站都不保留旧树选择、点位选区、增量缓存或日志行;重复加载每次都产生新的工作区视图世代。

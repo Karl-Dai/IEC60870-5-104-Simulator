@@ -3,7 +3,7 @@ use iec104sim_core::slave::SlaveServer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 /// Runtime state for a slave server.
 pub struct SlaveServerState {
@@ -15,6 +15,9 @@ pub struct SlaveServerState {
 pub struct AppState {
     pub servers: RwLock<HashMap<String, SlaveServerState>>,
     pub next_server_id: RwLock<u32>,
+    /// Serializes whole-workspace mutations whose effects span both the server
+    /// table and the ID allocator (currently create and full config replace).
+    pub workspace_mutation: Mutex<()>,
 }
 
 impl Default for AppState {
@@ -22,6 +25,7 @@ impl Default for AppState {
         Self {
             servers: RwLock::new(HashMap::new()),
             next_server_id: RwLock::new(1),
+            workspace_mutation: Mutex::new(()),
         }
     }
 }

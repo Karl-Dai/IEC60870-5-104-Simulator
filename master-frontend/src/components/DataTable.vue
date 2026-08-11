@@ -34,6 +34,14 @@ let dataMap = new Map<string, ReceivedDataPointInfo>()
 const displayPoints = shallowRef<ReceivedDataPointInfo[]>([])
 let lastSeq = 0
 let currentConnId: string | null = null
+// A workspaceEpoch remount can happen while an IPC request is in flight. Keep
+// both an instance lifetime flag and monotonically increasing generations so
+// stale requests cannot mutate injected parent maps or restart a zombie poll.
+let disposed = false
+let workspaceGeneration = 0
+let requestGeneration = 0
+let fetchInFlightWorkspace: number | null = null
+let fetchPendingWorkspace: number | null = null
 
 // === UI state ===
 const selectedKeys = ref<Set<string>>(new Set())
@@ -74,14 +82,36 @@ function updateDisplay() {
 }
 
 // === Fetch: always merge, never replace ===
-async function fetchData() {
+function isWorkspaceCurrent(connId: string, generation: number): boolean {
+  return !disposed
+    && generation === workspaceGeneration
+    && currentConnId === connId
+    && selectedConnectionId.value === connId
+}
+
+function isRequestCurrent(connId: string, workspace: number, request: number): boolean {
+  return isWorkspaceCurrent(connId, workspace) && request === requestGeneration
+}
+
+async function fetchData(workspace = workspaceGeneration) {
   const connId = selectedConnectionId.value
-  if (!connId) return
+  if (!connId || !isWorkspaceCurrent(connId, workspace)) return
+  // Poll ticks and manual refreshes share one request per workspace. Remember
+  // one missed trigger instead of stacking calls; otherwise a backend slower
+  // than the 1s poll cadence would continuously invalidate every response.
+  if (fetchInFlightWorkspace === workspace) {
+    fetchPendingWorkspace = workspace
+    return
+  }
+  fetchInFlightWorkspace = workspace
+  const request = ++requestGeneration
+  const sinceSeq = lastSeq
   try {
     const resp = await invoke<IncrementalDataResponse>('get_received_data_since', {
       id: connId,
-      sinceSeq: lastSeq,
+      sinceSeq,
     })
+    if (!isRequestCurrent(connId, workspace, request)) return
     if (resp.points.length > 0) {
       // 按 CA 分组记录本批次有变化的 category，否则 CA=1 收到一条变位会让
       // CA=2/3 同名 category 节点也跟着 flash 黄。
@@ -114,7 +144,15 @@ async function fetchData() {
     }
     lastSeq = resp.seq
   } catch (e) {
-    console.warn('fetchData error:', e)
+    if (isRequestCurrent(connId, workspace, request)) {
+      console.warn('fetchData error:', e)
+    }
+  } finally {
+    if (fetchInFlightWorkspace === workspace) fetchInFlightWorkspace = null
+    if (fetchPendingWorkspace === workspace) {
+      fetchPendingWorkspace = null
+      if (isWorkspaceCurrent(connId, workspace)) void fetchData(workspace)
+    }
   }
 }
 
@@ -129,9 +167,16 @@ function markChanged(key: string) {
 }
 
 // === Poll control ===
-function startPoll() {
+function startPoll(connId: string, generation: number) {
+  if (!isWorkspaceCurrent(connId, generation)) return
   stopPoll()
-  pollTimer = window.setInterval(fetchData, 1000)
+  pollTimer = window.setInterval(() => {
+    if (!isWorkspaceCurrent(connId, generation)) {
+      stopPoll()
+      return
+    }
+    void fetchData(generation)
+  }, 1000)
 }
 
 function stopPoll() {
@@ -140,6 +185,9 @@ function stopPoll() {
 
 // === Only reset when connection truly changes ===
 function initConnection(connId: string) {
+  const generation = ++workspaceGeneration
+  requestGeneration++
+  fetchPendingWorkspace = null
   stopPoll()
   dataMap = new Map()
   displayPoints.value = []
@@ -150,35 +198,47 @@ function initConnection(connId: string) {
   selectedKeys.value.clear()
   emit('point-select', [])
   currentConnId = connId
-  fetchData().then(startPoll)
+  void fetchData(generation).finally(() => startPoll(connId, generation))
 }
 
 onMounted(() => {
   if (selectedConnectionId.value) {
-    currentConnId = selectedConnectionId.value
-    fetchData().then(startPoll)
+    initConnection(selectedConnectionId.value)
   }
 })
 
 onUnmounted(() => {
+  disposed = true
+  workspaceGeneration++
+  requestGeneration++
+  fetchPendingWorkspace = null
   stopPoll()
   for (const t of changeTimers.values()) clearTimeout(t)
+  changeTimers.clear()
 })
 
 watch(selectedConnectionId, (newId) => {
   if (newId === currentConnId) return
   if (!newId) {
+    workspaceGeneration++
+    requestGeneration++
+    fetchPendingWorkspace = null
     stopPoll()
     currentConnId = null
     dataMap = new Map()
     displayPoints.value = []
+    lastSeq = 0
+    changedKeys.value.clear()
+    for (const t of changeTimers.values()) clearTimeout(t)
+    changeTimers.clear()
+    selectedKeys.value.clear()
     return
   }
   initConnection(newId)
 })
 
 // GI / counter read just triggers an extra fetch — no reset
-watch(dataRefreshKey, fetchData)
+watch(dataRefreshKey, () => { void fetchData(workspaceGeneration) })
 
 // 切换 CA/分类/搜索 → 列表内容整体替换,必须把滚动归零。否则在大列表(如 CA1
 // 单点 5278 条)滚到下方后切到小列表(CA2 单点 21 条),残留的 scrollTop 让

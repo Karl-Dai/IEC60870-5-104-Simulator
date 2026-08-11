@@ -1,4 +1,5 @@
 use crate::state::{AppState, ConnectionInfo, IncrementalDataResponse, MasterConnectionState, ReceivedDataPointInfo};
+use iec104sim_core::config::{MasterConfigFile, MasterSnapshotPoint};
 use iec104sim_core::log_collector::LogCollector;
 use iec104sim_core::log_entry::LogEntry;
 use iec104sim_core::master::{
@@ -6,6 +7,7 @@ use iec104sim_core::master::{
     TlsVersionPolicy,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
@@ -147,25 +149,45 @@ impl ConnectionInfo {
     }
 }
 
-#[tauri::command]
-pub async fn create_connection(
-    state: State<'_, AppState>,
-    app_handle: AppHandle,
+/// Fully validated, side-effect-free connection input. Config-file loading
+/// prepares every entry before it touches the live workspace, so a bad entry
+/// can never leave a partially imported table behind.
+struct PreparedConnection {
+    config: MasterConfig,
+    common_addresses: Vec<u16>,
+    snapshot: Vec<MasterSnapshotPoint>,
+    timing_corrections: Vec<iec104sim_core::timing::TimingCorrection>,
+}
+
+/// A constructed connection whose app-facing background tasks have not been
+/// started yet. This lets a config replacement build the complete new table,
+/// swap it into AppState once, and only then expose watchers/events.
+struct PendingConnection {
+    id: String,
+    state: MasterConnectionState,
+    info: ConnectionInfo,
+    state_rx: tokio::sync::watch::Receiver<iec104sim_core::master::MasterState>,
+    flush_rx: tokio::sync::mpsc::UnboundedReceiver<iec104sim_core::ca_debouncer::CaFlushEvent>,
+}
+
+struct ConnectionActivation {
+    id: String,
+    state_rx: tokio::sync::watch::Receiver<iec104sim_core::master::MasterState>,
+    flush_rx: tokio::sync::mpsc::UnboundedReceiver<iec104sim_core::ca_debouncer::CaFlushEvent>,
+}
+
+struct ReplacementOutcome {
+    imported: usize,
+    activations: Vec<ConnectionActivation>,
+    retired: HashMap<String, MasterConnectionState>,
+    corrected_events: Vec<TimingCorrectedEvent>,
+}
+
+fn prepare_connection(
     request: CreateConnectionRequest,
-) -> Result<ConnectionInfo, String> {
-    let id = {
-        let mut counter = state.next_connection_id.write().await;
-        let id = format!("conn_{}", *counter);
-        *counter += 1;
-        id
-    };
-
+    snapshot: Vec<MasterSnapshotPoint>,
+) -> Result<PreparedConnection, String> {
     let common_addresses = request.resolve_cas();
-
-    let (ca_inbox, mut flush_rx, _debouncer_handle) =
-        // 安静期 1s:Goldwind 现场 GI 应答帧通常在 ~100ms 内全部到达,
-        // 1s 足以聚批且让用户感觉"按一下即响应"。原 3s 在现场显得卡顿。
-        iec104sim_core::ca_debouncer::spawn(std::time::Duration::from_millis(1000));
 
     let socks5_defaults = Socks5Config::default();
     let socks5 = Socks5Config {
@@ -175,17 +197,21 @@ pub async fn create_connection(
             .unwrap_or(socks5_defaults.proxy_address)
             .trim()
             .to_string(),
-        proxy_port: request.socks5_proxy_port.unwrap_or(socks5_defaults.proxy_port),
+        proxy_port: request
+            .socks5_proxy_port
+            .unwrap_or(socks5_defaults.proxy_port),
         username: request.socks5_username.unwrap_or_default(),
         password: request.socks5_password.unwrap_or_default(),
-        remote_dns: request.socks5_remote_dns.unwrap_or(socks5_defaults.remote_dns),
+        remote_dns: request
+            .socks5_remote_dns
+            .unwrap_or(socks5_defaults.remote_dns),
     };
     socks5
         .validate()
         .map_err(|error| format!("SOCKS5 配置无效: {error}"))?;
 
     let mut config = MasterConfig {
-        target_address: request.target_address.clone(),
+        target_address: request.target_address,
         port: request.port,
         // Core's MasterConfig still tracks a single "primary" CA used for
         // identification/defaults inside the protocol layer. Multi-CA fan-out
@@ -210,23 +236,68 @@ pub async fn create_connection(
         ..MasterConfig::default()
     };
     // Override the per-protocol params from the request when supplied.
-    if let Some(v) = request.t0 { config.t0 = v; }
-    if let Some(v) = request.channel_retry_s { config.channel_retry_s = v; }
-    if let Some(v) = request.t1 { config.t1 = v; }
-    if let Some(v) = request.t2 { config.t2 = v; }
-    if let Some(v) = request.t3 { config.t3 = v; }
-    if let Some(v) = request.k { config.k = v; }
-    if let Some(v) = request.w { config.w = v; }
-    if let Some(v) = request.default_qoi { config.default_qoi = v; }
-    if let Some(v) = request.default_qcc { config.default_qcc = v; }
-    if let Some(v) = request.interrogate_period_s { config.interrogate_period_s = v; }
-    if let Some(v) = request.counter_interrogate_period_s { config.counter_interrogate_period_s = v; }
-    if let Some(bcast) = request.broadcast_address { config.broadcast_address = bcast; }
+    if let Some(v) = request.t0 {
+        config.t0 = v;
+    }
+    if let Some(v) = request.channel_retry_s {
+        config.channel_retry_s = v;
+    }
+    if let Some(v) = request.t1 {
+        config.t1 = v;
+    }
+    if let Some(v) = request.t2 {
+        config.t2 = v;
+    }
+    if let Some(v) = request.t3 {
+        config.t3 = v;
+    }
+    if let Some(v) = request.k {
+        config.k = v;
+    }
+    if let Some(v) = request.w {
+        config.w = v;
+    }
+    if let Some(v) = request.default_qoi {
+        config.default_qoi = v;
+    }
+    if let Some(v) = request.default_qcc {
+        config.default_qcc = v;
+    }
+    if let Some(v) = request.interrogate_period_s {
+        config.interrogate_period_s = v;
+    }
+    if let Some(v) = request.counter_interrogate_period_s {
+        config.counter_interrogate_period_s = v;
+    }
+    if let Some(bcast) = request.broadcast_address {
+        config.broadcast_address = bcast;
+    }
 
     // Authoritative timing normalization: enforce t2<t1<t3 and w≤⌊2k/3⌋ before
     // the config takes effect. Covers direct creation, load_config and import
     // (both funnel through here). Corrections are echoed back to the frontend.
     let timing_corrections = config.normalize_timing();
+
+    Ok(PreparedConnection {
+        config,
+        common_addresses,
+        snapshot,
+        timing_corrections,
+    })
+}
+
+async fn materialize_connection(id: String, prepared: PreparedConnection) -> PendingConnection {
+    let PreparedConnection {
+        config,
+        common_addresses,
+        snapshot,
+        timing_corrections,
+    } = prepared;
+
+    let (ca_inbox, flush_rx, debouncer_handle) =
+        // 安静期 1s:Goldwind 现场 GI 应答帧通常在 ~100ms 内全部到达,
+        // 1s 足以聚批且让用户感觉"按一下即响应"。原 3s 在现场显得卡顿。
+        iec104sim_core::ca_debouncer::spawn(std::time::Duration::from_millis(1000));
 
     let log_collector = Arc::new(LogCollector::new());
     // 默认关闭,LogPanel 展开时由前端通过 set_logging_enabled 打开。
@@ -236,10 +307,50 @@ pub async fn create_connection(
         .with_ca_inbox(ca_inbox);
     connection.set_configured_cas(common_addresses.clone());
 
+    if !snapshot.is_empty() {
+        let mut data = connection.received_data.write().await;
+        for sp in snapshot {
+            data.insert(sp.ca, sp.point);
+        }
+    }
+
+    let state_rx = connection.subscribe_state();
+    let info = ConnectionInfo::from_config(
+        id.clone(),
+        format!("{:?}", connection.state()),
+        common_addresses.clone(),
+        &config,
+        timing_corrections,
+    );
+
+    // The worker exits when the ca_inbox owned by MasterConnection closes.
+    // Dropping JoinHandle deliberately detaches it, matching the established
+    // per-connection lifetime model.
+    drop(debouncer_handle);
+
+    PendingConnection {
+        id,
+        state: MasterConnectionState {
+            connection,
+            log_collector,
+            common_addresses,
+        },
+        info,
+        state_rx,
+        flush_rx,
+    }
+}
+
+fn activate_connection(app_handle: AppHandle, activation: ConnectionActivation) {
+    let ConnectionActivation {
+        id,
+        state_rx,
+        mut flush_rx,
+    } = activation;
+
     // 状态督导任务:把 core 的状态变化转发给前端,并在连接建立过之后异常
     // 掉线时按 Channel Retry 固定间隔自动重连。连接被删除(`delete_connection`)→ state_tx
     // 关闭 → 任务退出。重连决策逻辑见 `crate::reconnect`。
-    let state_rx = connection.subscribe_state();
     let emit_handle = app_handle.clone();
     let emit_id = id.clone();
     let reconnect_handle = app_handle.clone();
@@ -283,23 +394,6 @@ pub async fn create_connection(
         },
     ));
 
-    let info = ConnectionInfo::from_config(
-        id.clone(),
-        format!("{:?}", connection.state()),
-        common_addresses.clone(),
-        &config,
-        timing_corrections,
-    );
-
-    state.connections.write().await.insert(
-        id.clone(),
-        MasterConnectionState {
-            connection,
-            log_collector,
-            common_addresses,
-        },
-    );
-
     // Forward flush events from the ca_debouncer to the frontend.
     {
         let app = app_handle.clone();
@@ -313,12 +407,18 @@ pub async fn create_connection(
                     // 与 MasterConnectionState.common_addresses(供 list_connections 暴露给前端)。
                     // 两边必须同步,否则 list_connections 不会看到新学到的 CA,前端连接树不刷出新节点。
                     let mut guard = state.connections.write().await;
-                    let Some(c) = guard.get_mut(&id_clone) else { break };
+                    let Some(c) = guard.get_mut(&id_clone) else {
+                        break;
+                    };
                     let added = c.connection.extend_configured_cas(&ev.new_cas);
                     if !added.is_empty() {
                         c.common_addresses.extend(added.iter().copied());
                     }
-                    let all_cas = if added.is_empty() { Vec::new() } else { c.connection.configured_cas() };
+                    let all_cas = if added.is_empty() {
+                        Vec::new()
+                    } else {
+                        c.connection.configured_cas()
+                    };
                     (added, all_cas)
                 };
                 if !added.is_empty() {
@@ -332,10 +432,114 @@ pub async fn create_connection(
             }
         });
     }
+}
 
-    // _debouncer_handle detaches here; its lifetime is tied to ca_inbox which
-    // is held by the MasterConnection inside connections map.
-    drop(_debouncer_handle);
+async fn retire_connections(retired: HashMap<String, MasterConnectionState>) {
+    let mut cleanup_tasks = Vec::with_capacity(retired.len());
+    for (_, mut conn_state) in retired {
+        // Disconnect + drop the per-connection caches (15k+ point HashMap, log
+        // buffer, receiver task) off the Tauri command thread. disconnect() has
+        // a 2s internal timeout, so each cleanup task is independently bounded.
+        cleanup_tasks.push(tokio::spawn(async move {
+            let _ = conn_state.connection.disconnect().await;
+        }));
+    }
+    // Await every retirement concurrently-started above. The live AppState map
+    // and workspace mutation lock were released by replace_connections_impl,
+    // so slow socket teardown cannot block access to the new workspace.
+    for task in cleanup_tasks {
+        let _ = task.await;
+    }
+}
+
+async fn replace_connections_impl(
+    state: &AppState,
+    prepared: Vec<PreparedConnection>,
+) -> Result<ReplacementOutcome, String> {
+    let _workspace_guard = state.workspace_mutation.lock().await;
+    let imported = prepared.len();
+    let imported_u32 =
+        u32::try_from(imported).map_err(|_| format!("配置中的连接数量过多: {imported}"))?;
+    let first_id = *state.next_connection_id.read().await;
+    let next_id = first_id
+        .checked_add(imported_u32)
+        .ok_or_else(|| "连接 ID 已耗尽,无法加载配置".to_string())?;
+
+    let mut new_connections = HashMap::with_capacity(imported);
+    let mut activations = Vec::with_capacity(imported);
+    let mut corrected_events = Vec::new();
+
+    for (offset, prepared_connection) in prepared.into_iter().enumerate() {
+        let number = first_id + u32::try_from(offset).expect("connection count checked above");
+        let pending = materialize_connection(format!("conn_{number}"), prepared_connection).await;
+
+        if !pending.info.timing_corrections.is_empty() {
+            corrected_events.push(TimingCorrectedEvent {
+                target_address: pending.info.target_address.clone(),
+                corrections: pending.info.timing_corrections.clone(),
+            });
+        }
+
+        let id = pending.id.clone();
+        new_connections.insert(id.clone(), pending.state);
+        activations.push(ConnectionActivation {
+            id,
+            state_rx: pending.state_rx,
+            flush_rx: pending.flush_rx,
+        });
+    }
+
+    // Both values are committed while the workspace mutation guard is held.
+    // `connections` changes in exactly one operation, so readers can observe
+    // either the complete old workspace or the complete new workspace.
+    let retired = {
+        let mut counter = state.next_connection_id.write().await;
+        let mut connections = state.connections.write().await;
+        let retired = std::mem::replace(&mut *connections, new_connections);
+        *counter = next_id;
+        retired
+    };
+
+    Ok(ReplacementOutcome {
+        imported,
+        activations,
+        retired,
+        corrected_events,
+    })
+}
+
+#[tauri::command]
+pub async fn create_connection(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    request: CreateConnectionRequest,
+) -> Result<ConnectionInfo, String> {
+    let _workspace_guard = state.workspace_mutation.lock().await;
+    let prepared = prepare_connection(request, Vec::new())?;
+    let number = *state.next_connection_id.read().await;
+    let next_id = number
+        .checked_add(1)
+        .ok_or_else(|| "连接 ID 已耗尽,无法新建连接".to_string())?;
+    let pending = materialize_connection(format!("conn_{number}"), prepared).await;
+    let info = pending.info.clone();
+    let activation = ConnectionActivation {
+        id: pending.id.clone(),
+        state_rx: pending.state_rx,
+        flush_rx: pending.flush_rx,
+    };
+
+    {
+        let mut counter = state.next_connection_id.write().await;
+        let mut connections = state.connections.write().await;
+        if connections.contains_key(&pending.id) {
+            return Err(format!("connection {} already exists", pending.id));
+        }
+        connections.insert(pending.id, pending.state);
+        *counter = next_id;
+    }
+
+    // App-facing tasks start only after the connection is visible in the map.
+    activate_connection(app_handle, activation);
 
     Ok(info)
 }
@@ -381,6 +585,7 @@ pub async fn delete_connection(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
+    let _workspace_guard = state.workspace_mutation.lock().await;
     let mut conn_state = {
         let mut connections = state.connections.write().await;
         connections
@@ -1224,74 +1429,84 @@ pub async fn save_config(
     std::fs::write(&path, json).map_err(|e| format!("写入文件失败: {e}"))
 }
 
+fn prepare_import_connections(file: MasterConfigFile) -> Result<Vec<PreparedConnection>, String> {
+    file.connections
+        .into_iter()
+        .enumerate()
+        .map(|(index, conn)| {
+            let snapshot = conn.snapshot;
+            let socks5 = conn.socks5;
+            let request = CreateConnectionRequest {
+                target_address: conn.target_address,
+                port: conn.port,
+                common_addresses: Some(conn.common_addresses),
+                common_address: None,
+                timeout_ms: Some(conn.timeout_ms),
+                use_socks5: Some(socks5.enabled),
+                socks5_proxy_address: Some(socks5.proxy_address),
+                socks5_proxy_port: Some(socks5.proxy_port),
+                socks5_username: Some(socks5.username),
+                socks5_password: Some(socks5.password),
+                socks5_remote_dns: Some(socks5.remote_dns),
+                use_tls: Some(conn.use_tls),
+                ca_file: Some(conn.ca_file),
+                cert_file: Some(conn.cert_file),
+                key_file: Some(conn.key_file),
+                accept_invalid_certs: Some(conn.accept_invalid_certs),
+                tls_version: Some(conn.tls_version),
+                t0: Some(conn.t0),
+                channel_retry_s: Some(conn.channel_retry_s),
+                t1: Some(conn.t1),
+                t2: Some(conn.t2),
+                t3: Some(conn.t3),
+                k: Some(conn.k),
+                w: Some(conn.w),
+                default_qoi: Some(conn.default_qoi),
+                default_qcc: Some(conn.default_qcc),
+                interrogate_period_s: Some(conn.interrogate_period_s),
+                counter_interrogate_period_s: Some(conn.counter_interrogate_period_s),
+                broadcast_address: conn.broadcast_address,
+            };
+            prepare_connection(request, snapshot)
+                .map_err(|error| format!("配置中的第 {} 个连接无效: {error}", index + 1))
+        })
+        .collect()
+}
+
+async fn replace_config_contents_impl(
+    state: &AppState,
+    content: &str,
+) -> Result<ReplacementOutcome, String> {
+    let file = MasterConfigFile::from_json(content)?;
+    // Prepare the whole file first. No runtime object, ID, or live state is
+    // changed unless every connection validates successfully.
+    let prepared = prepare_import_connections(file)?;
+    replace_connections_impl(state, prepared).await
+}
+
 #[tauri::command]
 pub async fn load_config(
     state: State<'_, AppState>,
     app_handle: AppHandle,
     path: String,
 ) -> Result<usize, String> {
-    use iec104sim_core::config::MasterConfigFile;
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {e}"))?;
+    let outcome = replace_config_contents_impl(&state, &content).await?;
+    let ReplacementOutcome {
+        imported,
+        activations,
+        retired,
+        corrected_events,
+    } = outcome;
 
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取文件失败: {e}"))?;
-    let file = MasterConfigFile::from_json(&content)?;
-
-    let mut imported = 0usize;
-    let mut corrected_events: Vec<TimingCorrectedEvent> = Vec::new();
-    for conn in file.connections {
-        let socks5 = conn.socks5;
-        let request = CreateConnectionRequest {
-            target_address: conn.target_address,
-            port: conn.port,
-            common_addresses: Some(conn.common_addresses),
-            common_address: None,
-            timeout_ms: Some(conn.timeout_ms),
-            use_socks5: Some(socks5.enabled),
-            socks5_proxy_address: Some(socks5.proxy_address),
-            socks5_proxy_port: Some(socks5.proxy_port),
-            socks5_username: Some(socks5.username),
-            socks5_password: Some(socks5.password),
-            socks5_remote_dns: Some(socks5.remote_dns),
-            use_tls: Some(conn.use_tls),
-            ca_file: Some(conn.ca_file),
-            cert_file: Some(conn.cert_file),
-            key_file: Some(conn.key_file),
-            accept_invalid_certs: Some(conn.accept_invalid_certs),
-            tls_version: Some(conn.tls_version),
-            t0: Some(conn.t0),
-            channel_retry_s: Some(conn.channel_retry_s),
-            t1: Some(conn.t1),
-            t2: Some(conn.t2),
-            t3: Some(conn.t3),
-            k: Some(conn.k),
-            w: Some(conn.w),
-            default_qoi: Some(conn.default_qoi),
-            default_qcc: Some(conn.default_qcc),
-            interrogate_period_s: Some(conn.interrogate_period_s),
-            counter_interrogate_period_s: Some(conn.counter_interrogate_period_s),
-            broadcast_address: conn.broadcast_address,
-        };
-        let info = create_connection(state.clone(), app_handle.clone(), request).await?;
-
-        if !info.timing_corrections.is_empty() {
-            corrected_events.push(TimingCorrectedEvent {
-                target_address: info.target_address.clone(),
-                corrections: info.timing_corrections.clone(),
-            });
-        }
-
-        if !conn.snapshot.is_empty() {
-            let connections = state.connections.read().await;
-            let cs = connections
-                .get(&info.id)
-                .ok_or_else(|| format!("新建连接 {} 已不存在,无法注入快照", info.id))?;
-            let mut data = cs.connection.received_data.write().await;
-            for sp in conn.snapshot {
-                data.insert(sp.ca, sp.point);
-            }
-        }
-        imported += 1;
+    // Watchers become observable only after the complete new map is live.
+    for activation in activations {
+        activate_connection(app_handle.clone(), activation);
     }
+    // Old IDs are never reused, so a retiring supervisor that is already
+    // sleeping cannot wake up and accidentally reconnect a new connection.
+    retire_connections(retired).await;
+
     // Surface any import-time timing corrections so the user knows the loaded
     // config was adjusted to satisfy the IEC 104 invariants.
     if !corrected_events.is_empty() {
@@ -1310,6 +1525,222 @@ struct TimingCorrectedEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iec104sim_core::config::MasterConnectionConfig;
+    use iec104sim_core::data_point::DataPoint;
+    use iec104sim_core::types::AsduTypeId;
+
+    fn config_connection(
+        target_address: &str,
+        snapshot: Vec<MasterSnapshotPoint>,
+    ) -> MasterConnectionConfig {
+        MasterConnectionConfig {
+            target_address: target_address.to_string(),
+            port: 2404,
+            common_addresses: vec![1],
+            timeout_ms: 3000,
+            t0: 30,
+            channel_retry_s: 5,
+            t1: 15,
+            t2: 10,
+            t3: 20,
+            k: 12,
+            w: 8,
+            default_qoi: 20,
+            default_qcc: 5,
+            interrogate_period_s: 0,
+            counter_interrogate_period_s: 0,
+            use_tls: false,
+            ca_file: String::new(),
+            cert_file: String::new(),
+            key_file: String::new(),
+            accept_invalid_certs: false,
+            tls_version: "auto".to_string(),
+            socks5: Socks5Config::default(),
+            broadcast_address: None,
+            snapshot,
+        }
+    }
+
+    async fn replace_file(
+        state: &AppState,
+        file: MasterConfigFile,
+    ) -> Result<ReplacementOutcome, String> {
+        replace_config_contents_impl(state, &file.to_json().unwrap()).await
+    }
+
+    #[tokio::test]
+    async fn repeated_config_load_replaces_instead_of_appending_and_keeps_ids_monotonic() {
+        let state = AppState::new();
+        let file = MasterConfigFile::new(vec![
+            config_connection("10.0.0.1", Vec::new()),
+            config_connection("10.0.0.2", Vec::new()),
+        ]);
+
+        let first = replace_file(&state, file.clone()).await.unwrap();
+        assert_eq!(first.imported, 2);
+        assert!(first.retired.is_empty());
+        assert_eq!(*state.next_connection_id.read().await, 3);
+        {
+            let connections = state.connections.read().await;
+            assert_eq!(connections.len(), 2);
+            assert!(connections.contains_key("conn_1"));
+            assert!(connections.contains_key("conn_2"));
+        }
+        drop(first);
+
+        let second = replace_file(&state, file).await.unwrap();
+        assert_eq!(second.imported, 2);
+        assert_eq!(second.retired.len(), 2);
+        assert_eq!(*state.next_connection_id.read().await, 5);
+        let connections = state.connections.read().await;
+        assert_eq!(connections.len(), 2, "重复打开不得追加重复连接");
+        assert!(connections.contains_key("conn_3"));
+        assert!(connections.contains_key("conn_4"));
+        assert!(!connections.contains_key("conn_1"));
+        assert!(!connections.contains_key("conn_2"));
+    }
+
+    #[tokio::test]
+    async fn invalid_config_preserves_live_workspace_and_next_id() {
+        let state = AppState::new();
+        let initial = replace_file(
+            &state,
+            MasterConfigFile::new(vec![config_connection("old.example", Vec::new())]),
+        )
+        .await
+        .unwrap();
+        drop(initial);
+
+        let parse_error = replace_config_contents_impl(&state, "not json")
+            .await
+            .err()
+            .expect("corrupt JSON must fail");
+        assert!(parse_error.contains("解析失败"));
+
+        let mut invalid_second = config_connection("bad.example", Vec::new());
+        invalid_second.socks5.enabled = true;
+        invalid_second.socks5.proxy_address.clear();
+        let invalid_file = MasterConfigFile::new(vec![
+            config_connection("would-have-been-first.example", Vec::new()),
+            invalid_second,
+        ]);
+        let validation_error = replace_file(&state, invalid_file)
+            .await
+            .err()
+            .expect("invalid second connection must reject the whole file");
+        assert!(validation_error.contains("第 2 个连接"));
+
+        assert_eq!(*state.next_connection_id.read().await, 2);
+        let connections = state.connections.read().await;
+        assert_eq!(connections.len(), 1);
+        let old = connections.get("conn_1").expect("old workspace retained");
+        assert_eq!(old.connection.config().target_address, "old.example");
+    }
+
+    #[tokio::test]
+    async fn empty_config_clears_workspace_without_reusing_ids() {
+        let state = AppState::new();
+        let initial = replace_file(
+            &state,
+            MasterConfigFile::new(vec![
+                config_connection("10.0.0.1", Vec::new()),
+                config_connection("10.0.0.2", Vec::new()),
+            ]),
+        )
+        .await
+        .unwrap();
+        drop(initial);
+
+        let empty = replace_file(&state, MasterConfigFile::new(Vec::new()))
+            .await
+            .unwrap();
+        assert_eq!(empty.imported, 0);
+        assert_eq!(empty.retired.len(), 2);
+        assert!(state.connections.read().await.is_empty());
+        assert_eq!(
+            *state.next_connection_id.read().await,
+            3,
+            "清空工作区也不得回退 ID"
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_restores_snapshot_before_commit() {
+        let state = AppState::new();
+        let point = DataPoint::new(100, AsduTypeId::MSpNa1);
+        let outcome = replace_file(
+            &state,
+            MasterConfigFile::new(vec![config_connection(
+                "snapshot.example",
+                vec![MasterSnapshotPoint { ca: 7, point }],
+            )]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.imported, 1);
+        assert_eq!(*state.next_connection_id.read().await, 2);
+
+        let connections = state.connections.read().await;
+        let connection = connections.get("conn_1").expect("imported connection");
+        let data = connection.connection.received_data.read().await;
+        let restored = data
+            .ca_map(7)
+            .and_then(|points| points.get(100, AsduTypeId::MSpNa1));
+        assert!(restored.is_some(), "snapshot point must be live at commit");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retire_connections_waits_for_disconnect_before_return() {
+        use iec104sim_core::master::MasterState;
+        use std::io::Read;
+        use std::time::Duration;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let peer = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut buf = [0u8; 64];
+            loop {
+                match socket.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(error) => panic!("old peer did not close during replacement: {error}"),
+                }
+            }
+        });
+
+        let log_collector = Arc::new(LogCollector::new());
+        let mut connection = MasterConnection::new(MasterConfig {
+            target_address: "127.0.0.1".to_string(),
+            port,
+            ..MasterConfig::default()
+        })
+        .with_log_collector(log_collector.clone());
+        let state_rx = connection.subscribe_state();
+        connection.connect().await.unwrap();
+        assert_eq!(*state_rx.borrow(), MasterState::Connected);
+
+        let mut retired = HashMap::new();
+        retired.insert(
+            "conn_old".to_string(),
+            MasterConnectionState {
+                connection,
+                log_collector,
+                common_addresses: vec![1],
+            },
+        );
+
+        retire_connections(retired).await;
+        assert_eq!(
+            *state_rx.borrow(),
+            MasterState::Disconnected,
+            "retirement must finish disconnect before returning"
+        );
+        peer.join().expect("peer thread should observe TCP close");
+    }
 
     #[test]
     fn selected_log_export_distinguishes_missing_and_empty_entries() {

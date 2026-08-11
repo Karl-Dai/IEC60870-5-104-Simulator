@@ -1036,6 +1036,7 @@ impl MasterConnection {
             tcp_stream.set_write_timeout(Some(timeout)).ok();
         } else {
             tcp_stream.set_read_timeout(Some(std::time::Duration::from_millis(100))).ok();
+            tcp_stream.set_write_timeout(Some(std::time::Duration::from_secs(2))).ok();
         }
 
         // Wrap with TLS if configured
@@ -1321,9 +1322,12 @@ impl MasterConnection {
 
     /// Disconnect from the remote slave.
     pub async fn disconnect(&mut self) -> Result<(), MasterError> {
-        if self.state() == MasterState::Disconnected {
-            return Err(MasterError::NotConnected);
-        }
+        // `Disconnected` describes the protocol-visible state, not necessarily
+        // complete resource teardown. In particular, the receive loop sets it
+        // on EOF while its JoinHandle, the send-side stream, a periodic poller,
+        // and the CA inbox can still be retained by this object. Always run the
+        // cleanup path; preserve the historical NotConnected result afterwards.
+        let was_disconnected = self.state() == MasterState::Disconnected;
 
         // Send STOPDT ACT (best effort), then force-close the TCP socket.
         // STOPDT only stops data transfer at the IEC 104 layer — it does NOT
@@ -1360,6 +1364,7 @@ impl MasterConnection {
         // the stream lock and would otherwise hold up disconnect.
         if let Some(handle) = self.periodic_handle.take() {
             handle.abort();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
         }
 
         if let Some(handle) = self.receiver_handle.take() {
@@ -1383,15 +1388,21 @@ impl MasterConnection {
         self.ca_inbox = None;
         self.state_tx.send_replace(MasterState::Disconnected);
 
-        if let Some(lc) = active_lc(&self.log_collector) {
-            lc.try_add(LogEntry::new(
-                Direction::Tx,
-                FrameLabel::ConnectionEvent,
-                "已断开连接".to_string(),
-            ));
+        if !was_disconnected {
+            if let Some(lc) = active_lc(&self.log_collector) {
+                lc.try_add(LogEntry::new(
+                    Direction::Tx,
+                    FrameLabel::ConnectionEvent,
+                    "已断开连接".to_string(),
+                ));
+            }
         }
 
-        Ok(())
+        if was_disconnected {
+            Err(MasterError::NotConnected)
+        } else {
+            Ok(())
+        }
     }
 
     /// 测试用:同步释放 ca_inbox,触发 debouncer flush。
@@ -3371,6 +3382,71 @@ mod tests {
         let ev = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await.expect("flush timeout").expect("no event");
         assert_eq!(ev.new_cas, vec![77]);
+    }
+
+    #[tokio::test]
+    async fn disconnect_cleans_residual_resources_when_state_is_already_disconnected() {
+        use crate::ca_debouncer;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        struct DropMarker(std::sync::Arc<AtomicBool>);
+        impl Drop for DropMarker {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let (inbox, mut flush_rx, debouncer_handle) =
+            ca_debouncer::spawn(Duration::from_secs(60));
+        inbox.push(77);
+        let mut conn = MasterConnection::new(MasterConfig::default()).with_ca_inbox(inbox);
+        // Mirror the receive-loop EOF transition: protocol state has already
+        // fallen back to Disconnected while object-owned resources remain.
+        conn.state_tx.send_replace(MasterState::Connected);
+        conn.state_tx.send_replace(MasterState::Disconnected);
+        assert_eq!(conn.state(), MasterState::Disconnected);
+
+        let receiver_done = std::sync::Arc::new(AtomicBool::new(false));
+        let receiver_done_task = receiver_done.clone();
+        let shutdown_flag = conn.shutdown_flag.clone();
+        conn.receiver_handle = Some(tokio::spawn(async move {
+            while !shutdown_flag.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+            receiver_done_task.store(true, Ordering::SeqCst);
+        }));
+
+        let periodic_dropped = std::sync::Arc::new(AtomicBool::new(false));
+        let periodic_dropped_task = periodic_dropped.clone();
+        let (periodic_started_tx, periodic_started_rx) = tokio::sync::oneshot::channel();
+        conn.periodic_handle = Some(tokio::spawn(async move {
+            let _marker = DropMarker(periodic_dropped_task);
+            let _ = periodic_started_tx.send(());
+            std::future::pending::<()>().await;
+        }));
+        periodic_started_rx.await.expect("periodic task should start");
+
+        let result = conn.disconnect().await;
+        assert!(matches!(result, Err(MasterError::NotConnected)));
+        assert!(conn.shutdown_flag.load(Ordering::SeqCst));
+        assert!(conn.receiver_handle.is_none());
+        assert!(conn.periodic_handle.is_none());
+        assert!(conn.stream.read().await.is_none());
+        assert!(conn.tls_stream_mutex.is_none());
+        assert!(conn.ca_inbox.is_none());
+        assert!(receiver_done.load(Ordering::SeqCst));
+        assert!(periodic_dropped.load(Ordering::SeqCst));
+
+        let ev = tokio::time::timeout(Duration::from_secs(1), flush_rx.recv())
+            .await
+            .expect("CA flush should follow inbox cleanup promptly")
+            .expect("pending CA should be flushed");
+        assert_eq!(ev.new_cas, vec![77]);
+        tokio::time::timeout(Duration::from_secs(1), debouncer_handle)
+            .await
+            .expect("debouncer should exit after inbox cleanup")
+            .expect("debouncer task should not panic");
     }
 
     #[test]

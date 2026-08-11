@@ -22,6 +22,7 @@ const selectedCA = inject<Ref<number | null>>('selectedCA')!
 const refreshTree = inject<() => void>('refreshTree')!
 const refreshData = inject<() => void>('refreshData')!
 const resetData = inject<() => Promise<void>>('resetData')!
+const resetWorkspaceView = inject<() => void>('resetWorkspaceView')!
 const { showAlert, showPrompt, showConfirm } = inject<{
   showAlert: typeof ShowAlert
   showPrompt: typeof ShowPrompt
@@ -144,6 +145,7 @@ async function openConfig() {
   if (!path || typeof path !== 'string') return
   try {
     const count = await invoke<number>('load_config', { path })
+    resetWorkspaceView()
     refreshTree()
     // 配置里的运行参数(如 sync_tb_by_category)也换了一批:必须 bump dataRefreshKey,
     // 否则数据表沿用旧快照,+TB 徽标按老配置显示(issue #28 同类残余)。

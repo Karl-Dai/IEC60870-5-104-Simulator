@@ -4,7 +4,7 @@
 
 **Goal:** 为主站、从站两个 Tauri 应用增加手动保存/打开点位配置文件(JSON)的功能。
 
-**Architecture:** 在核心 crate `iec104sim-core` 的 `config.rs` 中定义文件 schema 结构体(含 `from_json`/`to_json` 校验逻辑);两个应用各新增 `save_config` / `load_config` 两个 Tauri 命令(文件读写在 Rust 内完成);前端通过 `tauri-plugin-dialog` 选取路径,Toolbar 新增两个按钮调用命令。打开文件时追加合并到现有工作区,TLS 配置不写入文件。
+**Architecture:** 在核心 crate `iec104sim-core` 的 `config.rs` 中定义文件 schema 结构体(含 `from_json`/`to_json` 校验逻辑);两个应用各新增 `save_config` / `load_config` 两个 Tauri 命令(文件读写在 Rust 内完成);前端通过 `tauri-plugin-dialog` 选取路径,Toolbar 新增两个按钮调用命令。配置文件是完整工作区快照:`load_config` 先完整解析和构建候选状态,成功后一次性替换当前工作区;不提供 Merge/追加模式,TLS 配置不写入文件。
 
 **Tech Stack:** Rust / Tauri 2 / `serde_json` / Vue 3 / `tauri-plugin-dialog`
 
@@ -807,7 +807,7 @@ git commit -m "feat(master-ui): Toolbar 保存/打开配置按钮"
 - [ ] **Step 1: 从站冒烟测试**
 
 Run: `cd frontend && npm run tauri dev`(或项目既有的开发启动方式)
-操作:新建服务器 → 加站、加点 → 点「保存配置」存为 `a.json` → 关闭并重启应用 → 点「打开配置」选 `a.json` → 确认服务器/站/点位定义都被追加恢复;再点一次「打开配置」选同一文件,确认是追加(出现两份)而非覆盖。
+操作:先创建一份与 `a.json` 不同的现有工作区 → 点「打开配置」选 `a.json` → 确认界面仅显示 `a.json` 中的服务器/站/点位,且旧树选择、详情和日志已清空;再打开同一文件,确认数量不变且没有重复项。
 
 - [ ] **Step 2: 主站冒烟测试**
 

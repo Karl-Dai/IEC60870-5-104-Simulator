@@ -35,7 +35,7 @@ const dict: DictShape = {
     saveConfig: 'Save Config',
     openConfig: 'Open Config',
     configSaved: 'Configuration saved',
-    configLoaded: 'Imported {count} connection(s)',
+    configLoaded: 'Loaded {count} connection(s)',
     configSaveFailed: 'Save failed',
     configLoadFailed: 'Open failed',
     broadcast: 'Broadcast',

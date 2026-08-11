@@ -1,4 +1,5 @@
 use crate::state::{AppState, DataPointInfo, DataPointValueSnapshot, IncrementalDataResponse, ServerInfo, SlaveServerState, StationInfo};
+use iec104sim_core::config::SlaveConfigFile;
 use iec104sim_core::data_point::{ControlTarget, DataPoint, DataPointValue, InformationObjectDef};
 use iec104sim_core::log_collector::LogCollector;
 use iec104sim_core::log_entry::LogEntry;
@@ -10,7 +11,7 @@ use iec104sim_core::slave::{
 use iec104sim_core::types::{AsduTypeId, QualityFlags};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tauri::{AppHandle, Emitter, State};
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,9 @@ pub async fn create_server(
     state: State<'_, AppState>,
     request: CreateServerRequest,
 ) -> Result<ServerInfo, String> {
+    // A full config load replaces both the server table and the ID allocation
+    // range. Keep creation serialized with that workspace-wide mutation.
+    let _workspace_guard = state.workspace_mutation.lock().await;
     let id = {
         let mut counter = state.next_server_id.write().await;
         let id = format!("server_{}", *counter);
@@ -218,22 +222,26 @@ pub async fn stop_server(
 /// 删除服务器。运行中的服务器先 stop() 再移除:直接 remove 会泄漏监听 socket
 /// 与 accept/cyclic 任务,导致原端口无法立即重建(issue #28)。
 /// 拆出可测主体,命令包装保持薄。
+async fn shutdown_server_for_removal(server: &mut SlaveServer) -> Result<(), SlaveError> {
+    if server.state() == ServerState::Running {
+        server.stop().await
+    } else {
+        // Simulation tasks may be configured while the listener is stopped
+        // (including by CSV import). Join them before dropping the server;
+        // dropping JoinHandle alone would detach the task.
+        server.stop_all_point_mutations().await;
+        Ok(())
+    }
+}
+
 pub(crate) async fn delete_server_impl(state: &AppState, id: &str) -> Result<(), String> {
     let mut servers = state.servers.write().await;
     let srv = servers
         .get_mut(id)
         .ok_or_else(|| format!("server {} not found", id))?;
-    if srv.server.state() == ServerState::Running {
-        srv.server
-            .stop()
-            .await
-            .map_err(|e| format!("failed to stop before delete: {}", e))?;
-    } else {
-        // Simulation tasks may be configured while the listener is stopped
-        // (including by CSV import). Join them before dropping the server;
-        // dropping JoinHandle alone would detach the task.
-        srv.server.stop_all_point_mutations().await;
-    }
+    shutdown_server_for_removal(&mut srv.server)
+        .await
+        .map_err(|e| format!("failed to stop before delete: {}", e))?;
     servers.remove(id);
     Ok(())
 }
@@ -2145,21 +2153,42 @@ pub async fn load_config(
     app_handle: AppHandle,
     path: String,
 ) -> Result<usize, String> {
-    use iec104sim_core::config::SlaveConfigFile;
-
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("读取文件失败: {e}"))?;
     let file = SlaveConfigFile::from_json(&content)?;
+    let outcome = load_config_impl(state.inner(), file).await?;
+    // 把导入时的时序纠正上抛,让用户知道加载的配置被调整过。
+    if !outcome.corrected_events.is_empty() {
+        let _ = app_handle.emit("config-timing-corrected", &outcome.corrected_events);
+    }
+    Ok(outcome.imported)
+}
 
-    let mut imported = 0usize;
-    let mut corrected_events: Vec<TimingCorrectedEvent> = Vec::new();
-    for srv in file.servers {
-        let id = {
-            let mut counter = state.next_server_id.write().await;
-            let id = format!("server_{}", *counter);
-            *counter += 1;
-            id
-        };
+/// `config-timing-corrected` 事件载荷:slave `load_config` 导入时发生的时序纠正。
+#[derive(Clone, serde::Serialize)]
+struct TimingCorrectedEvent {
+    endpoint: String,
+    corrections: Vec<iec104sim_core::timing::TimingCorrection>,
+}
+
+struct PreparedSlaveConfig {
+    servers: Vec<SlaveServerState>,
+    corrected_events: Vec<TimingCorrectedEvent>,
+}
+
+struct LoadConfigOutcome {
+    imported: usize,
+    corrected_events: Vec<TimingCorrectedEvent>,
+}
+
+/// Build and validate the complete replacement without touching AppState. A
+/// malformed station therefore cannot leave a partially imported workspace.
+async fn prepare_slave_config(file: SlaveConfigFile) -> Result<PreparedSlaveConfig, String> {
+    let mut servers = Vec::with_capacity(file.servers.len());
+    let mut corrected_events = Vec::new();
+
+    for (server_index, srv) in file.servers.into_iter().enumerate() {
+        let server_number = server_index + 1;
         let endpoint = format!("{}:{}", srv.bind_address, srv.port);
         let transport = SlaveTransportConfig {
             bind_address: srv.bind_address,
@@ -2168,40 +2197,103 @@ pub async fn load_config(
         };
         let log_collector = Arc::new(LogCollector::new());
         let server = SlaveServer::new(transport).with_log_collector(log_collector.clone());
-        // 加站点前先恢复服务器级配置,确保后续突发上送按目标参数走。
-        // 后端权威:规范化旧配置,收集纠正以提示用户。
+
+        // Restore server-level settings before stations so every subsequently
+        // configured operation observes the imported parameters.
         let mut timing = srv.protocol_timing;
         let corrections = timing.normalize();
         server.set_protocol_timing(timing).await;
         if !corrections.is_empty() {
-            corrected_events.push(TimingCorrectedEvent { endpoint, corrections });
+            corrected_events.push(TimingCorrectedEvent {
+                endpoint: endpoint.clone(),
+                corrections,
+            });
         }
         server.set_remote_ops(srv.remote_ops).await;
-        for st in srv.stations {
-            let mut station = Station::new(st.common_address, st.name);
-            for def in st.object_defs {
-                let _ = station.add_point(def);
+
+        for (station_index, st) in srv.stations.into_iter().enumerate() {
+            let station_number = station_index + 1;
+            let common_address = st.common_address;
+            let mut station = Station::new(common_address, st.name);
+            for (point_index, def) in st.object_defs.into_iter().enumerate() {
+                station.add_point(def).map_err(|e| {
+                    format!(
+                        "服务器 #{server_number} ({endpoint}) 的站点 #{station_number} \
+                         (CA={common_address}) 点位 #{} 导入失败: {e}",
+                        point_index + 1,
+                    )
+                })?;
             }
-            let _ = server.add_station(station).await;
+            server.add_station(station).await.map_err(|e| {
+                format!(
+                    "服务器 #{server_number} ({endpoint}) 的站点 #{station_number} \
+                     (CA={common_address}) 导入失败: {e}"
+                )
+            })?;
         }
-        state.servers.write().await.insert(
-            id,
-            SlaveServerState { server, log_collector },
-        );
-        imported += 1;
+
+        servers.push(SlaveServerState {
+            server,
+            log_collector,
+        });
     }
-    // 把导入时的时序纠正上抛,让用户知道加载的配置被调整过。
-    if !corrected_events.is_empty() {
-        let _ = app_handle.emit("config-timing-corrected", &corrected_events);
-    }
-    Ok(imported)
+
+    Ok(PreparedSlaveConfig {
+        servers,
+        corrected_events,
+    })
 }
 
-/// `config-timing-corrected` 事件载荷:slave `load_config` 导入时发生的时序纠正。
-#[derive(Clone, serde::Serialize)]
-struct TimingCorrectedEvent {
-    endpoint: String,
-    corrections: Vec<iec104sim_core::timing::TimingCorrection>,
+/// Replace the server table at one visibility boundary. The caller holds the
+/// workspace mutation lock, so server creation cannot consume IDs or insert a
+/// server between range allocation and the table swap.
+async fn replace_servers_impl(
+    state: &AppState,
+    prepared: PreparedSlaveConfig,
+) -> Result<LoadConfigOutcome, String> {
+    let imported = prepared.servers.len();
+    let imported_u32 = u32::try_from(imported)
+        .map_err(|_| "配置包含过多服务器,无法分配服务器 ID".to_string())?;
+
+    // Keep the established allocator -> table lock order used by create_server.
+    let mut counter = state.next_server_id.write().await;
+    let first_id = *counter;
+    let next_id = first_id
+        .checked_add(imported_u32)
+        .ok_or_else(|| "服务器 ID 已耗尽,无法导入配置".to_string())?;
+    let mut replacements = HashMap::with_capacity(imported);
+    for (offset, server) in prepared.servers.into_iter().enumerate() {
+        // `imported_u32` and `next_id` were checked above, so both conversions
+        // and the addition are within u32.
+        let id = format!("server_{}", first_id + offset as u32);
+        replacements.insert(id, server);
+    }
+
+    let mut current = state.servers.write().await;
+    for (id, server_state) in current.iter_mut() {
+        shutdown_server_for_removal(&mut server_state.server)
+            .await
+            .map_err(|e| format!("替换配置前停止服务器 {id} 失败: {e}"))?;
+    }
+
+    // Every old listener/task is gone before the new stopped servers become
+    // visible. An empty incoming config intentionally clears the whole table.
+    *current = replacements;
+    *counter = next_id;
+
+    Ok(LoadConfigOutcome {
+        imported,
+        corrected_events: prepared.corrected_events,
+    })
+}
+
+async fn load_config_impl(
+    state: &AppState,
+    file: SlaveConfigFile,
+) -> Result<LoadConfigOutcome, String> {
+    let _workspace_guard = state.workspace_mutation.lock().await;
+    let prepared = prepare_slave_config(file).await?;
+    replace_servers_impl(state, prepared).await
 }
 
 // ---------------------------------------------------------------------------
@@ -2233,6 +2325,7 @@ pub fn parse_frame_full(data: String) -> Result<iec104sim_core::decode::ParsedFr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iec104sim_core::config::{SlaveServerConfig, SlaveStationConfig};
     use iec104sim_core::slave::SlaveTlsConfig;
     use std::collections::HashMap;
 
@@ -2279,6 +2372,24 @@ mod tests {
         }
     }
 
+    fn imported_station(common_address: u16, name: &str) -> SlaveStationConfig {
+        SlaveStationConfig {
+            common_address,
+            name: name.to_string(),
+            object_defs: vec![ctl_def(1, AsduTypeId::MSpNa1)],
+        }
+    }
+
+    fn imported_server(port: u16, stations: Vec<SlaveStationConfig>) -> SlaveServerConfig {
+        SlaveServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            port,
+            stations,
+            protocol_timing: ProtocolTimingConfig::default(),
+            remote_ops: RemoteOperationConfig::default(),
+        }
+    }
+
     async fn state_with_server(server: SlaveServer, id: &str) -> AppState {
         let state = AppState::new();
         state.servers.write().await.insert(
@@ -2289,6 +2400,170 @@ mod tests {
             },
         );
         state
+    }
+
+    #[tokio::test]
+    async fn load_config_replaces_server_table_and_reimport_does_not_duplicate() {
+        let state = state_with_server(
+            SlaveServer::new(test_transport(free_port())),
+            "server_1",
+        )
+        .await;
+        *state.next_server_id.write().await = 2;
+        let file = SlaveConfigFile::new(vec![
+            imported_server(2404, vec![imported_station(1, "first")]),
+            imported_server(2405, vec![imported_station(2, "second")]),
+        ]);
+
+        let first = load_config_impl(&state, file.clone()).await.unwrap();
+        assert_eq!(first.imported, 2);
+        assert!(first.corrected_events.is_empty());
+        {
+            let servers = state.servers.read().await;
+            assert_eq!(servers.len(), 2);
+            assert!(servers.contains_key("server_2"));
+            assert!(servers.contains_key("server_3"));
+            assert!(!servers.contains_key("server_1"));
+            assert_eq!(servers["server_2"].server.stations.read().await.len(), 1);
+            assert_eq!(servers["server_3"].server.stations.read().await.len(), 1);
+        }
+        assert_eq!(*state.next_server_id.read().await, 4);
+
+        let second = load_config_impl(&state, file).await.unwrap();
+        assert_eq!(second.imported, 2);
+        {
+            let servers = state.servers.read().await;
+            assert_eq!(servers.len(), 2, "reimport must replace, not append");
+            assert!(servers.contains_key("server_4"));
+            assert!(servers.contains_key("server_5"));
+            assert!(!servers.contains_key("server_2"));
+            assert!(!servers.contains_key("server_3"));
+        }
+        assert_eq!(*state.next_server_id.read().await, 6);
+    }
+
+    #[tokio::test]
+    async fn invalid_load_config_preserves_existing_table_and_id_counter() {
+        let state = state_with_server(
+            SlaveServer::new(test_transport(free_port())),
+            "server_41",
+        )
+        .await;
+        *state.next_server_id.write().await = 42;
+        let file = SlaveConfigFile::new(vec![
+            imported_server(2404, vec![imported_station(1, "valid")]),
+            imported_server(
+                2405,
+                vec![
+                    imported_station(7, "duplicate-a"),
+                    imported_station(7, "duplicate-b"),
+                ],
+            ),
+        ]);
+
+        let error = load_config_impl(&state, file)
+            .await
+            .err()
+            .expect("duplicate station CA must reject the whole import");
+
+        assert!(error.contains("CA=7"), "unexpected error: {error}");
+        let servers = state.servers.read().await;
+        assert_eq!(servers.len(), 1);
+        assert!(servers.contains_key("server_41"));
+        drop(servers);
+        assert_eq!(*state.next_server_id.read().await, 42);
+    }
+
+    #[tokio::test]
+    async fn empty_load_config_clears_table_without_consuming_an_id() {
+        let state = state_with_server(
+            SlaveServer::new(test_transport(free_port())),
+            "server_8",
+        )
+        .await;
+        *state.next_server_id.write().await = 9;
+
+        let outcome = load_config_impl(&state, SlaveConfigFile::new(Vec::new()))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.imported, 0);
+        assert!(state.servers.read().await.is_empty());
+        assert_eq!(*state.next_server_id.read().await, 9);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn load_config_stops_running_server_and_releases_port_before_return() {
+        let port = free_port();
+        let mut old_server = SlaveServer::new(test_transport(port));
+        old_server.start().await.expect("start old server");
+        let state = state_with_server(old_server, "server_1").await;
+        *state.next_server_id.write().await = 2;
+
+        let outcome = load_config_impl(
+            &state,
+            SlaveConfigFile::new(vec![imported_server(
+                port,
+                vec![imported_station(1, "replacement")],
+            )]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.imported, 1);
+        std::net::TcpListener::bind(("127.0.0.1", port))
+            .expect("old listener must be released before config load returns");
+        let servers = state.servers.read().await;
+        assert_eq!(servers.len(), 1);
+        assert!(servers.contains_key("server_2"));
+        assert_eq!(servers["server_2"].server.state(), ServerState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn load_config_aborts_mutations_owned_by_stopped_server() {
+        let server = SlaveServer::new(test_transport(free_port()));
+        let mut station = Station::new(1, "stopped");
+        station
+            .add_point(ctl_def(1, AsduTypeId::MSpNa1))
+            .unwrap();
+        server.add_station(station).await.unwrap();
+        server
+            .start_point_mutation(
+                1,
+                1,
+                AsduTypeId::MSpNa1,
+                50,
+                MutationParams::default(),
+            )
+            .await
+            .unwrap();
+        let retained_stations = Arc::clone(&server.stations);
+        let state = state_with_server(server, "server_1").await;
+        *state.next_server_id.write().await = 2;
+
+        load_config_impl(&state, SlaveConfigFile::new(Vec::new()))
+            .await
+            .unwrap();
+        let seq = retained_stations
+            .read()
+            .await
+            .get(&1)
+            .unwrap()
+            .data_points
+            .current_seq();
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        assert_eq!(
+            retained_stations
+                .read()
+                .await
+                .get(&1)
+                .unwrap()
+                .data_points
+                .current_seq(),
+            seq,
+            "full replacement must join stopped-server mutation tasks",
+        );
     }
 
     #[test]

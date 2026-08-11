@@ -21,6 +21,8 @@ const refreshTree = inject<() => void>('refreshTree')!
 const openEditConnection = inject<((connId: string) => void) | null>('openEditConnection', null)
 const changedCategories = inject<Ref<ChangedCategoriesMap>>('changedCategories')!
 const sharedCategoryCounts = inject<Ref<CategoryCountsMap>>('categoryCounts')!
+let disposed = false
+let loadGeneration = 0
 
 // Flash key 用真实 (connId, ca, category) 三元组。single-CA 视图也能拿到唯一
 // CA (`conn.info.common_addresses[0]`),所以不需要 wildcard sentinel。
@@ -29,7 +31,7 @@ const flashTimers = new Map<string, number>()
 const flashKey = (connId: string, ca: number, cat: string) => `${connId}|${ca}|${cat}`
 
 watch(changedCategories, (map) => {
-  if (map.size === 0) return
+  if (disposed || map.size === 0) return
   for (const [connId, byCa] of map) {
     for (const [ca, cats] of byCa) {
       for (const cat of cats) {
@@ -38,6 +40,7 @@ watch(changedCategories, (map) => {
         const prev = flashTimers.get(key)
         if (prev) clearTimeout(prev)
         flashTimers.set(key, window.setTimeout(() => {
+          if (disposed) return
           flashingCategories.value.delete(key)
           flashTimers.delete(key)
         }, 3000))
@@ -48,7 +51,10 @@ watch(changedCategories, (map) => {
 })
 
 onUnmounted(() => {
+  disposed = true
+  loadGeneration++
   for (const t of flashTimers.values()) clearTimeout(t)
+  flashTimers.clear()
 })
 
 const DATA_CATEGORIES = [
@@ -116,8 +122,10 @@ function isMultiCA(conn: TreeConnection): boolean {
 }
 
 async function loadTree() {
+  const generation = ++loadGeneration
   try {
     const conns = await invoke<ConnectionInfo[]>('list_connections')
+    if (disposed || generation !== loadGeneration) return
     const activeIds = new Set(conns.map(c => c.id))
     const newTree: TreeConnection[] = []
     for (const conn of conns) {

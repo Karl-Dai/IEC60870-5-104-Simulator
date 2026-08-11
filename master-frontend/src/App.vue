@@ -25,6 +25,10 @@ const selectedCategory = ref<string | null>(null)
 // shallowRef: 选中可达 15k+ 行（Ctrl+A）；deep ref 会在切换连接清空时卡几百 ms。
 const selectedPoints = shallowRef<ReceivedDataPointInfo[]>([])
 const logExpanded = ref(false)
+// A loaded configuration replaces the whole workspace. Remounting every
+// workspace-bound view drops local cursors, log selections and pending-view
+// state; late async responses can then only update the discarded instances.
+const workspaceEpoch = ref(0)
 
 const LOG_H_KEY = 'iec104.logPanel.height'
 function readSavedHeight(): number {
@@ -224,6 +228,18 @@ function snoozeUpdate() {
     invoke('snooze_update', { version: updateMeta.value.version }).catch(() => {})
   }
 }
+
+function resetWorkspaceView() {
+  selectedConnectionId.value = null
+  selectedConnectionState.value = 'Disconnected'
+  selectedCA.value = null
+  selectedCategory.value = null
+  selectedPoints.value = []
+  changedCategories.value = new Map()
+  categoryCounts.value = new Map()
+  workspaceEpoch.value++
+}
+provide('resetWorkspaceView', resetWorkspaceView)
 </script>
 
 <template>
@@ -234,17 +250,19 @@ function snoozeUpdate() {
 
     <aside class="tree-area">
       <ConnectionTree
+        :key="workspaceEpoch"
         @connection-select="handleConnectionSelect"
         @category-select="handleCategorySelect"
       />
     </aside>
     <main class="content-area">
       <DataTable
+        :key="workspaceEpoch"
         @point-select="handlePointSelect"
       />
     </main>
     <aside class="panel-area">
-      <ValuePanel />
+      <ValuePanel :key="workspaceEpoch" />
     </aside>
 
     <div
@@ -255,7 +273,7 @@ function snoozeUpdate() {
       @mousedown="startResize"
     />
     <footer class="log-area">
-      <LogPanel :expanded="logExpanded" @toggle="toggleLog" />
+      <LogPanel :key="workspaceEpoch" :expanded="logExpanded" @toggle="toggleLog" />
     </footer>
     <AppDialog />
     <ParseFrameDialog
