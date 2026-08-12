@@ -1,0 +1,165 @@
+name: Nightly release preparation
+
+on:
+  schedule:
+    # Avoid the start-of-hour congestion window while still running near
+    # midnight in China. GitHub evaluates this with the explicit IANA zone.
+    - cron: '7 0 * * *'
+      timezone: 'Asia/Shanghai'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: nightly-release-preparation
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Find unreleased commits
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest_tag="$(gh release view --json tagName --jq .tagName)"
+          if ! git rev-parse --verify --quiet "refs/tags/$latest_tag" >/dev/null; then
+            git fetch origin "refs/tags/$latest_tag:refs/tags/$latest_tag"
+          fi
+          if git merge-base --is-ancestor "$latest_tag" HEAD; then
+            unreleased="$(git rev-list --count "$latest_tag"..HEAD)"
+          else
+            echo "::error::Latest published release $latest_tag is not an ancestor of main"
+            exit 1
+          fi
+
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          echo "unreleased=$unreleased" >> "$GITHUB_OUTPUT"
+          if [ "$unreleased" -eq 0 ]; then
+            echo "No commits after $latest_tag"
+            echo "prepare=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          next_version="$(node scripts/prepare-release.mjs next "$latest_tag")"
+          current_version="$(node scripts/prepare-release.mjs current)"
+          echo "next_version=$next_version" >> "$GITHUB_OUTPUT"
+          echo "branch=automation/release-v$next_version" >> "$GITHUB_OUTPUT"
+          if [ "$current_version" = "${latest_tag#v}" ]; then
+            echo "prepare=true" >> "$GITHUB_OUTPUT"
+          elif [ "$current_version" = "$next_version" ]; then
+            node scripts/prepare-release.mjs verify-current
+            echo "v$current_version is already prepared on main and is waiting to be released."
+            echo "prepare=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::App version $current_version is neither latest release ${latest_tag#v} nor next patch $next_version"
+            exit 1
+          fi
+
+      - name: Stop when main is already fully released
+        if: steps.release.outputs.unreleased == '0'
+        run: echo "main matches ${{ steps.release.outputs.latest_tag }}; no release PR is needed."
+
+      - name: Refuse to overwrite an existing release branch
+        id: branch
+        if: steps.release.outputs.prepare == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin "$RELEASE_BRANCH" >/dev/null 2>&1; then
+            pr_url="$(gh pr list --state open --head "$RELEASE_BRANCH" --json url --jq '.[0].url // empty')"
+            if [ -n "$pr_url" ]; then
+              echo "Release PR already exists: $pr_url"
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::Remote branch $RELEASE_BRANCH exists without an open PR; remove or inspect it before retrying"
+            exit 1
+          fi
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare patch release
+        if: steps.release.outputs.prepare == 'true' && steps.branch.outputs.exists != 'true'
+        env:
+          LATEST_TAG: ${{ steps.release.outputs.latest_tag }}
+          NEXT_VERSION: ${{ steps.release.outputs.next_version }}
+        run: |
+          node scripts/prepare-release.mjs prepare \
+            --from "$LATEST_TAG" \
+            --version "$NEXT_VERSION" \
+            --date "$(TZ=Asia/Shanghai date +%F)"
+
+      - name: Test release automation
+        if: steps.release.outputs.prepare == 'true' && steps.branch.outputs.exists != 'true'
+        working-directory: scripts
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+      - name: Commit release preparation
+        if: steps.release.outputs.prepare == 'true' && steps.branch.outputs.exists != 'true'
+        env:
+          LATEST_TAG: ${{ steps.release.outputs.latest_tag }}
+          NEXT_VERSION: ${{ steps.release.outputs.next_version }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git switch -c "$RELEASE_BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            CHANGELOG.md \
+            crates/iec104sim-app/Cargo.toml \
+            crates/iec104sim-app/tauri.conf.json \
+            crates/iec104master-app/Cargo.toml \
+            crates/iec104master-app/tauri.conf.json \
+            frontend/src/releaseNotes.ts \
+            master-frontend/src/releaseNotes.ts
+          git commit -m "chore(release): prepare v$NEXT_VERSION"
+          git push origin "$RELEASE_BRANCH"
+
+          body_file="$(mktemp)"
+          cat > "$body_file" <<EOF
+          ## Summary
+
+          Nightly automation found ${{ steps.release.outputs.unreleased }} commit(s) on \`main\` after \`$LATEST_TAG\` and prepared patch release \`v$NEXT_VERSION\`.
+
+          The generated CHANGELOG and in-app release notes are intentionally editable. Review their wording before merging.
+
+          ## Release behavior
+
+          After this PR is merged and normal CI succeeds, the release-on-merge workflow will validate the version metadata, create tag \`v$NEXT_VERSION\`, and explicitly dispatch the multi-platform Release workflow.
+
+          ## Automated checks
+
+          - \`npm test\` in \`scripts/\`
+          - release metadata consistency validation
+          EOF
+          gh pr create \
+            --base main \
+            --head "$RELEASE_BRANCH" \
+            --title "chore(release): prepare v$NEXT_VERSION" \
+            --body-file "$body_file" \
+            --draft
+          # Workflow-created PR runs require manual approval, so explicitly
+          # attach the normal Test workflow to the release branch without an
+          # approval gate.
+          gh workflow run test.yml --ref "$RELEASE_BRANCH"

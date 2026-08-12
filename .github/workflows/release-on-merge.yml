@@ -1,0 +1,127 @@
+name: Release tested version
+
+on:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: release-on-merge
+  cancel-in-progress: false
+
+jobs:
+  tag-and-dispatch:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Identify the merged release PR
+        id: pull_request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node scripts/prepare-release.mjs current)"
+          tag="v$version"
+
+          release_branch="$(gh pr list \
+            --state merged \
+            --base main \
+            --search "head:automation/release-v$version" \
+            --json headRefName \
+            --jq ".[] | select(.headRefName == \"automation/release-v$version\") | .headRefName" \
+            | head -n 1)"
+          if [ -z "$release_branch" ]; then
+            echo "Current version $version has no matching merged release PR; nothing to publish."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$release_branch" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release metadata
+        if: steps.pull_request.outputs.release == 'true'
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_BRANCH: ${{ steps.pull_request.outputs.branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_BRANCH#automation/release-v}"
+          tag="v$version"
+          current="$(node scripts/prepare-release.mjs current)"
+          if [ "$current" != "$version" ]; then
+            echo "::error::Release branch says $version but app metadata says $current"
+            exit 1
+          fi
+          node scripts/prepare-release.mjs verify "$tag"
+          latest_tag="$(gh release view --json tagName --jq .tagName)"
+          expected="$(node scripts/prepare-release.mjs next "$latest_tag")"
+          if [ "$version" != "$expected" ]; then
+            echo "::error::Expected patch version $expected after $latest_tag, got $version"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create release tag
+        if: steps.pull_request.outputs.release == 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --force
+          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            if ! git merge-base --is-ancestor "$TAG" "$GITHUB_SHA"; then
+              echo "::error::Tag $TAG does not belong to the tested main history"
+              exit 1
+            fi
+            echo "$TAG already exists on the tested main history; continuing idempotently."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+      # A tag pushed with GITHUB_TOKEN does not trigger another push workflow.
+      # Dispatch release.yml explicitly and pass the tag as the checkout ref.
+      - name: Start multi-platform release build
+        if: steps.pull_request.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing="$(
+            gh run list \
+              --workflow release.yml \
+              --branch "$TAG" \
+              --limit 20 \
+              --json headSha,status,conclusion \
+              --jq ".[] | select(.headSha == \"$GITHUB_SHA\") | [.status, (.conclusion // \"\")] | @tsv" \
+              | head -n 1
+          )"
+          if [[ "$existing" == queued$'\t'* || "$existing" == in_progress$'\t'* || "$existing" == completed$'\t'success ]]; then
+            echo "Release workflow already active or successful for $TAG: $existing"
+            exit 0
+          fi
+          gh workflow run release.yml --ref "$TAG" -f tag="$TAG"

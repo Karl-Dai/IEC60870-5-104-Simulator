@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: test-${{ github.ref }}
@@ -30,6 +31,10 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - uses: Swatinem/rust-cache@v2
 
       # tauri::generate_context! 编译期要求 frontendDist 目录存在,空目录即可
@@ -39,6 +44,9 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --workspace
+
+      - name: Validate release metadata
+        run: node scripts/prepare-release.mjs verify-current
 
   frontend:
     strategy:

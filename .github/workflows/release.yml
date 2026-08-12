@@ -4,12 +4,45 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to build and publish
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
 jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate tag and release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid stable release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          if [ "$GITHUB_SHA" != "$(git rev-list -n 1 "$RELEASE_TAG")" ]; then
+            echo "::error::Workflow ref $GITHUB_SHA does not match $RELEASE_TAG"
+            exit 1
+          fi
+          node scripts/prepare-release.mjs verify "$RELEASE_TAG"
+
   build-slave:
+    needs: validate-release
     strategy:
       fail-fast: false
       matrix:
@@ -70,8 +103,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: crates/iec104sim-app
-          tagName: ${{ github.ref_name }}
-          releaseName: '${{ github.ref_name }}'
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: '${{ env.RELEASE_TAG }}'
           releaseBody: 'See the assets below to download the installers for your platform.'
           # Keep the release a draft during the build: GitHub's
           # `releases/latest` skips drafts, so existing users' update checks
@@ -109,7 +142,7 @@ jobs:
           fi
           upload_one() {
             for attempt in 1 2 3 4 5; do
-              if gh release upload "$GITHUB_REF_NAME" "$1" --clobber; then return 0; fi
+              if gh release upload "$RELEASE_TAG" "$1" --clobber; then return 0; fi
               echo "::warning::upload $(basename "$1") attempt $attempt failed, retrying in 15s"
               sleep 15
             done
@@ -154,7 +187,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           ARCH="${{ matrix.win_arch }}"
           # cargo 产物名是 crate name (iec104sim-app.exe), 不是 Tauri productName。
           # productName 仅出现在 bundle/nsis/ 与 bundle/msi/ 下的安装包文件名里。
@@ -172,13 +205,14 @@ jobs:
           # `gh release upload --clobber` races against parallel matrix jobs
           # (404 "delete-a-release-asset"); retry before failing the build.
           for attempt in 1 2 3 4 5; do
-            if gh release upload "$GITHUB_REF_NAME" "$DEST" --clobber; then exit 0; fi
+            if gh release upload "$RELEASE_TAG" "$DEST" --clobber; then exit 0; fi
             echo "::warning::release upload attempt $attempt failed, retrying in 10s"
             sleep 10
           done
           echo "::error::release upload failed after 5 attempts"; exit 1
 
   build-master:
+    needs: validate-release
     strategy:
       fail-fast: false
       matrix:
@@ -239,8 +273,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: crates/iec104master-app
-          tagName: ${{ github.ref_name }}
-          releaseName: '${{ github.ref_name }}'
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: '${{ env.RELEASE_TAG }}'
           releaseBody: 'See the assets below to download the installers for your platform.'
           # Keep the release a draft during the build: GitHub's
           # `releases/latest` skips drafts, so existing users' update checks
@@ -274,7 +308,7 @@ jobs:
           fi
           upload_one() {
             for attempt in 1 2 3 4 5; do
-              if gh release upload "$GITHUB_REF_NAME" "$1" --clobber; then return 0; fi
+              if gh release upload "$RELEASE_TAG" "$1" --clobber; then return 0; fi
               echo "::warning::upload $(basename "$1") attempt $attempt failed, retrying in 15s"
               sleep 15
             done
@@ -317,7 +351,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           ARCH="${{ matrix.win_arch }}"
           # cargo 产物名是 crate name (iec104master-app.exe), 不是 Tauri productName。
           if [ -n "${{ matrix.rust_target }}" ]; then
@@ -334,7 +368,7 @@ jobs:
           # `gh release upload --clobber` races against parallel matrix jobs
           # (404 "delete-a-release-asset"); retry before failing the build.
           for attempt in 1 2 3 4 5; do
-            if gh release upload "$GITHUB_REF_NAME" "$DEST" --clobber; then exit 0; fi
+            if gh release upload "$RELEASE_TAG" "$DEST" --clobber; then exit 0; fi
             echo "::warning::release upload attempt $attempt failed, retrying in 10s"
             sleep 10
           done
@@ -357,14 +391,14 @@ jobs:
       - name: Publish release (clear draft flag)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit ${{ github.ref_name }} --draft=false
+        run: gh release edit "$RELEASE_TAG" --draft=false
       - name: Install script deps
         working-directory: scripts
         run: npm install --no-audit --no-fund
       - name: Generate manifests
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/gen-update-manifest.mjs ${{ github.ref_name }}
+        run: node scripts/gen-update-manifest.mjs "$RELEASE_TAG"
       - name: Upload manifests to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -372,7 +406,7 @@ jobs:
           for attempt in 1 2 3 4 5; do
             # 上传 gen-update-manifest 实际产出的全部清单(cn0 + 兜底 + 任何 cnN 变体);
             # 用 glob 与 MANIFEST_VARIANTS 解耦,增删镜像变体无需再动本 workflow。
-            if gh release upload ${{ github.ref_name }} \
+            if gh release upload "$RELEASE_TAG" \
               latest-slave*.json \
               latest-master*.json \
               --clobber; then exit 0; fi
@@ -382,9 +416,9 @@ jobs:
           echo "::error::manifest upload failed after 5 attempts"; exit 1
 
       - name: Render rich release body from CHANGELOG
-        run: node scripts/build-release-notes.mjs ${{ github.ref_name }}
+        run: node scripts/build-release-notes.mjs "$RELEASE_TAG"
 
       - name: Replace release body
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit ${{ github.ref_name }} --notes-file RELEASE_BODY.md
+        run: gh release edit "$RELEASE_TAG" --notes-file RELEASE_BODY.md
