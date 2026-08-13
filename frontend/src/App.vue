@@ -198,12 +198,6 @@ onUnmounted(() => {
   unlistenTimingCorrected?.()
 })
 
-function snoozeUpdate() {
-  if (updateMeta.value) {
-    invoke('snooze_update', { version: updateMeta.value.version }).catch(() => {})
-  }
-}
-
 // Runtime params modal — opened from ConnectionTree right-click menu
 const runtimeParamsModalVisible = ref(false)
 const runtimeParamsModalServerId = ref<string | null>(null)
@@ -325,7 +319,6 @@ provide('resetWorkspaceView', resetWorkspaceView)
       :version="updateMeta?.version ?? ''"
       :notes="updateMeta?.notes ?? ''"
       @close="updateVisible = false"
-      @snooze="snoozeUpdate"
     />
     <RemoteParamsModal
       :key="`remote-params-modal-${workspaceEpoch}`"

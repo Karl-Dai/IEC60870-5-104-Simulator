@@ -1,5 +1,5 @@
 use chrono::{DateTime, Duration, Utc};
-use iec104sim_app_lib::update::{is_snoozed, should_check};
+use iec104sim_app_lib::update::{is_skipped, should_check};
 
 fn ts(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
@@ -7,7 +7,11 @@ fn ts(s: &str) -> DateTime<Utc> {
 
 #[test]
 fn should_check_when_no_prior_check() {
-    assert!(should_check(None, ts("2026-04-28T10:00:00Z"), Duration::hours(6)));
+    assert!(should_check(
+        None,
+        ts("2026-04-28T10:00:00Z"),
+        Duration::hours(6)
+    ));
 }
 
 #[test]
@@ -25,31 +29,16 @@ fn should_check_after_throttle_window() {
 }
 
 #[test]
-fn snoozed_when_same_version_within_window() {
-    assert!(is_snoozed(
-        Some("1.0.9"),
-        Some(ts("2026-04-29T00:00:00Z")),
-        "1.0.9",
-        ts("2026-04-28T10:00:00Z"),
-    ));
+fn skipped_when_versions_match() {
+    assert!(is_skipped(Some("1.0.9"), "1.0.9"));
 }
 
 #[test]
-fn not_snoozed_after_window_expires() {
-    assert!(!is_snoozed(
-        Some("1.0.9"),
-        Some(ts("2026-04-28T09:00:00Z")),
-        "1.0.9",
-        ts("2026-04-28T10:00:00Z"),
-    ));
+fn not_skipped_without_a_saved_version() {
+    assert!(!is_skipped(None, "1.0.9"));
 }
 
 #[test]
-fn not_snoozed_for_different_version() {
-    assert!(!is_snoozed(
-        Some("1.0.9"),
-        Some(ts("2026-04-29T00:00:00Z")),
-        "1.0.10",
-        ts("2026-04-28T10:00:00Z"),
-    ));
+fn skipped_release_does_not_hide_a_newer_version() {
+    assert!(!is_skipped(Some("1.0.9"), "1.0.10"));
 }

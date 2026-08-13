@@ -223,12 +223,6 @@ async function checkUpdate(force = false): Promise<{ version: string; notes: str
 }
 provide('checkUpdate', checkUpdate)
 
-function snoozeUpdate() {
-  if (updateMeta.value) {
-    invoke('snooze_update', { version: updateMeta.value.version }).catch(() => {})
-  }
-}
-
 function resetWorkspaceView() {
   selectedConnectionId.value = null
   selectedConnectionState.value = 'Disconnected'
@@ -286,7 +280,6 @@ provide('resetWorkspaceView', resetWorkspaceView)
       :version="updateMeta?.version ?? ''"
       :notes="updateMeta?.notes ?? ''"
       @close="updateVisible = false"
-      @snooze="snoozeUpdate"
     />
   </div>
 </template>

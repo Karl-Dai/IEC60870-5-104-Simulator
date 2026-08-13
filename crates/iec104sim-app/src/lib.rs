@@ -14,6 +14,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
+        .manage(update::UpdateState::default())
         .invoke_handler(tauri::generate_handler![
             // Server commands
             commands::create_server,
@@ -76,7 +77,8 @@ pub fn run() {
             // Update commands
             update::check_for_update,
             update::install_update,
-            update::snooze_update,
+            update::skip_update,
+            update::schedule_update_on_next_launch,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -86,6 +88,12 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = update::install_pending_update(app_handle).await {
+                    log::warn!("automatic update on launch failed: {error}");
+                }
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

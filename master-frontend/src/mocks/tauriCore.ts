@@ -150,7 +150,9 @@ export async function invoke<T>(command: string, args?: InvokeArgs): Promise<T> 
     case 'set_logging_enabled':
     case 'clear_communication_logs':
     case 'save_logs_csv':
-    case 'snooze_update':
+    case 'skip_update':
+    case 'schedule_update_on_next_launch':
+    case 'install_update':
       return undefined as T
     default:
       throw new Error(`Tauri mock has no handler for command: ${command}`)

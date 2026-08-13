@@ -284,12 +284,12 @@ export type DictShape = {
     available: string
     newVersion: string
     changelog: string
+    ready: string
     installNow: string
-    later: string
-    downloading: string
+    installNextLaunch: string
+    skip: string
+    working: string
     failedTitle: string
-    retry: string
-    close: string
   }
   rawSend: {
     title: string
@@ -689,12 +689,12 @@ const dict: DictShape = {
     available: '检测到新版本',
     newVersion: '新版本 v{version} 可用',
     changelog: '更新说明',
+    ready: '更新已在后台下载完成，可以安装。',
     installNow: '立即更新',
-    later: '稍后',
-    downloading: '正在下载 {pct}%',
+    installNextLaunch: '下次启动自动更新',
+    skip: '跳过此版本',
+    working: '正在处理…',
     failedTitle: '更新失败',
-    retry: '重试',
-    close: '关闭',
   },
   rawSend: {
     title: '原始报文发送',
