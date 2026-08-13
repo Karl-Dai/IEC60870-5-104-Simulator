@@ -74,7 +74,7 @@ jobs:
         if: steps.release.outputs.unreleased == '0'
         run: echo "main matches ${{ steps.release.outputs.latest_tag }}; no release PR is needed."
 
-      - name: Refuse to overwrite an existing release branch
+      - name: Recover or refuse an existing release branch
         id: branch
         if: steps.release.outputs.prepare == 'true'
         env:
@@ -90,8 +90,55 @@ jobs:
               echo "exists=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "::error::Remote branch $RELEASE_BRANCH exists without an open PR; remove or inspect it before retrying"
-            exit 1
+
+            # A previous run may have pushed the prepared commit and then
+            # failed before `gh pr create`. Recover only that exact state:
+            # one generated release commit directly on the current main, with
+            # internally consistent version metadata. Anything else remains a
+            # hard stop so automation never adopts an unrelated branch.
+            git fetch origin "refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH"
+            branch_ref="refs/remotes/origin/$RELEASE_BRANCH"
+            branch_sha="$(git rev-parse "$branch_ref")"
+            parent_sha="$(git rev-parse "$branch_ref^")"
+            version="${RELEASE_BRANCH#automation/release-v}"
+            subject="$(git log -1 --format=%s "$branch_ref")"
+            if [ "$parent_sha" != "$GITHUB_SHA" ] || [ "$subject" != "chore(release): prepare v$version" ]; then
+              echo "::error::Remote branch $RELEASE_BRANCH is not the expected release commit on current main"
+              exit 1
+            fi
+
+            recovery_dir="$(mktemp -d)"
+            git worktree add --detach "$recovery_dir" "$branch_sha"
+            if ! (cd "$recovery_dir" && node scripts/prepare-release.mjs verify "v$version"); then
+              git worktree remove --force "$recovery_dir"
+              echo "::error::Remote branch $RELEASE_BRANCH failed release metadata validation"
+              exit 1
+            fi
+            git worktree remove --force "$recovery_dir"
+
+            body_file="$(mktemp)"
+            cat > "$body_file" <<EOF
+          ## Summary
+
+          Nightly automation recovered the already-prepared patch release \`v$version\` after an earlier run pushed the branch but failed before creating its pull request.
+
+          Review the generated CHANGELOG and in-app release notes before merging.
+
+          ## Automated checks
+
+          - release branch is exactly one generated commit on the current \`main\`
+          - release metadata consistency validation
+          EOF
+            gh pr create \
+              --base main \
+              --head "$RELEASE_BRANCH" \
+              --title "chore(release): prepare v$version" \
+              --body-file "$body_file" \
+              --draft
+            gh workflow run test.yml --ref "$RELEASE_BRANCH"
+            echo "Recovered release PR for $RELEASE_BRANCH"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo "exists=false" >> "$GITHUB_OUTPUT"
 
@@ -116,6 +163,7 @@ jobs:
       - name: Commit release preparation
         if: steps.release.outputs.prepare == 'true' && steps.branch.outputs.exists != 'true'
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LATEST_TAG: ${{ steps.release.outputs.latest_tag }}
           NEXT_VERSION: ${{ steps.release.outputs.next_version }}
           RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
