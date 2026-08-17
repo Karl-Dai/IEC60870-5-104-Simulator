@@ -92,19 +92,34 @@ jobs:
             fi
 
             # A previous run may have pushed the prepared commit and then
-            # failed before `gh pr create`. Recover only that exact state:
-            # one generated release commit directly on the current main, with
-            # internally consistent version metadata. Anything else remains a
-            # hard stop so automation never adopts an unrelated branch.
+            # failed before `gh pr create`. Only automation-generated branches
+            # are ever adopted or discarded; anything else remains a hard stop
+            # so automation never touches an unrelated branch.
             git fetch origin "refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH"
             branch_ref="refs/remotes/origin/$RELEASE_BRANCH"
             branch_sha="$(git rev-parse "$branch_ref")"
             parent_sha="$(git rev-parse "$branch_ref^")"
             version="${RELEASE_BRANCH#automation/release-v}"
             subject="$(git log -1 --format=%s "$branch_ref")"
-            if [ "$parent_sha" != "$GITHUB_SHA" ] || [ "$subject" != "chore(release): prepare v$version" ]; then
-              echo "::error::Remote branch $RELEASE_BRANCH is not the expected release commit on current main"
+            if [ "$subject" != "chore(release): prepare v$version" ]; then
+              echo "::error::Remote branch $RELEASE_BRANCH is not an automation-generated release commit"
               exit 1
+            fi
+
+            # Stale regeneration: main has advanced past the branch parent, so
+            # the branch can no longer be adopted as-is. It contains only the
+            # generated release commit, so discard it and let the prepare steps
+            # below rebuild it on current main; the generated files are
+            # produced deterministically from main, so nothing is lost.
+            if [ "$parent_sha" != "$GITHUB_SHA" ]; then
+              if ! git merge-base --is-ancestor "$parent_sha" "$GITHUB_SHA"; then
+                echo "::error::Remote branch $RELEASE_BRANCH has diverged from main; inspect it before retrying"
+                exit 1
+              fi
+              echo "::warning::Discarding stale $RELEASE_BRANCH (its parent is an ancestor of main) and rebuilding on current main"
+              git push origin --delete "$RELEASE_BRANCH"
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
 
             recovery_dir="$(mktemp -d)"
