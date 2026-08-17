@@ -5,6 +5,9 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.8 新增 / Added: add silent background updates (#68)',
+  'v1.15.8 修复 / Fixed: config: replace workspace on load (#65); log: include monitoring values in spontaneous events (#66); ci: recover nightly release preparation (#69)',
+  'v1.15.8 改进 / Changed: release: automate nightly release preparation (#67)',
   'v1.15.7 通信日志分析 (#58/#61): 主站与子站日志统一支持列宽拖动、毫秒时标、自动跟随、方向 / I·S·U·Type ID 组合筛选、全文搜索、稳定虚拟滚动和当前结果 CSV 导出',
   'v1.15.7 本版子站增强 (#59/#60/#61): 点表新增 15 列 CSV 导入 / 导出 / 模板及 Merge / Replace 完整预检,双击点位行可快速打开编辑器;主站端同步版本号',
   'v1.15.7 在线体验与文档 (#62): About 新增 SimLab 在线入口,中英文 README 更新最新界面截图、点位 / 控制点说明和循环演示动画',
@@ -76,8 +79,8 @@ export const RELEASE_NOTES: string[] = [
 export const ABOUT_RELEASE_NOTES = {
   'zh-CN': RELEASE_NOTES.slice(0, 3),
   'en-US': [
-    'v1.15.7 communication-log analysis (#58/#61): Master and Slave logs now share resizable columns, millisecond timestamps, auto-follow, combined direction/I/S/U/Type ID filters, full-row search, stable virtual scrolling and CSV export of the active result.',
-    'v1.15.7 Slave enhancements (#59/#60/#61): point tables gain validated 15-column CSV import/export/templates with Merge / Replace, plus double-click quick editing; the Master app synchronizes its version.',
-    'v1.15.7 online demo and docs (#62): About links to SimLab, and both READMEs now show the current UI, clearer point/control guidance and a looping product demo.',
+    'v1.15.8 Added: add silent background updates (#68)',
+    'v1.15.8 Fixed: config: replace workspace on load (#65); log: include monitoring values in spontaneous events (#66); ci: recover nightly release preparation (#69)',
+    'v1.15.8 Changed: release: automate nightly release preparation (#67)',
   ],
 } as const
