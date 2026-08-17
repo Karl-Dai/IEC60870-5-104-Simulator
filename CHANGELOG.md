@@ -6,17 +6,18 @@
 
 ### Added 新增
 
-- add silent background updates (#68)
+- Add silent background update downloads with install-now, skip, and install-on-next-launch choices (#68)
 
 ### Fixed 修复
 
-- config: replace workspace on load (#65)
-- log: include monitoring values in spontaneous events (#66)
-- ci: recover nightly release preparation (#69)
+- Reset existing workspace state before loading a replacement configuration (#65)
+- Include monitoring values in spontaneous-event logs (#66)
+- Recover nightly release preparation after a branch was pushed before its PR was created (#69)
+- Rebuild stale generated release branches after `main` advances (#71)
 
 ### Changed 改进
 
-- release: automate nightly release preparation (#67)
+- Automate nightly release PR preparation and tested release publication (#67)
 
 ### Notes 说明
 

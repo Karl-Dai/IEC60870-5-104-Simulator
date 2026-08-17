@@ -5,9 +5,9 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
-  'v1.15.8 新增 / Added: add silent background updates (#68)',
-  'v1.15.8 修复 / Fixed: config: replace workspace on load (#65); log: include monitoring values in spontaneous events (#66); ci: recover nightly release preparation (#69)',
-  'v1.15.8 改进 / Changed: release: automate nightly release preparation (#67)',
+  'v1.15.8 新增 / Added: 后台静默下载并校验更新，安装就绪后可选择立即更新、跳过或下次启动更新 (#68)',
+  'v1.15.8 修复 / Fixed: 加载配置时先重置旧工作区；自发事件日志补充监视值；夜间发布可恢复已推送但未创建 PR 的分支，并在 main 前进后重建过期分支 (#65/#66/#69/#71)',
+  'v1.15.8 改进 / Changed: 自动生成夜间发布 PR，并在合并后校验、打标签及启动多平台构建 (#67)',
   'v1.15.7 大型点表 CSV (#59/#61): 按站导入、导出与模板下载支持 15 列、UTF-8 BOM、Merge / Replace、逐行预检、映射与仿真参数恢复及 10,000+ 点场景;导入仅在停服时原子提交',
   'v1.15.7 日志与快速编辑 (#58/#60/#61): 双端日志支持列宽拖动、毫秒时标、自动跟随、方向 / 帧类型组合筛选、全文搜索和当前结果 CSV 导出;双击点位行直接打开编辑器,Value 单元格保留行内改值',
   'v1.15.7 在线体验与文档 (#62): About 新增 SimLab 在线入口,中英文 README 更新最新界面截图、点位 / 控制点说明和循环演示动画',
@@ -78,8 +78,8 @@ export const RELEASE_NOTES: string[] = [
 export const ABOUT_RELEASE_NOTES = {
   'zh-CN': RELEASE_NOTES.slice(0, 3),
   'en-US': [
-    'v1.15.8 Added: add silent background updates (#68)',
-    'v1.15.8 Fixed: config: replace workspace on load (#65); log: include monitoring values in spontaneous events (#66); ci: recover nightly release preparation (#69)',
-    'v1.15.8 Changed: release: automate nightly release preparation (#67)',
+    'v1.15.8 Added: silently download and verify updates in the background, then offer install now, skip, or install on next launch (#68).',
+    'v1.15.8 Fixed: reset stale workspace state when loading a replacement config, include monitoring values in spontaneous-event logs, and recover or rebuild interrupted nightly release branches (#65/#66/#69/#71).',
+    'v1.15.8 Changed: automate nightly release PR preparation and post-merge validation, tagging, and multi-platform builds (#67).',
   ],
 } as const
