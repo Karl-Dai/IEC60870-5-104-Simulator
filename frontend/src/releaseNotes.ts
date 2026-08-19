@@ -5,6 +5,8 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.11 新增 / Added: slave: persist workspace and guard batch modal (#74)',
+  'v1.15.11 修复 / Fixed: slave: replace server TLS with keychain-free rustls (#75)',
   'v1.15.10 新增 / Added: 主/子站点位浏览、多选操作和双点状态图例统一；TLS 配置支持通过系统文件选择器选择证书与私钥',
   'v1.15.10 文档 / Documentation: 添加 MIT 许可证',
   'v1.15.9 新增 / Added: 主站连接工作区自动持久化，重启时恢复全部连接以及 TLS、SOCKS5 和协议参数',
@@ -83,7 +85,7 @@ export const RELEASE_NOTES: string[] = [
 export const ABOUT_RELEASE_NOTES = {
   'zh-CN': RELEASE_NOTES.slice(0, 2),
   'en-US': [
-    'v1.15.10 Added: Unified point browsing, multi-selection, and double-point legends across Master and Slave; TLS certificate and key paths can now be selected with the native file picker.',
-    'v1.15.10 Documentation: Added the MIT license.',
+    'v1.15.11 Added: slave: persist workspace and guard batch modal (#74)',
+    'v1.15.11 Fixed: slave: replace server TLS with keychain-free rustls (#75)',
   ],
 } as const
