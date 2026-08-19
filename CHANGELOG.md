@@ -6,11 +6,11 @@
 
 ### Added 新增
 
-- slave: persist workspace and guard batch modal (#74)
+- 子站服务器、逻辑站、点位定义、TLS 与运行参数自动持久化，应用重启后以停止态恢复；批量添加点位弹窗点击遮罩不再误关 / Slave servers, stations, point definitions, TLS settings, and runtime parameters now persist and restore stopped; backdrop clicks no longer close the Batch Add Points form (#74)
 
 ### Fixed 修复
 
-- slave: replace server TLS with keychain-free rustls (#75)
+- 子站 TLS 服务端改用纯 Rust rustls，PEM 证书/私钥不再触发 macOS `identity` 钥匙串密码框，并补齐 mTLS 客户端证书校验 / Slave server TLS now uses pure-Rust rustls, eliminating macOS `identity` Keychain prompts for PEM credentials and enforcing configured mTLS client certificate verification (#75)
 
 ### Notes 说明
 
