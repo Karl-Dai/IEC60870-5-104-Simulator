@@ -1,0 +1,58 @@
+name: PR Agent
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Automatic reviews use repository branches so forked PRs cannot consume the
+    # API key. Trusted collaborators can still review a fork via a PR comment.
+    if: >-
+      github.event.sender.type != 'Bot' &&
+      (
+        (github.event_name == 'pull_request' &&
+         github.event.pull_request.head.repo.full_name == github.repository) ||
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request &&
+         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                  github.event.comment.author_association))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      # PR-Agent reads the diff through the GitHub API. Do not add checkout here:
+      # issue_comment may target an untrusted fork while this job has secrets.
+      - name: Review pull request
+        uses: the-pr-agent/pr-agent@f6af7d77554ff8d26adffded077e6461329e92fa # v0.42.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_KEY: ${{ secrets.AI_REVIEW_API_KEY }}
+          OPENAI.API_BASE: https://ai.carldai.cloud/v1
+
+          config.model: openai/qwen3-coder-next
+          config.fallback_models: '["openai/deepseek-v4-pro"]'
+          config.custom_model_max_tokens: "32768"
+          config.response_language: zh-CN
+          config.ai_timeout: "120"
+
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
+          github_action_config.pr_actions: '["opened","reopened","ready_for_review","synchronize"]'
+
+          pr_reviewer.extra_instructions: >-
+            只报告可复现、可操作的问题，避免纯风格建议。重点检查 Rust
+            并发与错误处理、TLS/证书安全、IEC 60870-5-104 协议语义、Tauri
+            命令与 Vue/TypeScript 调用的一致性，以及更新和发布流程的回归风险。
