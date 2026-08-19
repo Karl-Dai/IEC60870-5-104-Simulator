@@ -4,6 +4,7 @@ use crate::log_entry::{Direction, FrameLabel, LogEntry};
 use crate::types::{AsduTypeId, DataCategory, QualityFlags};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::BufReader;
 use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -48,14 +49,81 @@ pub struct SlaveTlsConfig {
     pub ca_file: String,
     #[serde(default)]
     pub require_client_cert: bool,
-    /// Optional PKCS#12 (.p12/.pfx) identity file. When set, cert_file and
-    /// key_file are ignored for identity loading. Required on macOS when using
-    /// ECDSA keys (native-tls / Security framework limitation).
+    /// Legacy PKCS#12 (.p12/.pfx) identity path. Kept for configuration-file
+    /// compatibility; the keychain-free rustls server requires PEM instead.
     #[serde(default)]
     pub pkcs12_file: String,
     /// Password for the PKCS#12 file (may be empty string).
     #[serde(default)]
     pub pkcs12_password: String,
+}
+
+fn load_pem_certificates(
+    path: &str,
+    label: &str,
+) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, SlaveError> {
+    let path = crate::tls_key::sanitize_fs_path(path);
+    let file = std::fs::File::open(path)
+        .map_err(|e| SlaveError::TlsError(format!("读取{}失败 {}: {}", label, path, e)))?;
+    let certificates = rustls_pemfile::certs(&mut BufReader::new(file))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| SlaveError::TlsError(format!("解析{}失败 {}: {}", label, path, e)))?;
+    if certificates.is_empty() {
+        return Err(SlaveError::TlsError(format!(
+            "{}中没有 PEM CERTIFICATE: {}",
+            label, path,
+        )));
+    }
+    Ok(certificates)
+}
+
+fn load_pem_private_key(
+    path: &str,
+) -> Result<rustls::pki_types::PrivateKeyDer<'static>, SlaveError> {
+    let path = crate::tls_key::sanitize_fs_path(path);
+    let file = std::fs::File::open(path)
+        .map_err(|e| SlaveError::TlsError(format!("读取私钥失败 {}: {}", path, e)))?;
+    rustls_pemfile::private_key(&mut BufReader::new(file))
+        .map_err(|e| SlaveError::TlsError(format!("解析私钥失败 {}: {}", path, e)))?
+        .ok_or_else(|| SlaveError::TlsError(format!(
+            "私钥文件中没有 PKCS#8、PKCS#1 或 SEC1 PEM 私钥: {}",
+            path,
+        )))
+}
+
+fn build_rustls_server_config(cfg: &SlaveTlsConfig) -> Result<rustls::ServerConfig, SlaveError> {
+    if !cfg.pkcs12_file.trim().is_empty() {
+        return Err(SlaveError::TlsError(format!(
+            "子站 rustls 不支持 PKCS#12/PFX 身份文件 {}: 请改用 PEM 证书链和 PEM 私钥",
+            crate::tls_key::sanitize_fs_path(&cfg.pkcs12_file),
+        )));
+    }
+
+    let certificates = load_pem_certificates(&cfg.cert_file, "证书链")?;
+    let private_key = load_pem_private_key(&cfg.key_file)?;
+
+    let builder = rustls::ServerConfig::builder();
+    if cfg.require_client_cert {
+        let ca_certificates = load_pem_certificates(&cfg.ca_file, "客户端 CA 证书")?;
+        let mut roots = rustls::RootCertStore::empty();
+        for certificate in ca_certificates {
+            roots.add(certificate).map_err(|e| {
+                SlaveError::TlsError(format!("客户端 CA 证书不可用: {}", e))
+            })?;
+        }
+        let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+            .build()
+            .map_err(|e| SlaveError::TlsError(format!("创建客户端证书校验器失败: {}", e)))?;
+        builder
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(certificates, private_key)
+            .map_err(|e| SlaveError::TlsError(format!("创建 rustls 服务端配置失败: {}", e)))
+    } else {
+        builder
+            .with_no_client_auth()
+            .with_single_cert(certificates, private_key)
+            .map_err(|e| SlaveError::TlsError(format!("创建 rustls 服务端配置失败: {}", e)))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -290,8 +358,10 @@ impl RemoteOperationConfig {
 #[allow(dead_code)]
 enum SlaveStream {
     Plain(TcpStream),
-    Tls(native_tls::TlsStream<TcpStream>),
+    Tls(SlaveTlsStream),
 }
+
+type SlaveTlsStream = rustls::StreamOwned<rustls::ServerConnection, TcpStream>;
 
 impl std::io::Read for SlaveStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -1829,28 +1899,8 @@ impl SlaveServer {
             .await
             .map_err(|e| classify_bind_error(&addr_str, &e))?;
 
-        let tls_acceptor: Option<Arc<native_tls::TlsAcceptor>> = if self.transport.tls.enabled {
-            let cfg = &self.transport.tls;
-            let identity = if !cfg.pkcs12_file.is_empty() {
-                // 剥掉 Windows「复制为路径」带来的包裹引号/空白(否则 os error 123)。
-                let p12_path = crate::tls_key::sanitize_fs_path(&cfg.pkcs12_file);
-                let p12 = std::fs::read(p12_path)
-                    .map_err(|e| SlaveError::TlsError(format!("读取 PKCS12 {}: {}", p12_path, e)))?;
-                native_tls::Identity::from_pkcs12(&p12, &cfg.pkcs12_password)
-                    .map_err(|e| SlaveError::TlsError(format!("加载 PKCS12 身份: {}", e)))?
-            } else {
-                let cert_path = crate::tls_key::sanitize_fs_path(&cfg.cert_file);
-                let cert = std::fs::read(cert_path)
-                    .map_err(|e| SlaveError::TlsError(format!("读取证书 {}: {}", cert_path, e)))?;
-                // PKCS#1 → PKCS#8 自动转换,详见 master.rs 同段注释。
-                let key = crate::tls_key::load_key_as_pkcs8_pem(&cfg.key_file)
-                    .map_err(SlaveError::TlsError)?;
-                native_tls::Identity::from_pkcs8(&cert, &key)
-                    .map_err(|e| SlaveError::TlsError(format!("加载身份: {}", e)))?
-            };
-            let mut builder = native_tls::TlsAcceptor::builder(identity);
-            builder.min_protocol_version(Some(native_tls::Protocol::Tlsv12));
-            Some(Arc::new(builder.build().map_err(|e| SlaveError::TlsError(format!("创建接受器: {}", e)))?))
+        let tls_config: Option<Arc<rustls::ServerConfig>> = if self.transport.tls.enabled {
+            Some(Arc::new(build_rustls_server_config(&self.transport.tls)?))
         } else { None };
 
         // 每次启动重建停止标志与通知句柄:上一轮的任务(写任务 5ms 轮询、TLS 阻塞
@@ -1974,12 +2024,12 @@ impl SlaveServer {
                         let stations = stations.clone();
                         let lc = log_collector.clone();
                         let flag = shutdown_flag.clone();
-                        let tls_acceptor = tls_acceptor.clone();
+                        let tls_config = tls_config.clone();
                         let connections = connections.clone();
                         let conn_remote_ops = remote_ops.clone();
                         let conn_protocol_timing = protocol_timing.clone();
 
-                        if tls_acceptor.is_some() {
+                        if tls_config.is_some() {
                             // TLS: blocking I/O via spawn_blocking.
                             // Create a shared queue so queue_spontaneous() can enqueue frames
                             // that the blocking loop drains to the TLS stream.
@@ -1998,24 +2048,38 @@ impl SlaveServer {
                             tokio::task::spawn_blocking(move || {
                                 let tcp_stream = stream.into_std().expect("into_std");
                                 // into_std() preserves tokio's non-blocking mode; switch to
-                                // blocking so native-tls can perform synchronous handshake I/O.
+                                // blocking so rustls can perform synchronous handshake I/O.
                                 tcp_stream.set_nonblocking(false).expect("set_nonblocking(false)");
-                                let acceptor = tls_acceptor.as_ref().unwrap();
-                                let mut tls_stream = match acceptor.accept(tcp_stream) {
-                                    Ok(s) => s,
+                                let connection = match rustls::ServerConnection::new(
+                                    Arc::clone(tls_config.as_ref().unwrap()),
+                                ) {
+                                    Ok(connection) => connection,
                                     Err(e) => {
+                                        if let Some(ref lc) = lc {
+                                            lc.try_add(LogEntry::new(
+                                                Direction::Rx, FrameLabel::ConnectionEvent,
+                                                format!("TLS 初始化失败: {} - {}", peer_str, e),
+                                            ));
+                                        }
+                                        let rt = tokio::runtime::Handle::try_current();
+                                        if let Ok(h) = rt { h.block_on(async { tls_connections.write().await.remove(&peer_addr); }); }
+                                        return;
+                                    }
+                                };
+                                let mut tls_stream = rustls::StreamOwned::new(connection, tcp_stream);
+                                while tls_stream.conn.is_handshaking() {
+                                    if let Err(e) = tls_stream.conn.complete_io(&mut tls_stream.sock) {
                                         if let Some(ref lc) = lc {
                                             lc.try_add(LogEntry::new(
                                                 Direction::Rx, FrameLabel::ConnectionEvent,
                                                 format!("TLS 握手失败: {} - {}", peer_str, e),
                                             ));
                                         }
-                                        // Clean up connection entry on failure
                                         let rt = tokio::runtime::Handle::try_current();
                                         if let Ok(h) = rt { h.block_on(async { tls_connections.write().await.remove(&peer_addr); }); }
                                         return;
                                     }
-                                };
+                                }
                                 // Set read timeout so the loop can periodically drain the write queue.
                                 let _ = tls_stream.get_ref().set_read_timeout(Some(std::time::Duration::from_millis(100)));
                                 if let Some(ref lc) = lc {
@@ -2568,7 +2632,7 @@ async fn handle_client_read_loop(
 // ---------------------------------------------------------------------------
 
 fn handle_client_blocking(
-    stream: &mut native_tls::TlsStream<TcpStream>,
+    stream: &mut SlaveTlsStream,
     stations: SharedStations,
     log_collector: Option<Arc<LogCollector>>,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
@@ -2591,7 +2655,7 @@ fn handle_client_blocking(
     let mut select_state: SelectStateMap = SelectStateMap::new();
 
     // Drain the shared write queue to the TLS stream.
-    let drain_queue = |stream: &mut native_tls::TlsStream<TcpStream>, queue: &SharedQueue, rt: &tokio::runtime::Handle| {
+    let drain_queue = |stream: &mut SlaveTlsStream, queue: &SharedQueue, rt: &tokio::runtime::Handle| {
         let pending = rt.block_on(async {
             let mut q = queue.lock().await;
             if q.is_empty() { Vec::new() } else { q.drain(..).collect::<Vec<u8>>() }
@@ -2873,7 +2937,7 @@ fn handle_client_blocking(
 }
 
 async fn send_gi_response_blocking(
-    stream: &mut native_tls::TlsStream<TcpStream>,
+    stream: &mut SlaveTlsStream,
     station: &Station,
     seq: &SharedSeq,
     ops: &RemoteOperationConfig,
@@ -3661,6 +3725,66 @@ fn classify_bind_error(addr: &str, e: &std::io::Error) -> SlaveError {
 mod tests {
     use super::*;
     use crate::data_point::ControlTarget;
+
+    fn write_test_tls_identity() -> (tempfile::TempDir, String, String) {
+        let rcgen::CertifiedKey { cert, key_pair } =
+            rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("server.pem");
+        let key_path = dir.path().join("server-key.pem");
+        std::fs::write(&cert_path, cert.pem()).unwrap();
+        std::fs::write(&key_path, key_pair.serialize_pem()).unwrap();
+        (
+            dir,
+            cert_path.to_string_lossy().into_owned(),
+            key_path.to_string_lossy().into_owned(),
+        )
+    }
+
+    #[test]
+    fn rustls_server_config_loads_pem_without_native_identity() {
+        let (_dir, cert_file, key_file) = write_test_tls_identity();
+        let config = SlaveTlsConfig {
+            enabled: true,
+            cert_file,
+            key_file,
+            ..Default::default()
+        };
+
+        build_rustls_server_config(&config).unwrap();
+    }
+
+    #[test]
+    fn rustls_server_config_rejects_legacy_pkcs12_with_migration_message() {
+        let config = SlaveTlsConfig {
+            enabled: true,
+            pkcs12_file: "/tmp/legacy-server.p12".to_string(),
+            pkcs12_password: "secret".to_string(),
+            ..Default::default()
+        };
+
+        let error = build_rustls_server_config(&config).unwrap_err().to_string();
+
+        assert!(error.contains("PKCS#12/PFX"), "unexpected error: {error}");
+        assert!(error.contains("PEM"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn rustls_server_config_rejects_mismatched_certificate_and_key() {
+        let (cert_dir, cert_file, _) = write_test_tls_identity();
+        let (key_dir, _, key_file) = write_test_tls_identity();
+        let config = SlaveTlsConfig {
+            enabled: true,
+            cert_file,
+            key_file,
+            ..Default::default()
+        };
+
+        let error = build_rustls_server_config(&config).unwrap_err().to_string();
+        drop((cert_dir, key_dir));
+
+        assert!(error.contains("rustls"), "unexpected error: {error}");
+    }
 
     fn control_command(type_id: AsduTypeId, ioa: u32, value: CommandValue) -> ParsedControlCommand {
         ParsedControlCommand {

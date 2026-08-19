@@ -38,12 +38,12 @@ async fn tls_send_counter_read_returns_under_100ms_when_peer_is_silent() {
         port,
         tls: SlaveTlsConfig {
             enabled: true,
-            cert_file: String::new(),
-            key_file: String::new(),
+            cert_file: paths.server_cert.to_str().unwrap().to_string(),
+            key_file: paths.server_key.to_str().unwrap().to_string(),
             ca_file: String::new(),
             require_client_cert: false,
-            pkcs12_file: paths.server_pkcs12.to_str().unwrap().to_string(),
-            pkcs12_password: cert_gen::PKCS12_PASS.to_string(),
+            pkcs12_file: String::new(),
+            pkcs12_password: String::new(),
         },
     };
     let mut slave = SlaveServer::new(transport);
