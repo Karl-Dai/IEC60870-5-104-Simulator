@@ -4,7 +4,7 @@
 
 use crate::data_point::{DataPoint, InformationObjectDef};
 use crate::master::Socks5Config;
-use crate::slave::{ProtocolTimingConfig, RemoteOperationConfig};
+use crate::slave::{ProtocolTimingConfig, RemoteOperationConfig, SlaveTlsConfig};
 use serde::{Deserialize, Serialize};
 
 pub const SLAVE_CONFIG_APP: &str = "iec104-slave";
@@ -26,6 +26,10 @@ pub struct SlaveStationConfig {
 pub struct SlaveServerConfig {
     pub bind_address: String,
     pub port: u16,
+    /// TLS transport settings. Older version-1 files omitted this field and
+    /// therefore continue to load as plain TCP servers.
+    #[serde(default)]
+    pub tls: SlaveTlsConfig,
     pub stations: Vec<SlaveStationConfig>,
     /// 协议时序 (t0/t1/t2/t3/k/w)。旧文件缺失时使用默认值。
     #[serde(default)]
@@ -163,9 +167,19 @@ mod tests {
 
     #[test]
     fn slave_file_round_trip() {
+        let tls = SlaveTlsConfig {
+            enabled: true,
+            cert_file: "/tmp/server.crt".to_string(),
+            key_file: "/tmp/server.key".to_string(),
+            ca_file: "/tmp/ca.crt".to_string(),
+            require_client_cert: true,
+            pkcs12_file: String::new(),
+            pkcs12_password: String::new(),
+        };
         let file = SlaveConfigFile::new(vec![SlaveServerConfig {
             bind_address: "0.0.0.0".to_string(),
             port: 2404,
+            tls,
             stations: vec![SlaveStationConfig {
                 common_address: 1,
                 name: "站1".to_string(),
@@ -179,6 +193,9 @@ mod tests {
         assert_eq!(json, parsed.to_json().unwrap());
         assert_eq!(parsed.servers.len(), 1);
         assert_eq!(parsed.servers[0].stations[0].common_address, 1);
+        assert!(parsed.servers[0].tls.enabled);
+        assert_eq!(parsed.servers[0].tls.cert_file, "/tmp/server.crt");
+        assert!(parsed.servers[0].tls.require_client_cert);
     }
 
     #[test]
@@ -195,6 +212,7 @@ mod tests {
         let parsed = SlaveConfigFile::from_json(legacy).unwrap();
         let s = &parsed.servers[0];
         assert_eq!(s.protocol_timing.t0, 30);
+        assert!(!s.tls.enabled);
         assert!(s.remote_ops.answer_general_interrogation);
         assert!(
             s.remote_ops.auto_map_commands,
@@ -235,6 +253,7 @@ mod tests {
             let file = SlaveConfigFile::new(vec![SlaveServerConfig {
                 bind_address: "0.0.0.0".to_string(),
                 port: 2404,
+                tls: SlaveTlsConfig::default(),
                 stations: vec![],
                 protocol_timing: ProtocolTimingConfig::default(),
                 remote_ops,

@@ -5,7 +5,9 @@
 //! station's runtime point-mutation settings so a spreadsheet round trip does
 //! not silently turn simulations off.
 
-use crate::commands::{parse_asdu_type, validate_control_point_options};
+use crate::commands::{
+    parse_asdu_type, persist_workspace_after, validate_control_point_options,
+};
 use crate::state::AppState;
 use csv::{QuoteStyle, ReaderBuilder, StringRecord, Terminator, Trim, WriterBuilder};
 use iec104sim_core::data_point::{ControlTarget, DataPoint, InformationObjectDef};
@@ -16,7 +18,7 @@ use iec104sim_core::slave::{
 use iec104sim_core::types::{AsduTypeId, DataCategory};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 const IOA_MAX: u32 = 0x00FF_FFFF;
 const PERIOD_MIN_MS: u32 = 50;
@@ -1143,6 +1145,7 @@ pub async fn save_point_config_csv_template(
 #[tauri::command]
 pub async fn import_point_config_csv(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     server_id: String,
     common_address: u16,
     path: String,
@@ -1175,6 +1178,8 @@ pub async fn import_point_config_csv(
         ensure_csv_import_stopped(&server.server)?;
         apply_point_import_outcome(&server.server, &parsed, common_address, mode).await?
     };
+
+    persist_workspace_after(&state, &app_handle, "importing point CSV").await;
 
     Ok(PointCsvImportResult {
         imported,

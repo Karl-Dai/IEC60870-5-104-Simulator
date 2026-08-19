@@ -12,7 +12,11 @@ use iec104sim_core::types::{AsduTypeId, QualityFlags};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_store::StoreExt;
+
+const WORKSPACE_STORE_FILE: &str = "slave_workspace.json";
+const WORKSPACE_STORE_KEY: &str = "workspace";
 
 // ---------------------------------------------------------------------------
 // Event Payloads
@@ -59,8 +63,10 @@ pub struct CreateServerRequest {
 #[tauri::command]
 pub async fn create_server(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: CreateServerRequest,
 ) -> Result<ServerInfo, String> {
+    state.wait_workspace_ready().await;
     // A full config load replaces both the server table and the ID allocation
     // range. Keep creation serialized with that workspace-wide mutation.
     let _workspace_guard = state.workspace_mutation.lock().await;
@@ -132,6 +138,8 @@ pub async fn create_server(
             log_collector,
         },
     );
+
+    persist_workspace_after(&state, &app_handle, "creating a server").await;
 
     Ok(info)
 }
@@ -249,9 +257,14 @@ pub(crate) async fn delete_server_impl(state: &AppState, id: &str) -> Result<(),
 #[tauri::command]
 pub async fn delete_server(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     id: String,
 ) -> Result<(), String> {
-    delete_server_impl(state.inner(), &id).await
+    state.wait_workspace_ready().await;
+    let _workspace_guard = state.workspace_mutation.lock().await;
+    delete_server_impl(state.inner(), &id).await?;
+    persist_workspace_after(&state, &app_handle, "deleting a server").await;
+    Ok(())
 }
 
 /// 本机可用的监听地址建议:0.0.0.0(全部网卡)在前,然后回环与各网卡 IPv4。
@@ -277,6 +290,7 @@ pub fn list_bind_address_suggestions() -> Vec<String> {
 pub async fn list_servers(
     state: State<'_, AppState>,
 ) -> Result<Vec<ServerInfo>, String> {
+    state.wait_workspace_ready().await;
     let servers = state.servers.read().await;
     let mut result = Vec::new();
 
@@ -347,6 +361,7 @@ pub struct UpdateServerTransportRequest {
 #[tauri::command]
 pub async fn update_server_transport(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: UpdateServerTransportRequest,
 ) -> Result<ServerInfo, String> {
     let mut servers = state.servers.write().await;
@@ -365,7 +380,7 @@ pub async fn update_server_transport(
     srv.server.transport.port = request.port;
 
     let station_count = srv.server.stations.read().await.len();
-    Ok(ServerInfo {
+    let info = ServerInfo {
         id: request.server_id.clone(),
         bind_address: srv.server.transport.bind_address.clone(),
         port: srv.server.transport.port,
@@ -373,7 +388,10 @@ pub async fn update_server_transport(
         station_count,
         client_count: srv.server.client_connection_count().await,
         use_tls: srv.server.transport.tls.enabled,
-    })
+    };
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "updating server transport").await;
+    Ok(info)
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +426,7 @@ fn station_info(station: &Station) -> StationInfo {
 #[tauri::command]
 pub async fn add_station(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: AddStationRequest,
 ) -> Result<StationInfo, String> {
     let servers = state.servers.read().await;
@@ -426,13 +445,15 @@ pub async fn add_station(
         .add_station(station)
         .await
         .map_err(|e| format!("failed to add station: {}", e))?;
-
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "adding a station").await;
     Ok(info)
 }
 
 #[tauri::command]
 pub async fn remove_station(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     server_id: String,
     common_address: u16,
 ) -> Result<(), String> {
@@ -445,7 +466,8 @@ pub async fn remove_station(
         .remove_station(common_address)
         .await
         .map_err(|e| format!("failed to remove station: {}", e))?;
-
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "removing a station").await;
     Ok(())
 }
 
@@ -461,6 +483,7 @@ pub struct UpdateStationRequest {
 #[tauri::command]
 pub async fn update_station(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: UpdateStationRequest,
 ) -> Result<StationInfo, String> {
     let servers = state.servers.read().await;
@@ -481,7 +504,11 @@ pub async fn update_station(
     let station = stations
         .get(&request.common_address)
         .ok_or_else(|| format!("station CA={} not found after update", request.common_address))?;
-    Ok(station_info(station))
+    let info = station_info(station);
+    drop(stations);
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "updating a station").await;
+    Ok(info)
 }
 
 #[tauri::command]
@@ -655,6 +682,7 @@ pub struct AddDataPointRequest {
 #[tauri::command]
 pub async fn add_data_point(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: AddDataPointRequest,
 ) -> Result<(), String> {
     let servers = state.servers.read().await;
@@ -694,7 +722,11 @@ pub async fn add_data_point(
                 ioa, request.asdu_type, request.common_address
             ),
             other => format!("failed to add point: {}", other),
-        })
+        })?;
+    drop(stations);
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "adding a data point").await;
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -814,9 +846,12 @@ pub(crate) async fn update_data_point_definition_impl(
 #[tauri::command]
 pub async fn update_data_point_definition(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: UpdateDataPointDefinitionRequest,
 ) -> Result<(), String> {
-    update_data_point_definition_impl(state.inner(), request).await
+    update_data_point_definition_impl(state.inner(), request).await?;
+    persist_workspace_after(&state, &app_handle, "updating a data point definition").await;
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -908,6 +943,7 @@ const BATCH_ADD_MAX: usize = 100_000;
 #[tauri::command]
 pub async fn batch_add_data_points(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: BatchAddDataPointsRequest,
 ) -> Result<u32, String> {
     let servers = state.servers.read().await;
@@ -938,7 +974,7 @@ pub async fn batch_add_data_points(
         .get_mut(&request.common_address)
         .ok_or_else(|| format!("station CA={} not found", request.common_address))?;
 
-    station
+    let created = station
         .batch_add_points_list(
             &ioas,
             asdu_type,
@@ -947,12 +983,17 @@ pub async fn batch_add_data_points(
             request.command_qualifier,
             request.select_before_operate,
         )
-        .map_err(|e| format!("failed to batch add points: {}", e))
+        .map_err(|e| format!("failed to batch add points: {}", e))?;
+    drop(stations);
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "batch adding data points").await;
+    Ok(created)
 }
 
 #[tauri::command]
 pub async fn remove_data_point(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     server_id: String,
     common_address: u16,
     ioa: u32,
@@ -985,7 +1026,10 @@ pub async fn remove_data_point(
             },
         )
         .await
-        .map(|_| ())
+        .map(|_| ())?;
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "removing a data point").await;
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1112,9 +1156,12 @@ pub(crate) async fn batch_migrate_data_point_types_impl(
 #[tauri::command]
 pub async fn batch_migrate_data_point_types(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: BatchMigrateDataPointTypesRequest,
 ) -> Result<usize, String> {
-    batch_migrate_data_point_types_impl(state.inner(), request).await
+    let changed = batch_migrate_data_point_types_impl(state.inner(), request).await?;
+    persist_workspace_after(&state, &app_handle, "batch migrating data point types").await;
+    Ok(changed)
 }
 
 /// Remove several points in one locked write. Returns the count removed.
@@ -1122,6 +1169,7 @@ pub async fn batch_migrate_data_point_types(
 #[tauri::command]
 pub async fn batch_remove_data_points(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     server_id: String,
     common_address: u16,
     points: Vec<RemovePointTarget>,
@@ -1149,7 +1197,7 @@ pub async fn batch_remove_data_points(
             preserve_from: None,
         })
         .collect();
-    srv.server
+    let removed = srv.server
         .transact_station_point_mutations(
             common_address,
             StationMutationBatchMode::Merge,
@@ -1158,11 +1206,14 @@ pub async fn batch_remove_data_points(
                 let station = stations
                     .get_mut(&common_address)
                     .ok_or_else(|| format!("station CA={} not found", common_address))?;
-                Ok(station.remove_points(&targets))
+                Ok::<usize, String>(station.remove_points(&targets))
             },
         )
         .await
-        .map(|(removed, _)| removed)
+        .map(|(removed, _)| removed)?;
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "batch removing data points").await;
+    Ok(removed)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1242,9 +1293,12 @@ pub(crate) async fn batch_update_control_options_impl(
 #[tauri::command]
 pub async fn batch_update_control_options(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: BatchControlOptionsRequest,
 ) -> Result<usize, String> {
-    batch_update_control_options_impl(state.inner(), request).await
+    let changed = batch_update_control_options_impl(state.inner(), request).await?;
+    persist_workspace_after(&state, &app_handle, "batch updating control options").await;
+    Ok(changed)
 }
 
 /// 按 `point` 当前值的类型把值串解析为 `DataPointValue`。单点改值与批量改值共用,
@@ -1950,6 +2004,7 @@ pub struct ProtocolTimingRequest {
 #[tauri::command]
 pub async fn set_protocol_timing(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: ProtocolTimingRequest,
 ) -> Result<Vec<iec104sim_core::timing::TimingCorrection>, String> {
     let servers = state.servers.read().await;
@@ -1961,6 +2016,8 @@ pub async fn set_protocol_timing(
     let mut timing = request.timing;
     let corrections = timing.normalize();
     srv.server.set_protocol_timing(timing).await;
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "updating protocol timing").await;
     Ok(corrections)
 }
 
@@ -1986,6 +2043,7 @@ pub struct RemoteOpsRequest {
 #[tauri::command]
 pub async fn set_remote_operation_config(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: RemoteOpsRequest,
 ) -> Result<(), String> {
     let servers = state.servers.read().await;
@@ -1993,6 +2051,8 @@ pub async fn set_remote_operation_config(
         .get(&request.server_id)
         .ok_or_else(|| format!("server {} not found", request.server_id))?;
     srv.server.set_remote_ops(request.ops).await;
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "updating remote operation config").await;
     Ok(())
 }
 
@@ -2128,32 +2188,91 @@ pub async fn save_config(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<(), String> {
-    use iec104sim_core::config::{SlaveConfigFile, SlaveServerConfig, SlaveStationConfig};
-
-    let json = {
-        let servers = state.servers.read().await;
-        let mut out = Vec::new();
-        for (_id, srv_state) in servers.iter() {
-            let stations = srv_state.server.stations.read().await;
-            let mut st = Vec::new();
-            for (_ca, station) in stations.iter() {
-                st.push(SlaveStationConfig {
-                    common_address: station.common_address,
-                    name: station.name.clone(),
-                    object_defs: station.object_defs.clone(),
-                });
-            }
-            out.push(SlaveServerConfig {
-                bind_address: srv_state.server.transport.bind_address.clone(),
-                port: srv_state.server.transport.port,
-                stations: st,
-                protocol_timing: srv_state.server.get_protocol_timing().await,
-                remote_ops: srv_state.server.get_remote_ops().await,
-            });
-        }
-        SlaveConfigFile::new(out).to_json()?
-    };
+    state.wait_workspace_ready().await;
+    let json = serialize_workspace(&state).await?;
     std::fs::write(&path, json).map_err(|e| format!("写入文件失败: {e}"))
+}
+
+pub(crate) async fn serialize_workspace(state: &AppState) -> Result<String, String> {
+    use iec104sim_core::config::SlaveStationConfig;
+
+    let servers = state.servers.read().await;
+    let mut ordered: Vec<_> = servers.iter().collect();
+    ordered.sort_by_key(|(id, _)| {
+        id.strip_prefix("server_")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(u32::MAX)
+    });
+
+    let mut out = Vec::with_capacity(ordered.len());
+    for (_id, srv_state) in ordered {
+        let stations = srv_state.server.stations.read().await;
+        let mut station_configs: Vec<_> = stations
+            .values()
+            .map(|station| SlaveStationConfig {
+                common_address: station.common_address,
+                name: station.name.clone(),
+                object_defs: station.object_defs.clone(),
+            })
+            .collect();
+        station_configs.sort_by_key(|station| station.common_address);
+
+        out.push(iec104sim_core::config::SlaveServerConfig {
+            bind_address: srv_state.server.transport.bind_address.clone(),
+            port: srv_state.server.transport.port,
+            tls: srv_state.server.transport.tls.clone(),
+            stations: station_configs,
+            protocol_timing: srv_state.server.get_protocol_timing().await,
+            remote_ops: srv_state.server.get_remote_ops().await,
+        });
+    }
+    SlaveConfigFile::new(out).to_json()
+}
+
+pub(crate) async fn persist_workspace(
+    state: &AppState,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
+    let _persistence_guard = state.persistence_mutation.lock().await;
+    let json = serialize_workspace(state).await?;
+    let store = app_handle
+        .store(WORKSPACE_STORE_FILE)
+        .map_err(|error| format!("打开工作区存储失败: {error}"))?;
+    store.set(WORKSPACE_STORE_KEY, serde_json::Value::String(json));
+    store
+        .save()
+        .map_err(|error| format!("保存工作区失败: {error}"))
+}
+
+pub(crate) async fn persist_workspace_after(
+    state: &AppState,
+    app_handle: &AppHandle,
+    reason: &str,
+) {
+    if let Err(error) = persist_workspace(state, app_handle).await {
+        log::warn!("failed to persist slave workspace after {reason}: {error}");
+    }
+}
+
+pub(crate) async fn restore_persisted_workspace(app_handle: AppHandle) -> Result<(), String> {
+    let store = app_handle
+        .store(WORKSPACE_STORE_FILE)
+        .map_err(|error| format!("打开工作区存储失败: {error}"))?;
+    let Some(content) = store
+        .get(WORKSPACE_STORE_KEY)
+        .and_then(|value| value.as_str().map(str::to_owned))
+    else {
+        return Ok(());
+    };
+
+    let file = SlaveConfigFile::from_json(&content)?;
+    let state: State<'_, AppState> = app_handle.state();
+    let outcome = load_config_impl(state.inner(), file).await?;
+    if !outcome.corrected_events.is_empty() {
+        let _ = app_handle.emit("config-timing-corrected", &outcome.corrected_events);
+    }
+    log::info!("restored {} persisted slave server(s)", outcome.imported);
+    Ok(())
 }
 
 #[tauri::command]
@@ -2162,6 +2281,7 @@ pub async fn load_config(
     app_handle: AppHandle,
     path: String,
 ) -> Result<usize, String> {
+    state.wait_workspace_ready().await;
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("读取文件失败: {e}"))?;
     let file = SlaveConfigFile::from_json(&content)?;
@@ -2170,6 +2290,7 @@ pub async fn load_config(
     if !outcome.corrected_events.is_empty() {
         let _ = app_handle.emit("config-timing-corrected", &outcome.corrected_events);
     }
+    persist_workspace_after(&state, &app_handle, "loading a config").await;
     Ok(outcome.imported)
 }
 
@@ -2202,7 +2323,7 @@ async fn prepare_slave_config(file: SlaveConfigFile) -> Result<PreparedSlaveConf
         let transport = SlaveTransportConfig {
             bind_address: srv.bind_address,
             port: srv.port,
-            tls: Default::default(),
+            tls: srv.tls,
         };
         let log_collector = Arc::new(LogCollector::new());
         let server = SlaveServer::new(transport).with_log_collector(log_collector.clone());
@@ -2414,6 +2535,7 @@ mod tests {
         SlaveServerConfig {
             bind_address: "127.0.0.1".to_string(),
             port,
+            tls: SlaveTlsConfig::default(),
             stations,
             protocol_timing: ProtocolTimingConfig::default(),
             remote_ops: RemoteOperationConfig::default(),
@@ -2430,6 +2552,135 @@ mod tests {
             },
         );
         state
+    }
+
+    #[tokio::test]
+    async fn automatic_workspace_snapshot_is_ordered_and_excludes_runtime_values() {
+        let mut tls_transport = test_transport(2402);
+        tls_transport.tls = SlaveTlsConfig {
+            enabled: true,
+            cert_file: "/tmp/server.crt".to_string(),
+            key_file: "/tmp/server.key".to_string(),
+            ca_file: "/tmp/ca.crt".to_string(),
+            require_client_cert: true,
+            pkcs12_file: String::new(),
+            pkcs12_password: String::new(),
+        };
+        let tls_server = SlaveServer::new(tls_transport);
+        let mut station_7 = Station::new(7, "point station");
+        let mut definition = ctl_def(100, AsduTypeId::MSpNa1);
+        definition.name = "persisted point".to_string();
+        station_7.add_point(definition).unwrap();
+        let point = station_7
+            .data_points
+            .get_mut(100, AsduTypeId::MSpNa1)
+            .unwrap();
+        point.value = DataPointValue::SinglePoint { value: true };
+        point.quality.iv = true;
+        tls_server.add_station(station_7).await.unwrap();
+        tls_server
+            .add_station(Station::new(3, "first by CA"))
+            .await
+            .unwrap();
+
+        let plain_server = SlaveServer::new(test_transport(2410));
+        plain_server
+            .add_station(Station::new(9, "plain"))
+            .await
+            .unwrap();
+
+        let state = AppState::new();
+        let mut servers = state.servers.write().await;
+        servers.insert(
+            "server_10".to_string(),
+            SlaveServerState {
+                server: plain_server,
+                log_collector: Arc::new(LogCollector::new()),
+            },
+        );
+        servers.insert(
+            "server_2".to_string(),
+            SlaveServerState {
+                server: tls_server,
+                log_collector: Arc::new(LogCollector::new()),
+            },
+        );
+        drop(servers);
+
+        let json = serialize_workspace(&state).await.unwrap();
+        let snapshot = SlaveConfigFile::from_json(&json).unwrap();
+        assert_eq!(
+            snapshot
+                .servers
+                .iter()
+                .map(|server| server.port)
+                .collect::<Vec<_>>(),
+            vec![2402, 2410],
+            "servers must follow their numeric server ID order",
+        );
+        assert_eq!(
+            snapshot.servers[0]
+                .stations
+                .iter()
+                .map(|station| station.common_address)
+                .collect::<Vec<_>>(),
+            vec![3, 7],
+        );
+        assert!(snapshot.servers[0].tls.enabled);
+        assert_eq!(snapshot.servers[0].tls.key_file, "/tmp/server.key");
+        assert_eq!(
+            snapshot.servers[0].stations[1].object_defs[0].name,
+            "persisted point",
+        );
+
+        let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let station = &raw["servers"][0]["stations"][1];
+        assert!(station.get("data_points").is_none());
+        let definition = &station["object_defs"][0];
+        assert!(definition.get("value").is_none());
+        assert!(definition.get("quality").is_none());
+        assert!(definition.get("timestamp").is_none());
+    }
+
+    #[tokio::test]
+    async fn load_config_restores_tls_and_point_definitions_as_stopped() {
+        let mut server_config = imported_server(2443, vec![imported_station(11, "restored")]);
+        server_config.tls = SlaveTlsConfig {
+            enabled: true,
+            cert_file: "/tmp/restored.crt".to_string(),
+            key_file: "/tmp/restored.key".to_string(),
+            ca_file: "/tmp/restored-ca.crt".to_string(),
+            require_client_cert: true,
+            pkcs12_file: String::new(),
+            pkcs12_password: String::new(),
+        };
+        let state = AppState::new();
+
+        let outcome = load_config_impl(
+            &state,
+            SlaveConfigFile::new(vec![server_config]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.imported, 1);
+        assert_eq!(*state.next_server_id.read().await, 2);
+        let servers = state.servers.read().await;
+        let restored = servers.get("server_1").unwrap();
+        assert_eq!(restored.server.state(), ServerState::Stopped);
+        assert!(restored.server.transport.tls.enabled);
+        assert_eq!(restored.server.transport.tls.cert_file, "/tmp/restored.crt");
+        let stations = restored.server.stations.read().await;
+        let station = stations.get(&11).unwrap();
+        assert_eq!(station.object_defs.len(), 1);
+        assert!(matches!(
+            &station
+                .data_points
+                .get(1, AsduTypeId::MSpNa1)
+                .unwrap()
+                .value,
+            DataPointValue::SinglePoint { value: false }
+        ));
     }
 
     #[tokio::test]

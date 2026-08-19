@@ -4,6 +4,7 @@ mod state;
 pub mod update;
 
 use state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -90,6 +91,12 @@ pub fn run() {
             }
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                if let Err(error) =
+                    commands::restore_persisted_workspace(app_handle.clone()).await
+                {
+                    log::warn!("failed to restore persisted slave workspace: {error}");
+                }
+                app_handle.state::<AppState>().mark_workspace_ready();
                 if let Err(error) = update::install_pending_update(app_handle).await {
                     log::warn!("automatic update on launch failed: {error}");
                 }

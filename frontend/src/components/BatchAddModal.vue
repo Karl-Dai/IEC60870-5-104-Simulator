@@ -311,17 +311,12 @@ async function handleConfirm() {
   }
 }
 
-function handleBackdropClick(e: MouseEvent) {
-  if ((e.target as HTMLElement).classList.contains('modal-backdrop')) {
-    emit('close')
-  }
-}
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="dialog-pop">
-    <div v-if="visible" class="modal-backdrop dialog-blur" @click="handleBackdropClick">
+    <div v-if="visible" class="modal-backdrop dialog-blur">
       <div class="modal">
         <div class="modal-header">
           <span class="modal-title">{{ t('batchModal.title') }}</span>

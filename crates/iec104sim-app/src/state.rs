@@ -3,7 +3,7 @@ use iec104sim_core::slave::SlaveServer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 
 /// Runtime state for a slave server.
 pub struct SlaveServerState {
@@ -18,6 +18,13 @@ pub struct AppState {
     /// Serializes whole-workspace mutations whose effects span both the server
     /// table and the ID allocator (currently create and full config replace).
     pub workspace_mutation: Mutex<()>,
+    /// Serializes automatic snapshots so an older concurrent save cannot
+    /// overwrite a newer workspace state on disk.
+    pub persistence_mutation: Mutex<()>,
+    /// Startup restores the last workspace asynchronously. The frontend's
+    /// first workspace read waits here instead of observing a transient empty
+    /// server table.
+    workspace_ready: watch::Sender<bool>,
 }
 
 impl Default for AppState {
@@ -26,6 +33,8 @@ impl Default for AppState {
             servers: RwLock::new(HashMap::new()),
             next_server_id: RwLock::new(1),
             workspace_mutation: Mutex::new(()),
+            persistence_mutation: Mutex::new(()),
+            workspace_ready: watch::channel(false).0,
         }
     }
 }
@@ -33,6 +42,19 @@ impl Default for AppState {
 impl AppState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub async fn wait_workspace_ready(&self) {
+        let mut ready = self.workspace_ready.subscribe();
+        while !*ready.borrow() {
+            if ready.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+
+    pub fn mark_workspace_ready(&self) {
+        self.workspace_ready.send_replace(true);
     }
 }
 
