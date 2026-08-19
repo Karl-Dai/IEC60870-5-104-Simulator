@@ -357,11 +357,23 @@ async fn test_rustls_mtls_rejects_client_without_certificate() {
     };
     let mut master = MasterConnection::new(config);
 
-    let result = master.connect().await;
-    sleep(Duration::from_millis(200)).await;
+    // Different native-tls backends surface the server alert at different
+    // times: Security.framework can fail connect() immediately, while OpenSSL
+    // may return Ok and observe the alert on the first application I/O. The
+    // authoritative server-side contract is that the unauthenticated session
+    // is rejected and removed.
+    if master.connect().await.is_ok() {
+        let _ = master.send_interrogation(1).await;
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while slave.client_connection_count().await != 0
+        && tokio::time::Instant::now() < deadline
+    {
+        sleep(Duration::from_millis(25)).await;
+    }
 
-    assert!(result.is_err(), "mTLS must reject a client without a certificate");
     assert_eq!(slave.client_connection_count().await, 0);
+    let _ = master.disconnect().await;
     slave.stop().await.unwrap();
 }
 
