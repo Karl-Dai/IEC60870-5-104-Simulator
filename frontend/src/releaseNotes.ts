@@ -5,6 +5,8 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.10 新增 / Added: 主/子站点位浏览、多选操作和双点状态图例统一；TLS 配置支持通过系统文件选择器选择证书与私钥',
+  'v1.15.10 文档 / Documentation: 添加 MIT 许可证',
   'v1.15.9 新增 / Added: 主站连接工作区自动持久化，重启时恢复全部连接以及 TLS、SOCKS5 和协议参数',
   'v1.15.9 修复 / Fixed: 增加启动恢复屏障和并发保存锁，避免多连接恢复、修改和保存竞态',
   'v1.15.9 改进 / Changed: 恢复连接默认不拨号；自动保存不含实时点表，手动保存仍保留快照',
@@ -79,10 +81,9 @@ export const RELEASE_NOTES: string[] = [
 // Keep the complete release history above for release automation, while the
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
-  'zh-CN': RELEASE_NOTES.slice(0, 3),
+  'zh-CN': RELEASE_NOTES.slice(0, 2),
   'en-US': [
-    'v1.15.9 Added: IEC104Master now persists its connection workspace and restores all connections, TLS, SOCKS5, and protocol settings on launch.',
-    'v1.15.9 Fixed: serialize startup restoration and concurrent saves to prevent workspace races and stale snapshots.',
-    'v1.15.9 Changed: restored connections stay disconnected; automatic saves omit live point snapshots while manual saves retain them.',
+    'v1.15.10 Added: Unified point browsing, multi-selection, and double-point legends across Master and Slave; TLS certificate and key paths can now be selected with the native file picker.',
+    'v1.15.10 Documentation: Added the MIT license.',
   ],
 } as const
