@@ -5,6 +5,8 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.12 改进 / Changed: add BYOK PR review agent (#77)',
+  'v1.15.12 测试 / Tests: tls: retry transient port collisions (#78)',
   'v1.15.11 新增 / Added: 子站服务器、逻辑站、点位定义、TLS 与运行参数自动持久化，重启后以停止态恢复；批量添加点位弹窗点击遮罩不再误关 (#74)',
   'v1.15.11 修复 / Fixed: 子站 TLS 服务端改用纯 Rust rustls，PEM 证书/私钥不再触发 macOS identity 钥匙串密码框，并补齐 mTLS 客户端证书校验 (#75)',
   'v1.15.10 新增 / Added: 主/子站点位浏览、多选操作和双点状态图例统一；TLS 配置支持通过系统文件选择器选择证书与私钥',
@@ -86,7 +88,7 @@ export const RELEASE_NOTES: string[] = [
 export const ABOUT_RELEASE_NOTES = {
   'zh-CN': RELEASE_NOTES.slice(0, 2),
   'en-US': [
-    'v1.15.11 Added: Slave servers, stations, point definitions, TLS settings, and runtime parameters now persist and restore stopped; backdrop clicks no longer close the Batch Add Points form.',
-    'v1.15.11 Fixed: Slave server TLS now uses pure-Rust rustls, eliminating macOS identity Keychain prompts for PEM credentials and enforcing configured mTLS client certificate verification.',
+    'v1.15.12 Changed: add BYOK PR review agent (#77)',
+    'v1.15.12 Tests: tls: retry transient port collisions (#78)',
   ],
 } as const
