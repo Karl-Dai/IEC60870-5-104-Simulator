@@ -5,7 +5,8 @@
 use iec104sim_core::data_point::DataPointValue;
 use iec104sim_core::master::{MasterConfig, MasterConnection, TlsConfig};
 use iec104sim_core::slave::{
-    RemoteOperationConfig, SlaveServer, SlaveTlsConfig, SlaveTransportConfig, Station,
+    RemoteOperationConfig, SlaveError, SlaveServer, SlaveTlsConfig, SlaveTransportConfig,
+    Station,
 };
 use iec104sim_core::types::AsduTypeId;
 use std::process::Command;
@@ -14,6 +15,41 @@ use tokio::time::{sleep, Duration};
 fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().port()
+}
+
+async fn start_slave_on_free_port(
+    tls: &SlaveTlsConfig,
+    station_name: &str,
+    point_count: u32,
+) -> (u16, SlaveServer) {
+    // free_port() releases its probe listener before SlaveServer binds, so a
+    // parallel test can legitimately claim the port in between those calls.
+    const MAX_BIND_ATTEMPTS: usize = 10;
+
+    for attempt in 1..=MAX_BIND_ATTEMPTS {
+        let port = free_port();
+        let transport = SlaveTransportConfig {
+            bind_address: "127.0.0.1".to_string(),
+            port,
+            tls: tls.clone(),
+        };
+        let mut slave = SlaveServer::new(transport);
+        slave
+            .add_station(Station::with_default_points(1, station_name, point_count))
+            .await
+            .unwrap();
+
+        match slave.start().await {
+            Ok(()) => return (port, slave),
+            Err(SlaveError::BindFailed {
+                code: "addr_in_use",
+                ..
+            }) if attempt < MAX_BIND_ATTEMPTS => continue,
+            Err(error) => panic!("failed to start test slave on attempt {attempt}: {error:?}"),
+        }
+    }
+
+    unreachable!("the final bind attempt returns or panics")
 }
 
 // native-tls on macOS imports client PKCS#12 identities through one process-
@@ -313,30 +349,20 @@ async fn test_tls_handshake_mtls() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_rustls_mtls_rejects_client_without_certificate() {
-    let port = free_port();
     let certs = cert_gen::generate();
     let tmp = tempfile::tempdir().unwrap();
     let paths = cert_gen::write_to_dir(&certs, tmp.path());
 
-    let transport = SlaveTransportConfig {
-        bind_address: "127.0.0.1".to_string(),
-        port,
-        tls: SlaveTlsConfig {
-            enabled: true,
-            cert_file: paths.server_cert.to_str().unwrap().to_string(),
-            key_file: paths.server_key.to_str().unwrap().to_string(),
-            ca_file: paths.ca_cert.to_str().unwrap().to_string(),
-            require_client_cert: true,
-            pkcs12_file: String::new(),
-            pkcs12_password: String::new(),
-        },
+    let tls = SlaveTlsConfig {
+        enabled: true,
+        cert_file: paths.server_cert.to_str().unwrap().to_string(),
+        key_file: paths.server_key.to_str().unwrap().to_string(),
+        ca_file: paths.ca_cert.to_str().unwrap().to_string(),
+        require_client_cert: true,
+        pkcs12_file: String::new(),
+        pkcs12_password: String::new(),
     };
-    let mut slave = SlaveServer::new(transport);
-    slave
-        .add_station(Station::with_default_points(1, "mTLS Required", 1))
-        .await
-        .unwrap();
-    slave.start().await.unwrap();
+    let (port, mut slave) = start_slave_on_free_port(&tls, "mTLS Required", 1).await;
     sleep(Duration::from_millis(200)).await;
 
     let config = MasterConfig {
