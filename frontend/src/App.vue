@@ -437,7 +437,9 @@ body {
 
 .panel-area {
   grid-area: panel;
+  min-width: 0;
   background: var(--c-mantle);
+  overflow-x: hidden;
   overflow-y: auto;
 }
 

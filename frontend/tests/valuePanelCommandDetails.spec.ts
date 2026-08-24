@@ -4,6 +4,8 @@ import { nextTick, ref } from 'vue'
 import { dialogKey } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
 import ValuePanel from '../src/components/ValuePanel.vue'
+import appSource from '../src/App.vue?raw'
+import valuePanelSource from '../src/components/ValuePanel.vue?raw'
 import type { DataPointInfo } from '../src/types'
 
 const invokeMock = vi.fn()
@@ -96,5 +98,33 @@ describe('Point Details command semantics', () => {
     expect(panel.text()).toContain('QL Qualifier')
     expect(panel.text()).toContain('5 — Reserved or application-defined')
     expect(panel.text()).toContain('Direct execute')
+  })
+
+  it('keeps long details and write controls inside the minimum-width panel', async () => {
+    const asduType = 'C_SE_TC_1'
+    const panel = await mountDetail(detail({
+      asdu_type: asduType,
+      name: 'A deliberately long point name that needs to wrap',
+      comment: 'A long operator note remains readable in a narrow panel',
+      timestamp: '2026-08-23 23:53:46.636',
+    }))
+
+    const typeValue = panel.find('.detail-value.truncatable')
+    expect(typeValue.attributes('title')).toBe('C_SE_TC_1 (Type ID: 63)')
+    expect(panel.findAll('.detail-value').some(value =>
+      value.attributes('title') === 'A deliberately long point name that needs to wrap'
+    )).toBe(true)
+    expect(panel.find('.quality-row').exists()).toBe(true)
+
+    expect(valuePanelSource).toMatch(/\.detail-value\s*\{[^}]*min-width:\s*0/s)
+    expect(valuePanelSource).toMatch(/\.write-input\s*\{[^}]*min-width:\s*0/s)
+    expect(valuePanelSource.match(/class="write-row value-write-row"/g)).toHaveLength(2)
+    expect(valuePanelSource).toMatch(
+      /\.value-write-row\s*\{[^}]*flex-direction:\s*column/s
+    )
+    expect(valuePanelSource).toMatch(/@container \(max-width:\s*240px\)[\s\S]*\.quality-row/)
+    expect(appSource).toMatch(
+      /\.panel-area\s*\{[^}]*min-width:\s*0[^}]*overflow-x:\s*hidden/s
+    )
   })
 })
