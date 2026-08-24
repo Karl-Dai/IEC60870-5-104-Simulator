@@ -5,6 +5,7 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.13 修复 / Fixed: 子站数据点详情面板在窄宽度下不再重叠、裁切或横向溢出 (#81)',
   'v1.15.12 改进 / Changed: add BYOK PR review agent (#77)',
   'v1.15.12 测试 / Tests: tls: retry transient port collisions (#78)',
   'v1.15.11 新增 / Added: 子站服务器、逻辑站、点位定义、TLS 与运行参数自动持久化，重启后以停止态恢复；批量添加点位弹窗点击遮罩不再误关 (#74)',
@@ -85,9 +86,8 @@ export const RELEASE_NOTES: string[] = [
 // Keep the complete release history above for release automation, while the
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
-  'zh-CN': RELEASE_NOTES.slice(0, 2),
+  'zh-CN': RELEASE_NOTES.slice(0, 1),
   'en-US': [
-    'v1.15.12 Changed: add BYOK PR review agent (#77)',
-    'v1.15.12 Tests: tls: retry transient port collisions (#78)',
+    'v1.15.13 Fixed: keep Slave Point Details readable and usable at narrow widths (#81)',
   ],
 } as const
