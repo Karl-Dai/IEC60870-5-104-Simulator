@@ -252,23 +252,32 @@ function handleEditKeydown(e: KeyboardEvent) {
         </div>
         <div class="detail-row">
           <span class="detail-label">{{ t('valuePanel.asduType') }}</span>
-          <span class="detail-value mono">{{ formatAsduTypeWithId(pointDetail.asdu_type) }}</span>
+          <span
+            class="detail-value mono truncatable"
+            :title="formatAsduTypeWithId(pointDetail.asdu_type)"
+          >{{ formatAsduTypeWithId(pointDetail.asdu_type) }}</span>
         </div>
         <div class="detail-row">
           <span class="detail-label">{{ t('valuePanel.category') }}</span>
-          <span class="detail-value">{{ localizeCategoryLabel(pointDetail.category) }}</span>
+          <span
+            class="detail-value"
+            :title="localizeCategoryLabel(pointDetail.category)"
+          >{{ localizeCategoryLabel(pointDetail.category) }}</span>
         </div>
         <div class="detail-row">
           <span class="detail-label">{{ t('valuePanel.name') }}</span>
-          <span class="detail-value">{{ pointDetail.name || '-' }}</span>
+          <span class="detail-value" :title="pointDetail.name || '-'">{{ pointDetail.name || '-' }}</span>
         </div>
         <div v-if="pointDetail.comment" class="detail-row">
           <span class="detail-label">{{ t('valuePanel.comment') }}</span>
-          <span class="detail-value">{{ pointDetail.comment }}</span>
+          <span class="detail-value" :title="pointDetail.comment">{{ pointDetail.comment }}</span>
         </div>
         <div v-if="pointDetail.mapping_common_address != null" class="detail-row">
           <span class="detail-label">{{ t('valuePanel.mapping') }}</span>
-          <span class="detail-value mono mapping-value">
+          <span
+            class="detail-value mono mapping-value"
+            :title="`CA ${pointDetail.mapping_common_address} · IOA ${pointDetail.mapping_ioa} · ${formatAsduTypeWithId(pointDetail.mapping_asdu_type ?? '')}`"
+          >
             CA {{ pointDetail.mapping_common_address }}
             · IOA {{ pointDetail.mapping_ioa }}
             · {{ formatAsduTypeWithId(pointDetail.mapping_asdu_type ?? '') }}
@@ -277,11 +286,11 @@ function handleEditKeydown(e: KeyboardEvent) {
         <template v-if="hasCommandOptions">
           <div class="detail-row">
             <span class="detail-label">{{ qualifierLabel }}</span>
-            <span class="detail-value">{{ qualifierDescription }}</span>
+            <span class="detail-value" :title="qualifierDescription">{{ qualifierDescription }}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">{{ t('valuePanel.executionMode') }}</span>
-            <span class="detail-value">{{ executionModeDescription }}</span>
+            <span class="detail-value" :title="executionModeDescription">{{ executionModeDescription }}</span>
           </div>
         </template>
       </div>
@@ -292,7 +301,7 @@ function handleEditKeydown(e: KeyboardEvent) {
           <span class="detail-label">{{ t('valuePanel.value') }}</span>
           <span class="detail-value mono editable" @click="startEdit">{{ formatDataPointValue(pointDetail, t) }}</span>
         </div>
-        <div class="detail-row">
+        <div class="detail-row quality-row">
           <span class="detail-label">{{ t('valuePanel.quality') }}</span>
           <span class="detail-value">
             <span v-if="isNoQuality" class="quality-na">{{ t('valuePanel.qualityNa') }}</span>
@@ -301,13 +310,13 @@ function handleEditKeydown(e: KeyboardEvent) {
         </div>
         <div class="detail-row">
           <span class="detail-label">{{ t('valuePanel.timestamp') }}</span>
-          <span class="detail-value mono">{{ pointDetail.timestamp || '-' }}</span>
+          <span class="detail-value mono" :title="pointDetail.timestamp || '-'">{{ pointDetail.timestamp || '-' }}</span>
         </div>
       </div>
 
       <div class="detail-section">
         <div class="section-title">{{ t('valuePanel.sectionWrite') }}</div>
-        <div class="write-row">
+        <div class="write-row value-write-row">
           <input
             v-model="editValue"
             class="write-input"
@@ -331,7 +340,7 @@ function handleEditKeydown(e: KeyboardEvent) {
           </div>
 
           <!-- 批量品质 -->
-          <div class="detail-row">
+          <div class="detail-row quality-row">
             <span class="detail-label">{{ t('valuePanel.quality') }}</span>
             <span class="detail-value">
               <QualityIndicator :quality="batchQuality" editable :show-ov="allMeasured" @toggle="batchToggleQuality" />
@@ -342,7 +351,7 @@ function handleEditKeydown(e: KeyboardEvent) {
           </div>
 
           <!-- 批量写值(仅同分类启用)-->
-          <div class="write-row">
+          <div class="write-row value-write-row">
             <input
               v-model="batchValue"
               class="write-input"
@@ -370,7 +379,9 @@ function handleEditKeydown(e: KeyboardEvent) {
 <style scoped>
 .value-panel {
   padding: 0;
+  min-width: 0;
   font-size: 13px;
+  container-type: inline-size;
 }
 
 .panel-header {
@@ -397,20 +408,31 @@ function handleEditKeydown(e: KeyboardEvent) {
 .detail-row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
   padding: 4px 16px;
 }
 
 .detail-label {
   color: var(--c-overlay0);
   font-size: 12px;
-  flex-shrink: 0;
+  flex: 0 1 45%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .detail-value {
+  flex: 1 1 55%;
+  min-width: 0;
   color: var(--c-text);
   font-size: 12px;
+  line-height: 1.4;
   text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.detail-value.truncatable {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -421,7 +443,6 @@ function handleEditKeydown(e: KeyboardEvent) {
 }
 
 .detail-value.mapping-value {
-  max-width: 70%;
   white-space: normal;
 }
 
@@ -466,8 +487,20 @@ function handleEditKeydown(e: KeyboardEvent) {
   padding: 6px 16px;
 }
 
+.value-write-row {
+  flex-direction: column;
+}
+
+.value-write-row .write-input {
+  width: 100%;
+}
+
+.value-write-row .write-btn {
+  align-self: flex-end;
+}
+
 .write-input {
-  flex: 1;
+  min-width: 0;
   padding: 6px 10px;
   background: var(--c-crust);
   border: 1px solid var(--c-surface1);
@@ -493,6 +526,25 @@ function handleEditKeydown(e: KeyboardEvent) {
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
+}
+
+@container (max-width: 240px) {
+  .quality-row {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .quality-row .detail-label,
+  .quality-row .detail-value {
+    flex-basis: auto;
+    max-width: 100%;
+  }
+
+  .quality-row .detail-value {
+    align-self: stretch;
+    overflow: visible;
+    text-align: left;
+  }
 }
 
 .write-btn:hover {
