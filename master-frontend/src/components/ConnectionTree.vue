@@ -238,6 +238,22 @@ function stateClass(state: string): string {
         </span>
         <span :class="['node-status', stateClass(conn.info.state)]"></span>
         <span class="node-label">{{ conn.info.target_address }}:{{ conn.info.port }}</span>
+        <span v-if="conn.info.use_tls || conn.info.use_socks5" class="node-features">
+          <button
+            v-if="conn.info.use_tls"
+            type="button"
+            class="feature-badge tls"
+            :title="t('tree.editConnection')"
+            @click.stop="openEditConnection?.(conn.info.id)"
+          >TLS</button>
+          <button
+            v-if="conn.info.use_socks5"
+            type="button"
+            class="feature-badge socks"
+            :title="t('tree.editConnection')"
+            @click.stop="openEditConnection?.(conn.info.id)"
+          >S5</button>
+        </span>
         <span class="node-ca">CA:{{ conn.info.common_addresses.join(',') }}</span>
       </div>
 
@@ -402,6 +418,36 @@ function stateClass(state: string): string {
 .node-ca {
   font-size: 10px;
   color: var(--c-overlay0);
+}
+
+.node-features {
+  display: inline-flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.feature-badge {
+  min-width: 23px;
+  padding: 1px 4px;
+  border: 1px solid var(--c-surface1);
+  border-radius: 8px;
+  background: var(--c-surface0);
+  font: 600 9px/1.25 var(--font-mono);
+  cursor: pointer;
+}
+
+.feature-badge.tls { color: var(--c-sapphire); }
+.feature-badge.socks { color: var(--c-mauve); }
+.feature-badge:hover,
+.feature-badge:focus-visible {
+  border-color: currentColor;
+  outline: none;
+}
+
+.tree-node.selected .feature-badge {
+  border-color: rgba(30, 30, 46, 0.28);
+  background: rgba(30, 30, 46, 0.14);
+  color: var(--c-base);
 }
 
 .node-typeid {

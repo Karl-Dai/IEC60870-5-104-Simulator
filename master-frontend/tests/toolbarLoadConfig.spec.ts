@@ -3,7 +3,7 @@
 // backend accepts the file, and before the new tree/data are refreshed.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { nextTick, ref } from 'vue'
+import { defineComponent, nextTick, ref } from 'vue'
 import { dialogKey } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
 import Toolbar from '../src/components/Toolbar.vue'
@@ -24,6 +24,17 @@ const refreshTree = vi.fn()
 const refreshData = vi.fn()
 const resetWorkspaceView = vi.fn()
 const showAlert = vi.fn(() => Promise.resolve())
+const editConnectionMock = vi.fn()
+const openNewConnectionMock = vi.fn()
+const NewConnectionModalStub = defineComponent({
+  setup(_, { expose }) {
+    expose({
+      openEditConnection: editConnectionMock,
+      openNew: openNewConnectionMock,
+    })
+    return () => null
+  },
+})
 
 function mountToolbar(
   selectedConnectionId = ref<string | null>(null),
@@ -49,7 +60,7 @@ function mountToolbar(
         ControlDialog: true,
         LangSwitch: true,
         VersionBadge: true,
-        NewConnectionModal: true,
+        NewConnectionModal: NewConnectionModalStub,
       },
     },
   })
@@ -63,6 +74,8 @@ beforeEach(() => {
   refreshData.mockClear()
   resetWorkspaceView.mockClear()
   showAlert.mockClear()
+  editConnectionMock.mockClear()
+  openNewConnectionMock.mockClear()
   useI18n().setLocale('en-US')
 })
 
@@ -117,6 +130,20 @@ describe('Toolbar full-workspace config loading', () => {
 })
 
 describe('Toolbar connection actions across workspace replacement', () => {
+  it('provides a visible edit action for the selected connection', async () => {
+    const selectedConnectionId = ref<string | null>('conn-secure')
+    const wrapper = mountToolbar(selectedConnectionId, ref('Connected'))
+    await nextTick()
+
+    const editButton = wrapper.find('.btn-edit')
+    expect(editButton.exists()).toBe(true)
+    expect(editButton.attributes('disabled')).toBeUndefined()
+    await editButton.trigger('click')
+
+    expect(editConnectionMock).toHaveBeenCalledWith('conn-secure')
+    wrapper.unmount()
+  })
+
   it('ignores a pending disconnect failure after the workspace selection is reset', async () => {
     let rejectDisconnect!: (reason?: unknown) => void
     const pendingDisconnect = new Promise<void>((_resolve, reject) => {

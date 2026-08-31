@@ -15,6 +15,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 type ModalVm = {
   openNew: () => void
+  openEditConnection: (connectionId: string) => Promise<void>
 }
 
 function findInput(wrapper: VueWrapper, labelText: string) {
@@ -29,21 +30,51 @@ function findFilePathInput(wrapper: VueWrapper, labelText: string) {
   return field!.find('input')
 }
 
-function mountModal(showAlert = vi.fn(() => Promise.resolve())) {
+function mountModal(
+  showAlert = vi.fn(() => Promise.resolve()),
+  showConfirm = vi.fn(() => Promise.resolve(false)),
+) {
+  const selectedConnectionId = ref<string | null>(null)
+  const selectedConnectionState = ref('Disconnected')
+  const selectedCA = ref<number | null>(null)
+  const selectedCategory = ref<string | null>(null)
+  const refreshTree = vi.fn()
   return {
     showAlert,
+    showConfirm,
+    selectedConnectionId,
+    selectedConnectionState,
+    selectedCA,
+    selectedCategory,
+    refreshTree,
     wrapper: mount(NewConnectionModal, {
       props: { visible: true },
       global: {
         stubs: { Teleport: true, Transition: false },
         provide: {
-          [dialogKey as symbol]: { showAlert },
-          selectedConnectionId: ref<string | null>(null),
-          selectedConnectionState: ref('Disconnected'),
-          refreshTree: vi.fn(),
+          [dialogKey as symbol]: { showAlert, showConfirm },
+          selectedConnectionId,
+          selectedConnectionState,
+          selectedCA,
+          selectedCategory,
+          refreshTree,
         },
       },
     }),
+  }
+}
+
+function editableConnection(state = 'Disconnected') {
+  return {
+    id: 'conn_1', target_address: '127.0.0.1', port: 2404,
+    common_addresses: [1], state,
+    use_socks5: false, socks5_proxy_address: '127.0.0.1', socks5_proxy_port: 1080,
+    socks5_username: '', socks5_password: '', socks5_remote_dns: true,
+    use_tls: false, ca_file: '', cert_file: '', key_file: '',
+    accept_invalid_certs: false, tls_version: 'auto',
+    t0: 30, channel_retry_s: 5, t1: 15, t2: 10, t3: 20, k: 12, w: 8,
+    default_qoi: 20, default_qcc: 5, interrogate_period_s: 0,
+    counter_interrogate_period_s: 0, broadcast_address: 0xFFFF,
   }
 }
 
@@ -53,6 +84,126 @@ describe('NewConnectionModal SOCKS5', () => {
     openMock.mockReset()
     localStorage.clear()
     useI18n().setLocale('zh-CN')
+  })
+
+  it.each(['Connected', 'Connecting', 'Error'])('取消编辑时保留 %s 连接', async (state) => {
+    invokeMock.mockResolvedValue([editableConnection(state)])
+    const { wrapper, showConfirm, selectedConnectionState } = mountModal()
+    selectedConnectionState.value = state
+    await (wrapper.vm as unknown as ModalVm).openEditConnection('conn_1')
+    expect(showConfirm).toHaveBeenCalledOnce()
+    expect(invokeMock.mock.calls.map(call => call[0])).toEqual(['list_connections'])
+    expect(selectedConnectionState.value).toBe(state)
+    expect(wrapper.emitted('update:visible')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('断连失败时不打开编辑且保留原连接状态', async () => {
+    invokeMock.mockImplementation((command) => command === 'list_connections'
+      ? Promise.resolve([editableConnection('Connected')])
+      : Promise.reject(new Error('disconnect failed')))
+    const { wrapper, showAlert, selectedConnectionState } = mountModal(undefined, vi.fn(async () => true))
+    selectedConnectionState.value = 'Connected'
+    await (wrapper.vm as unknown as ModalVm).openEditConnection('conn_1')
+    expect(showAlert).toHaveBeenCalledWith('Error: disconnect failed')
+    expect(wrapper.emitted('update:visible')).toBeUndefined()
+    expect(selectedConnectionState.value).toBe('Connected')
+    expect(invokeMock.mock.calls.map(call => call[0])).toEqual(['list_connections', 'disconnect_master'])
+    wrapper.unmount()
+  })
+
+  it('连续点击编辑只显示一次断连确认', async () => {
+    let confirm!: (value: boolean) => void
+    const showConfirm = vi.fn(() => new Promise<boolean>(resolve => { confirm = resolve }))
+    invokeMock.mockResolvedValue([editableConnection('Connected')])
+    const { wrapper } = mountModal(undefined, showConfirm)
+    const vm = wrapper.vm as unknown as ModalVm
+    const first = vm.openEditConnection('conn_1')
+    await flushPromises()
+    await vm.openEditConnection('conn_1')
+    expect(showConfirm).toHaveBeenCalledOnce()
+    confirm(false)
+    await first
+    wrapper.unmount()
+  })
+
+  it('新配置创建失败时不删除旧配置，允许重新保存', async () => {
+    invokeMock.mockImplementation((command) => command === 'list_connections'
+      ? Promise.resolve([editableConnection()])
+      : Promise.reject(new Error('invalid config')))
+    const { wrapper, showAlert, selectedConnectionId } = mountModal()
+    selectedConnectionId.value = 'conn_1'
+    await (wrapper.vm as unknown as ModalVm).openEditConnection('conn_1')
+    await wrapper.find('.btn-primary').trigger('click')
+    await flushPromises()
+    expect(invokeMock.mock.calls.map(call => call[0])).toEqual(['list_connections', 'create_connection'])
+    expect(selectedConnectionId.value).toBe('conn_1')
+    expect(showAlert).toHaveBeenCalledWith('Error: invalid config')
+    expect(wrapper.find('.btn-primary').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('.modal-title').text()).toBe('编辑连接')
+    wrapper.unmount()
+  })
+
+  it('创建完成后才替换旧连接，保存期间阻止重复提交和关闭', async () => {
+    let finish!: (value: unknown) => void
+    invokeMock.mockImplementation((command) => {
+      if (command === 'list_connections') return Promise.resolve([editableConnection()])
+      if (command === 'create_connection') return new Promise(resolve => { finish = resolve })
+      return Promise.resolve()
+    })
+    const { wrapper, selectedConnectionId, selectedCA, selectedCategory, refreshTree, showConfirm } = mountModal()
+    selectedConnectionId.value = 'conn_1'
+    selectedCA.value = 99
+    selectedCategory.value = 'single_point'
+    await (wrapper.vm as unknown as ModalVm).openEditConnection('conn_1')
+    expect(showConfirm).not.toHaveBeenCalled()
+    await wrapper.find('.btn-primary').trigger('click')
+    await wrapper.find('.btn-primary').trigger('click')
+    await wrapper.find('.modal-backdrop').trigger('mousedown')
+    expect(wrapper.find('fieldset').attributes('disabled')).toBeDefined()
+    expect(invokeMock.mock.calls.map(call => call[0])).toEqual(['list_connections', 'create_connection'])
+    expect(wrapper.emitted('update:visible')).toEqual([[true]])
+    finish({ id: 'conn_2', timing_corrections: [] })
+    await flushPromises()
+    expect(invokeMock).toHaveBeenLastCalledWith('delete_connection', { id: 'conn_1' })
+    expect(selectedConnectionId.value).toBe('conn_2')
+    expect(selectedCA.value).toBeNull()
+    expect(selectedCategory.value).toBeNull()
+    expect(refreshTree).toHaveBeenCalledOnce()
+    expect(wrapper.emitted('update:visible')?.at(-1)).toEqual([false])
+    wrapper.unmount()
+  })
+
+  it('旧连接无法替换时清理候选连接，保留原选择和编辑表单', async () => {
+    invokeMock.mockImplementation((command, args) => {
+      if (command === 'list_connections') return Promise.resolve([editableConnection()])
+      if (command === 'create_connection') return Promise.resolve({ id: 'conn_2' })
+      if (args.id === 'conn_1') return Promise.reject(new Error('retire failed'))
+      return Promise.resolve()
+    })
+    const { wrapper, selectedConnectionId, showAlert } = mountModal()
+    selectedConnectionId.value = 'conn_1'
+    await (wrapper.vm as unknown as ModalVm).openEditConnection('conn_1')
+    await wrapper.find('.btn-primary').trigger('click')
+    await flushPromises()
+    expect(invokeMock).toHaveBeenLastCalledWith('delete_connection', { id: 'conn_2' })
+    expect(selectedConnectionId.value).toBe('conn_1')
+    expect(wrapper.find('.modal-title').text()).toBe('编辑连接')
+    expect(showAlert).toHaveBeenCalledWith('Error: retire failed')
+    wrapper.unmount()
+  })
+
+  it('保留 TLS 连接显式留空的证书路径，不混入其他连接的默认路径', async () => {
+    localStorage.setItem('iec104master.newConnForm.v2', JSON.stringify({
+      ca_file: '/other/ca.pem', cert_file: '/other/client.pem', key_file: '/other/key.pem',
+    }))
+    invokeMock.mockResolvedValue([{ ...editableConnection(), use_tls: true }])
+    const { wrapper } = mountModal()
+    await (wrapper.vm as unknown as ModalVm).openEditConnection('conn_1')
+    for (const label of ['CA 证书路径', '客户端证书路径', '客户端密钥路径']) {
+      expect((findFilePathInput(wrapper, label).element as HTMLInputElement).value).toBe('')
+    }
+    wrapper.unmount()
   })
 
   it('reveals proxy fields and submits a complete SOCKS5 request', async () => {
@@ -188,5 +339,66 @@ describe('NewConnectionModal SOCKS5', () => {
         key_file: '/tmp/client.key',
       }),
     })
+  })
+
+  it('confirms, disconnects, and opens enabled TLS/SOCKS5 settings for direct editing', async () => {
+    const connection = {
+      id: 'conn-secure',
+      target_address: 'secure.example.com',
+      port: 2404,
+      common_addresses: [1],
+      state: 'Connected',
+      use_socks5: true,
+      socks5_proxy_address: 'proxy.example.com',
+      socks5_proxy_port: 1080,
+      socks5_username: 'alice',
+      socks5_password: 'secret',
+      socks5_remote_dns: true,
+      use_tls: true,
+      ca_file: '/tmp/ca.crt',
+      cert_file: '/tmp/client.crt',
+      key_file: '/tmp/client.key',
+      accept_invalid_certs: false,
+      tls_version: 'auto',
+      t0: 30,
+      channel_retry_s: 5,
+      t1: 15,
+      t2: 10,
+      t3: 20,
+      k: 12,
+      w: 8,
+      default_qoi: 20,
+      default_qcc: 5,
+      interrogate_period_s: 0,
+      counter_interrogate_period_s: 0,
+      broadcast_address: 0xFFFF,
+    }
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'list_connections') return Promise.resolve([connection])
+      return Promise.resolve(undefined)
+    })
+    const showConfirm = vi.fn(() => Promise.resolve(true))
+    const {
+      wrapper,
+      selectedConnectionId,
+      selectedConnectionState,
+      refreshTree,
+    } = mountModal(undefined, showConfirm)
+    selectedConnectionId.value = connection.id
+    selectedConnectionState.value = 'Connected'
+
+    await (wrapper.vm as unknown as ModalVm).openEditConnection(connection.id)
+    await flushPromises()
+
+    expect(showConfirm).toHaveBeenCalledWith('编辑连接会先断开当前连接，是否继续？')
+    expect(invokeMock).toHaveBeenCalledWith('disconnect_master', { id: connection.id })
+    expect(selectedConnectionState.value).toBe('Disconnected')
+    expect(refreshTree).toHaveBeenCalledOnce()
+    expect((findInput(wrapper, '通过 SOCKS5 代理连接').element as HTMLInputElement).checked).toBe(true)
+    expect((findInput(wrapper, '启用 TLS').element as HTMLInputElement).checked).toBe(true)
+    expect((findFilePathInput(wrapper, '客户端证书路径').element as HTMLInputElement).value)
+      .toBe('/tmp/client.crt')
+    expect((findFilePathInput(wrapper, '客户端密钥路径').element as HTMLInputElement).value)
+      .toBe('/tmp/client.key')
   })
 })

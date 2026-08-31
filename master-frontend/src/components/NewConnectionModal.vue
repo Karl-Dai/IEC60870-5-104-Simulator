@@ -2,16 +2,21 @@
 import { inject, ref, watch, type Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
-import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
+import type { showAlert as ShowAlert, showConfirm as ShowConfirm } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
 import FilePathInput from '@shared/components/FilePathInput.vue'
 import { correctTimingEdit, formatCorrections, isTimingField, type TimingCorrection } from '@shared/timing'
 import type { ConnectionInfo } from '../types'
 
 const { t } = useI18n()
-const { showAlert } = inject<{ showAlert: typeof ShowAlert }>(dialogKey)!
+const { showAlert, showConfirm } = inject<{
+  showAlert: typeof ShowAlert
+  showConfirm: typeof ShowConfirm
+}>(dialogKey)!
 const selectedConnectionId = inject<Ref<string | null>>('selectedConnectionId')!
 const selectedConnectionState = inject<Ref<string>>('selectedConnectionState')!
+const selectedCA = inject<Ref<number | null>>('selectedCA', ref(null))
+const selectedCategory = inject<Ref<string | null>>('selectedCategory', ref(null))
 const refreshTree = inject<() => void>('refreshTree')!
 
 const props = defineProps<{ visible: boolean }>()
@@ -122,12 +127,11 @@ function loadForm(): NewConnForm {
 }
 
 const form = ref<NewConnForm>(loadForm())
-// When non-null, the dialog is in "edit" mode: clicking 创建 will first
-// delete the connection with this id, then create a fresh one with the
-// edited form. (IEC 104 connections are stateful runtime objects in the
-// backend; we don't have a true "modify in place" command, but
-// recreating preserves the ergonomics with one extra round-trip.)
+// Editing replaces a disconnected runtime connection. Keep the old connection
+// until the replacement has been created successfully.
 const editingConnId = ref<string | null>(null)
+const openingEdit = ref(false)
+const saving = ref(false)
 
 // WebView2 on Windows reports "Windows NT 10.0" for both Win10 and Win11
 // (Microsoft never bumped the UA token), so we can't tell the versions apart —
@@ -153,6 +157,7 @@ watch(() => props.visible, (v) => {
 })
 
 function close() {
+  if (saving.value) return
   emit('update:visible', false)
   editingConnId.value = null
 }
@@ -162,19 +167,23 @@ function submitButtonLabel(): string {
 }
 
 async function openEditConnection(connId: string) {
+  if (openingEdit.value || saving.value) return
+  openingEdit.value = true
   try {
     const conns = await invoke<Array<ConnectionInfo>>('list_connections')
     const conn = conns.find((c) => c.id === connId)
     if (!conn) return
-    if (conn.state === 'Connected') {
-      await showAlert(t('newConn.disconnectFirst'))
-      return
+    if (conn.state !== 'Disconnected') {
+      if (!await showConfirm(t('newConn.disconnectToEditConfirm'))) return
+      await invoke('disconnect_master', { id: connId })
+      if (selectedConnectionId.value === connId) {
+        selectedConnectionState.value = 'Disconnected'
+      }
+      refreshTree()
     }
     editingConnId.value = connId
-    // Pre-fill TLS cert paths from the connection itself (backend is the
-    // authoritative source). Fall back to the persisted "new connection" form
-    // only when the backend value is empty (e.g. TLS-disabled connection), so
-    // toggling TLS on during edit still shows sensible default paths.
+    // Empty paths on a TLS connection are intentional (system roots / no
+    // client identity). Only offer new-form defaults while TLS is disabled.
     const lf = loadForm()
     form.value = {
       ...lf,
@@ -188,9 +197,9 @@ async function openEditConnection(connId: string) {
       socks5_password: conn.socks5_password,
       socks5_remote_dns: conn.socks5_remote_dns,
       use_tls: conn.use_tls,
-      ca_file: conn.ca_file || lf.ca_file,
-      cert_file: conn.cert_file || lf.cert_file,
-      key_file: conn.key_file || lf.key_file,
+      ca_file: conn.use_tls ? conn.ca_file : conn.ca_file || lf.ca_file,
+      cert_file: conn.use_tls ? conn.cert_file : conn.cert_file || lf.cert_file,
+      key_file: conn.use_tls ? conn.key_file : conn.key_file || lf.key_file,
       accept_invalid_certs: conn.accept_invalid_certs ?? lf.accept_invalid_certs,
       tls_version: conn.tls_version || lf.tls_version,
       t0: conn.t0,
@@ -209,16 +218,20 @@ async function openEditConnection(connId: string) {
     emit('update:visible', true)
   } catch (e) {
     await showAlert(String(e))
+  } finally {
+    openingEdit.value = false
   }
 }
 
 function openNew() {
+  if (openingEdit.value || saving.value) return
   editingConnId.value = null
   form.value = loadForm()
   emit('update:visible', true)
 }
 
 async function createConnection() {
+  if (openingEdit.value || saving.value) return
   const cas = parseCAList(form.value.common_addresses_text)
   if (cas.length === 0) {
     await showAlert(t('newConn.invalidCA'))
@@ -251,14 +264,9 @@ async function createConnection() {
       return
     }
   }
+  const previousId = editingConnId.value
+  saving.value = true
   try {
-    if (editingConnId.value !== null) {
-      await invoke('delete_connection', { id: editingConnId.value })
-      if (selectedConnectionId.value === editingConnId.value) {
-        selectedConnectionId.value = null
-        selectedConnectionState.value = 'Disconnected'
-      }
-    }
     const info = await invoke<ConnectionInfo>('create_connection', {
       request: {
         target_address: form.value.target_address,
@@ -293,6 +301,28 @@ async function createConnection() {
         counter_interrogate_period_s: form.value.counter_interrogate_period_s,
       }
     })
+    if (previousId !== null) {
+      try {
+        await invoke('delete_connection', { id: previousId })
+      } catch (error) {
+        // The old connection remains authoritative if retirement fails.
+        // Best-effort cleanup prevents a failed edit leaving a duplicate.
+        try {
+          await invoke('delete_connection', { id: info.id })
+        } catch {
+          // Refresh even if cleanup fails so both retained connections remain
+          // visible; never delete the original as a recovery action.
+          refreshTree()
+        }
+        throw error
+      }
+      if (selectedConnectionId.value === previousId) {
+        selectedConnectionId.value = info.id
+        selectedConnectionState.value = 'Disconnected'
+        selectedCA.value = null
+        selectedCategory.value = null
+      }
+    }
     // Defensive: the form pre-corrects, so this is normally empty. If the
     // backend still adjusted anything (e.g. stale persisted form), tell the user.
     if (info?.timing_corrections && info.timing_corrections.length > 0) {
@@ -303,6 +333,8 @@ async function createConnection() {
     refreshTree()
   } catch (e) {
     await showAlert(String(e))
+  } finally {
+    saving.value = false
   }
 }
 
@@ -353,7 +385,7 @@ defineExpose({ openEditConnection, openNew })
         <div class="modal-title">
           {{ editingConnId ? t('newConn.editTitle') : t('newConn.title') }}
         </div>
-        <div class="modal-body">
+        <fieldset class="modal-body" :disabled="saving">
           <label class="form-label">
             {{ t('newConn.targetAddress') }}
             <input v-model="form.target_address" class="form-input" type="text" placeholder="127.0.0.1" />
@@ -498,10 +530,10 @@ defineExpose({ openEditConnection, openNew })
               <span>{{ t('newConn.acceptInvalidCerts') }}</span>
             </label>
           </template>
-        </div>
+        </fieldset>
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="close">{{ t('common.cancel') }}</button>
-          <button class="btn btn-primary" @click="createConnection">{{ submitButtonLabel() }}</button>
+          <button class="btn btn-secondary" :disabled="saving" @click="close">{{ t('common.cancel') }}</button>
+          <button class="btn btn-primary" :disabled="saving" @click="createConnection">{{ submitButtonLabel() }}</button>
         </div>
       </div>
     </div>
@@ -538,12 +570,15 @@ defineExpose({ openEditConnection, openNew })
   flex: 0 0 auto;
 }
 .modal-body {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0 4px 0 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
   flex: 1 1 auto;
   overflow-y: auto;
-  padding-right: 4px;
 }
 .modal-footer {
   display: flex;

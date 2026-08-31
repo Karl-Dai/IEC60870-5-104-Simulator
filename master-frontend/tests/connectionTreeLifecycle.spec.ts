@@ -18,19 +18,23 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-function connection(id: string): ConnectionInfo {
+function connection(id: string, overrides: Partial<ConnectionInfo> = {}): ConnectionInfo {
   return {
     id,
     target_address: '192.0.2.1',
     port: 2404,
     state: 'Disconnected',
     common_addresses: [1],
+    use_tls: false,
+    use_socks5: false,
+    ...overrides,
   } as ConnectionInfo
 }
 
 function mountTree(
   categoryCounts = ref<CategoryCountsMap>(new Map()),
   changedCategories = ref<ChangedCategoriesMap>(new Map()),
+  openEditConnection = vi.fn(),
 ) {
   const treeRefreshKey = ref(0)
   const wrapper = mount(ConnectionTree, {
@@ -38,13 +42,13 @@ function mountTree(
       provide: {
         treeRefreshKey,
         refreshTree: vi.fn(),
-        openEditConnection: vi.fn(),
+        openEditConnection,
         categoryCounts,
         changedCategories,
       },
     },
   })
-  return { wrapper, treeRefreshKey, categoryCounts, changedCategories }
+  return { wrapper, treeRefreshKey, categoryCounts, changedCategories, openEditConnection }
 }
 
 describe('ConnectionTree workspace lifecycle', () => {
@@ -118,5 +122,22 @@ describe('ConnectionTree workspace lifecycle', () => {
       .find(node => node.text().includes('Normalized') || node.text().includes('归一化'))
     expect(normalized).toBeDefined()
     expect(normalized!.text()).toContain('9 · 10 · 21 · 34')
+  })
+
+  it('shows clickable TLS and SOCKS5 badges on secured connections', async () => {
+    const secure = connection('secure', { use_tls: true, use_socks5: true })
+    invokeMock.mockResolvedValue([secure])
+    const openEditConnection = vi.fn()
+    const mounted = mountTree(ref(new Map()), ref(new Map()), openEditConnection)
+    wrapper = mounted.wrapper
+    await flushPromises()
+    await nextTick()
+
+    const badges = wrapper.findAll('.feature-badge')
+    expect(badges.map(badge => badge.text())).toEqual(['TLS', 'S5'])
+    await badges[0].trigger('click')
+    await badges[1].trigger('click')
+    expect(openEditConnection).toHaveBeenNthCalledWith(1, 'secure')
+    expect(openEditConnection).toHaveBeenNthCalledWith(2, 'secure')
   })
 })
