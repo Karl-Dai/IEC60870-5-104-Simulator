@@ -1,5 +1,5 @@
 use iec104sim_core::log_collector::LogCollector;
-use iec104sim_core::master::MasterConnection;
+use iec104sim_core::master::{MasterConnection, MasterError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,11 +9,32 @@ use tokio::sync::{watch, Mutex, RwLock};
 pub struct MasterConnectionState {
     pub connection: MasterConnection,
     pub log_collector: Arc<LogCollector>,
+    /// Runtime intent, separate from the socket state; never persisted.
+    /// Enabled by a successful manual connect and cleared before manual teardown.
+    pub reconnect_enabled: bool,
     /// All Common Addresses (CAs) this connection talks to. Used by the
     /// Tauri layer to fan out interrogation / clock-sync / counter-read /
     /// auto-GI to every station the user configured. Always non-empty
     /// (defaults to vec![1]).
     pub common_addresses: Vec<u16>,
+}
+
+impl MasterConnectionState {
+    /// Explicit user connect. A failed attempt must not re-arm a stopped connection.
+    pub async fn connect(&mut self) -> Result<(), MasterError> {
+        let result = self.connection.connect().await;
+        if result.is_ok() {
+            self.reconnect_enabled = true;
+        }
+        result
+    }
+
+    pub async fn disconnect(&mut self) -> Result<(), MasterError> {
+        // Stop retries before closing the socket, including when EOF was already
+        // observed and core disconnect returns NotConnected after cleanup.
+        self.reconnect_enabled = false;
+        self.connection.disconnect().await
+    }
 }
 
 /// Application state holding all active master connections.

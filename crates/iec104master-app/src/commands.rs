@@ -337,6 +337,7 @@ async fn materialize_connection(id: String, prepared: PreparedConnection) -> Pen
         state: MasterConnectionState {
             connection,
             log_collector,
+            reconnect_enabled: false,
             common_addresses,
         },
         info,
@@ -374,26 +375,8 @@ fn activate_connection(app_handle: AppHandle, activation: ConnectionActivation) 
             let app = reconnect_handle.clone();
             let id = reconnect_id.clone();
             async move {
-                use iec104sim_core::master::MasterState;
-                use tauri::Manager;
-                // T0 只限制单次连接建立；Channel Retry 单独控制失败后的
-                // 固定等待。读取时不持锁过 sleep,避免阻塞其他连接操作。
-                let retry_delay_s = {
-                    let st: State<'_, AppState> = app.state();
-                    let conns = st.connections.read().await;
-                    match conns.get(&id) {
-                        Some(c) => c.connection.config().channel_retry_s,
-                        None => return,
-                    }
-                };
-                tokio::time::sleep(std::time::Duration::from_secs(retry_delay_s as u64)).await;
                 let st: State<'_, AppState> = app.state();
-                let mut conns = st.connections.write().await;
-                if let Some(c) = conns.get_mut(&id) {
-                    if c.connection.state() != MasterState::Connected {
-                        let _ = c.connection.connect().await;
-                    }
-                }
+                crate::reconnect::reconnect_after_delay(&st, &id).await;
             }
         },
     ));
@@ -572,8 +555,7 @@ pub async fn connect_master(
         .get_mut(&id)
         .ok_or_else(|| format!("connection {} not found", id))?;
 
-    conn.connection
-        .connect()
+    conn.connect()
         .await
         .map_err(|e| format!("failed to connect: {}", e))
 }
@@ -588,8 +570,7 @@ pub async fn disconnect_master(
         .get_mut(&id)
         .ok_or_else(|| format!("connection {} not found", id))?;
 
-    conn.connection
-        .disconnect()
+    conn.disconnect()
         .await
         .map_err(|e| format!("failed to disconnect: {}", e))
 }
@@ -1853,6 +1834,7 @@ mod tests {
             MasterConnectionState {
                 connection,
                 log_collector,
+                reconnect_enabled: false,
                 common_addresses: vec![1],
             },
         );
