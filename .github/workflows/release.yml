@@ -71,9 +71,26 @@ jobs:
 
       - name: Install dependencies (Ubuntu)
         if: matrix.platform == 'ubuntu-22.04'
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          set -euo pipefail
+          for i in 1 2 3; do
+            if sudo timeout --kill-after=15s 180s env DEBIAN_FRONTEND=noninteractive \
+              apt-get update --error-on=any -o Acquire::Retries=3 \
+                -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; then
+              break
+            fi
+            if [ "$i" -eq 3 ]; then
+              echo "::error::apt-get update failed after 3 attempts"
+              exit 1
+            fi
+            echo "apt-get update attempt $i failed; retrying in 10s..."
+            sleep 10
+          done
+          sudo timeout --kill-after=15s 300s env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends \
+            -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - uses: actions/setup-node@v4
         with:
@@ -241,9 +258,26 @@ jobs:
 
       - name: Install dependencies (Ubuntu)
         if: matrix.platform == 'ubuntu-22.04'
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          set -euo pipefail
+          for i in 1 2 3; do
+            if sudo timeout --kill-after=15s 180s env DEBIAN_FRONTEND=noninteractive \
+              apt-get update --error-on=any -o Acquire::Retries=3 \
+                -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; then
+              break
+            fi
+            if [ "$i" -eq 3 ]; then
+              echo "::error::apt-get update failed after 3 attempts"
+              exit 1
+            fi
+            echo "apt-get update attempt $i failed; retrying in 10s..."
+            sleep 10
+          done
+          sudo timeout --kill-after=15s 300s env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends \
+            -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - uses: actions/setup-node@v4
         with:
