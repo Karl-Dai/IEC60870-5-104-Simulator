@@ -164,4 +164,60 @@ describe('DataTable 分类筛选 (4.4 / 4.2)', () => {
     expect(wrapper.emitted('point-select')?.at(-1)?.[0]).toEqual([])
     wrapper.unmount()
   })
+
+  it('表头选择区分同 IOA 的 CA 和类型，并保留搜索范围外的选择', async () => {
+    const points = [
+      pt(1001, 'single_point', '0', 1, 'M_SP_NA_1'),
+      pt(1001, 'single_point', '1', 2, 'M_SP_NA_1'),
+      pt(1001, 'float_measured', '1.5', 1, 'M_ME_NC_1'),
+      pt(2, 'single_point', '0', 1, 'M_SP_NA_1'),
+    ]
+    invokeMock.mockResolvedValueOnce({ points, seq: 1 }).mockResolvedValue({ points: [], seq: 1 })
+    const wrapper = mount(DataTable, { global: { provide: provideRefs() } })
+    await flushPromises()
+    await wrapper.findAll('tbody tr').find(row => row.find('.col-ioa').text() === '2')!.trigger('contextmenu')
+    await wrapper.findAll('.ctx-item').find(node => node.text() === 'Multi-select')!.trigger('click')
+    await wrapper.find('.search-input').setValue('1001')
+    const header = wrapper.find('thead input.select-all-checkbox')
+    await header.setValue(true)
+    expect(wrapper.emitted('point-select')?.at(-1)?.[0]).toHaveLength(4)
+    await header.setValue(false)
+    expect(wrapper.emitted('point-select')?.at(-1)?.[0]).toEqual([points[3]])
+    await wrapper.find('.search-input').setValue('')
+    expect((header.element as HTMLInputElement).indeterminate).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('右键多选后表头复选框显示半选状态并可全选或取消当前筛选', async () => {
+    const points = [
+      pt(1, 'double_point', 'OFF', 1, 'M_DP_NA_1'),
+      pt(2, 'double_point', 'ON', 1, 'M_DP_NA_1'),
+    ]
+    invokeMock.mockResolvedValueOnce({ points, seq: 1 }).mockResolvedValue({ points: [], seq: 1 })
+
+    const wrapper = mount(DataTable, { global: { provide: provideRefs() } })
+    await flushPromises()
+    await nextTick()
+    await wrapper.findAll('tbody tr')[0].trigger('contextmenu')
+    const enter = wrapper.findAll('.ctx-item').find(node => node.text() === 'Multi-select')
+    await enter!.trigger('click')
+    await nextTick()
+
+    const headerCheckbox = wrapper.find('thead input.select-all-checkbox')
+    expect(headerCheckbox.exists()).toBe(true)
+    expect((headerCheckbox.element as HTMLInputElement).checked).toBe(false)
+    expect((headerCheckbox.element as HTMLInputElement).indeterminate).toBe(true)
+
+    await headerCheckbox.setValue(true)
+    await nextTick()
+    expect((headerCheckbox.element as HTMLInputElement).checked).toBe(true)
+    expect((headerCheckbox.element as HTMLInputElement).indeterminate).toBe(false)
+    expect(wrapper.find('.multi-select-count').text()).toBe('2 selected')
+
+    await headerCheckbox.setValue(false)
+    await nextTick()
+    expect(wrapper.find('.multi-select-count').exists()).toBe(false)
+    expect(wrapper.emitted('point-select')?.at(-1)?.[0]).toEqual([])
+    wrapper.unmount()
+  })
 })

@@ -469,6 +469,61 @@ describe('DataPointTable 子站数据表', () => {
     wrapper.unmount()
   })
 
+  it('右键多选后表头复选框显示半选状态并可全选或取消当前筛选', async () => {
+    const points = [
+      dp(1, 'M_SP_NA_1', 'single_point', '0'),
+      dp(2, 'M_SP_NA_1', 'single_point', '1'),
+      dp(3, 'M_DP_NA_1', 'double_point', '2'),
+    ]
+    invokeMock.mockResolvedValue({ points, seq: 1, total_count: 3 })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+    refs.selectedCategory.value = 'single_point'
+    await nextTick()
+    await enterMultiSelect(wrapper)
+
+    const headerCheckbox = wrapper.find('thead input.select-all-checkbox')
+    expect(headerCheckbox.exists()).toBe(true)
+    expect((headerCheckbox.element as HTMLInputElement).checked).toBe(false)
+    expect((headerCheckbox.element as HTMLInputElement).indeterminate).toBe(true)
+
+    await headerCheckbox.setValue(true)
+    await nextTick()
+    expect((headerCheckbox.element as HTMLInputElement).checked).toBe(true)
+    expect((headerCheckbox.element as HTMLInputElement).indeterminate).toBe(false)
+    expect((wrapper.vm as unknown as { selectedRows: DataPointInfo[] }).selectedRows.map(point => point.ioa))
+      .toEqual([1, 2])
+
+    await headerCheckbox.setValue(false)
+    await nextTick()
+    expect((wrapper.vm as unknown as { selectedRows: DataPointInfo[] }).selectedRows).toEqual([])
+    expect(wrapper.emitted('point-select')?.at(-1)?.[0]).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('表头选择区分同 IOA 不同类型，并保留搜索范围外的选择', async () => {
+    const points = [
+      dp(1, 'M_SP_NA_1', 'single_point', '0'),
+      dp(1, 'M_ME_NC_1', 'float_measured', '1.5'),
+      dp(2, 'M_SP_NA_1', 'single_point', '1'),
+    ]
+    invokeMock.mockResolvedValue({ points, seq: 1, total_count: 3 })
+    const { wrapper, refs } = mountTable()
+    await selectStation(refs)
+    await enterMultiSelect(wrapper, 2)
+    await wrapper.find('.search-input').setValue('1')
+    const header = wrapper.find('thead input.select-all-checkbox')
+    await header.setValue(true)
+    expect(wrapper.emitted('point-select')?.at(-1)?.[0]).toHaveLength(3)
+    await header.setValue(false)
+    expect(wrapper.emitted('point-select')?.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ ioa: 2, asdu_type: 'M_SP_NA_1' }),
+    ])
+    await wrapper.find('.search-input').setValue('')
+    expect((header.element as HTMLInputElement).indeterminate).toBe(true)
+    wrapper.unmount()
+  })
+
   it('全选、反选和清空只作用于当前筛选结果', async () => {
     const points = [
       dp(1, 'M_SP_NA_1', 'single_point', '0'),

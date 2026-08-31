@@ -176,6 +176,10 @@ const newConnModalRef = ref<InstanceType<typeof NewConnectionModal> | null>(null
 function openEditConnection(connId: string) {
   return newConnModalRef.value?.openEditConnection(connId)
 }
+function editSelectedConnection() {
+  const connId = selectedConnectionId.value
+  if (connId) return openEditConnection(connId)
+}
 function openNewConnection() {
   newConnModalRef.value?.openNew()
 }
@@ -542,6 +546,14 @@ async function sendBroadcastCounterReadDeactivation() {
       </button>
       <button class="toolbar-btn btn-stop" :disabled="!hasConnection() || !isConnected()" @click="disconnectMaster">
         {{ t('toolbar.disconnect') }}
+      </button>
+      <button
+        class="toolbar-btn btn-edit"
+        :disabled="!hasConnection()"
+        :title="t('toolbar.editConnection')"
+        @click="editSelectedConnection"
+      >
+        {{ t('toolbar.editConnection') }}
       </button>
       <button class="toolbar-btn btn-close" :disabled="!hasConnection()" @click="deleteMaster">
         {{ t('toolbar.delete') }}

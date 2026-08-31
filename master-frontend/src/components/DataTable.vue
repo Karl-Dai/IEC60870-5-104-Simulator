@@ -351,6 +351,34 @@ function selectFilteredPoints() {
   emitSelectedPoints()
 }
 
+const filteredSelectionCount = computed(() =>
+  filteredPoints.value.reduce(
+    (count, point) => count + Number(selectedKeys.value.has(pointKey(point))),
+    0,
+  ),
+)
+const allFilteredSelected = computed(() =>
+  filteredPoints.value.length > 0
+  && filteredSelectionCount.value === filteredPoints.value.length,
+)
+const someFilteredSelected = computed(() =>
+  filteredSelectionCount.value > 0 && !allFilteredSelected.value,
+)
+
+function toggleFilteredSelection() {
+  const next = new Set(selectedKeys.value)
+  for (const point of filteredPoints.value) {
+    const key = pointKey(point)
+    if (allFilteredSelected.value) next.delete(key)
+    else next.add(key)
+  }
+  selectedKeys.value = next
+  lastClickedIndex.value = next.size > 0
+    ? filteredPoints.value.findIndex(point => next.has(pointKey(point)))
+    : -1
+  emitSelectedPoints()
+}
+
 function invertFilteredSelection() {
   const next = new Set(selectedKeys.value)
   for (const point of filteredPoints.value) {
@@ -529,7 +557,18 @@ function isCtxActiveOption(optValue: string): boolean {
         <table class="table">
           <thead>
             <tr>
-              <th v-if="multiSelectMode" class="col-select" />
+              <th v-if="multiSelectMode" class="col-select">
+                <input
+                  class="select-all-checkbox"
+                  type="checkbox"
+                  :checked="allFilteredSelected"
+                  :indeterminate="someFilteredSelected"
+                  :aria-label="t('table.selectFiltered')"
+                  :title="t('table.selectFiltered')"
+                  @click.stop
+                  @change="toggleFilteredSelection"
+                />
+              </th>
               <th class="col-ioa">IOA</th>
               <th class="col-type">{{ t('table.type') }}</th>
               <th class="col-value"><span class="th-value">{{ t('table.value') }}<DoublePointLegend /></span></th>

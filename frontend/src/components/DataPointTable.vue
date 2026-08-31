@@ -679,6 +679,46 @@ function selectFilteredPoints() {
   emitSelection()
 }
 
+const filteredSelectionCount = computed(() => {
+  const selected = new Set(selectedRows.value.map(row => pointKey(row.ioa, row.asdu_type)))
+  return filteredPoints.value.reduce(
+    (count, point) => count + Number(selected.has(pointKey(point.ioa, point.asdu_type))),
+    0,
+  )
+})
+const allFilteredSelected = computed(() =>
+  filteredPoints.value.length > 0
+  && filteredSelectionCount.value === filteredPoints.value.length,
+)
+const someFilteredSelected = computed(() =>
+  filteredSelectionCount.value > 0 && !allFilteredSelected.value,
+)
+
+function toggleFilteredSelection() {
+  const filteredKeys = new Set(
+    filteredPoints.value.map(point => pointKey(point.ioa, point.asdu_type)),
+  )
+  if (allFilteredSelected.value) {
+    selectedRows.value = selectedRows.value.filter(
+      point => !filteredKeys.has(pointKey(point.ioa, point.asdu_type)),
+    )
+  } else {
+    const selectedKeys = new Set(
+      selectedRows.value.map(point => pointKey(point.ioa, point.asdu_type)),
+    )
+    selectedRows.value = [
+      ...selectedRows.value,
+      ...filteredPoints.value.filter(
+        point => !selectedKeys.has(pointKey(point.ioa, point.asdu_type)),
+      ),
+    ]
+  }
+  lastClickedIndex.value = selectedRows.value.length > 0
+    ? filteredPoints.value.findIndex(point => isSelected(point))
+    : -1
+  emitSelection()
+}
+
 function invertFilteredSelection() {
   const selected = new Set(selectedRows.value.map(row => pointKey(row.ioa, row.asdu_type)))
   selectedRows.value = filteredPoints.value.filter(
@@ -1307,7 +1347,18 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
         </colgroup>
         <thead>
           <tr>
-            <th v-if="multiSelectMode" class="col-select" />
+            <th v-if="multiSelectMode" class="col-select">
+              <input
+                class="select-all-checkbox"
+                type="checkbox"
+                :checked="allFilteredSelected"
+                :indeterminate="someFilteredSelected"
+                :aria-label="t('table.selectFiltered')"
+                :title="t('table.selectFiltered')"
+                @click.stop
+                @change="toggleFilteredSelection"
+              />
+            </th>
             <th class="col-ioa sortable" @click="toggleSort('ioa')">
               IOA <span class="sort-glyph">{{ sortGlyph('ioa') }}</span>
               <span
@@ -1612,6 +1663,7 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
 
 .table-header-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
@@ -1669,7 +1721,7 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
 
 .search-input {
   flex: 1;
-  min-width: 0;
+  min-width: 140px;
   padding: 4px 8px;
   background: var(--c-surface0);
   border: 1px solid var(--c-surface1);

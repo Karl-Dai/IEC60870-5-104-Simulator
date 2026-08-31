@@ -17,6 +17,7 @@ export type DictShape = {
     newConnection: string
     connect: string
     disconnect: string
+    editConnection: string
     delete: string
     sendGI: string
     deactivateGI: string
@@ -51,6 +52,7 @@ export type DictShape = {
     title: string
     editTitle: string
     disconnectFirst: string
+    disconnectToEditConfirm: string
     targetAddress: string
     port: string
     commonAddress: string
@@ -377,6 +379,7 @@ const dict: DictShape = {
     newConnection: '新建连接',
     connect: '连接',
     disconnect: '断开',
+    editConnection: '编辑连接',
     delete: '删除',
     sendGI: '总召唤',
     deactivateGI: '停止总召',
@@ -411,6 +414,7 @@ const dict: DictShape = {
     title: '新建连接',
     editTitle: '编辑连接',
     disconnectFirst: '请先断开此连接再编辑',
+    disconnectToEditConfirm: '编辑连接会先断开当前连接，是否继续？',
     targetAddress: '目标地址',
     port: '端口',
     commonAddress: '公共地址 (CA)',
