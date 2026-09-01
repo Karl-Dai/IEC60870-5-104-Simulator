@@ -188,11 +188,16 @@ mod capture {
             pcap, iec104_frames
         );
 
-        // 3. Check encrypted application data exists
+        // 3. Check encrypted TLS records exist. TLS 1.2 exposes the inner
+        // ApplicationData content type, while TLS 1.3 exposes only the outer
+        // opaque record type without session keys.
         let output = Command::new("tshark")
             .args([
                 "-r", pcap,
-                "-Y", &format!("tls.record.content_type == 23 && tcp.port == {}", port),
+                "-Y", &format!(
+                    "(tls.record.content_type == 23 || tls.record.opaque_type == 23) && tcp.port == {}",
+                    port,
+                ),
                 "-T", "fields", "-e", "frame.number",
             ])
             .output()
@@ -200,7 +205,7 @@ mod capture {
         let app_data = String::from_utf8_lossy(&output.stdout).trim().to_string();
         assert!(
             !app_data.is_empty(),
-            "No encrypted application data found in pcap: {}",
+            "No encrypted TLS records found in pcap: {}",
             pcap
         );
 

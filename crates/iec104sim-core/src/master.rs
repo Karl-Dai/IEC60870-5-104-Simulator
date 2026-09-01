@@ -422,7 +422,7 @@ fn connect_via_socks5(
 /// A stream that can be either plain TCP or TLS-wrapped.
 enum MasterStream {
     Plain(TcpStream),
-    Tls(native_tls::TlsStream<TcpStream>),
+    Tls(crate::tls_compat::master::TlsStream),
 }
 
 impl MasterStream {
@@ -1247,7 +1247,15 @@ impl MasterConnection {
     }
 
     /// Create a TLS stream from a TCP stream using the configured certificates.
-    fn create_tls_stream(&self, tcp_stream: TcpStream) -> Result<native_tls::TlsStream<TcpStream>, MasterError> {
+    fn create_tls_stream(&self, tcp_stream: TcpStream) -> Result<crate::tls_compat::master::TlsStream, MasterError> {
+        // macOS' native TLS rejects v1 server certificates for lacking EKU.
+        // PEM/custom-CA device connections use OpenSSL with verification enabled;
+        // existing PKCS#12 and system-trust connections retain the native backend.
+        if !self.config.tls.ca_file.trim().is_empty() && self.config.tls.pkcs12_file.is_empty() {
+            return crate::tls_compat::master::connect(
+                &self.config.tls, &self.config.target_address, tcp_stream,
+            );
+        }
         let mut builder = native_tls::TlsConnector::builder();
 
         // Apply configured TLS version policy. For `Tls13Only` we pin both ends
@@ -1317,7 +1325,7 @@ impl MasterConnection {
         let tls_stream = connector.connect(domain, tcp_stream)
             .map_err(|e| MasterError::TlsError(format!("TLS 握手失败: {}", e)))?;
 
-        Ok(tls_stream)
+        Ok(crate::tls_compat::master::TlsStream::Native(tls_stream))
     }
 
     /// Disconnect from the remote slave.

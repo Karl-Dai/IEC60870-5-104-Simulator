@@ -15,8 +15,14 @@ rand = "0.8"
 native-tls = "0.2"
 tokio-native-tls = "0.3.1"
 rsa = { version = "0.9", default-features = false, features = ["std", "pem"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.39", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.2"
+# Legacy X.509 v1 identities: rustls slave validation and custom-CA master TLS.
+# Static linking also covers packaged desktop apps.
+openssl = { version = "0.10.76", features = ["vendored"] }
+rustls-native-certs = "0.8"
+x509-cert = { version = "0.2", default-features = false }
+webpki = { package = "rustls-webpki", version = "0.103.13", default-features = false, features = ["ring", "std"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

@@ -5,6 +5,23 @@ export interface ServerInfo {
   state: string
   station_count: number
   client_count: number
+  use_tls?: boolean
+}
+
+export interface ServerTlsSettings {
+  enabled: boolean
+  cert_file: string
+  key_file: string
+  ca_file: string
+  require_client_cert: boolean
+}
+
+export interface ServerTransportInfo {
+  id: string
+  bind_address: string
+  port: number
+  state: string
+  tls: ServerTlsSettings
 }
 
 export interface ClientConnectionInfo {

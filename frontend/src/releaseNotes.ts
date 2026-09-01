@@ -5,6 +5,9 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.14 新增 / Added: 补齐表头全选和连接配置快捷编辑 (#83); 兼容 X.509 v1/v3 证书并支持编辑或关闭服务器 TLS',
+  'v1.15.14 修复 / Fixed: 主站手动断开后停止自动重连',
+  'v1.15.14 改进 / Changed: 发布构建为 Ubuntu 依赖安装增加超时限制 (#82)',
   'v1.15.13 修复 / Fixed: 子站数据点详情面板在窄宽度下不再重叠、裁切或横向溢出 (#81)',
   'v1.15.12 改进 / Changed: add BYOK PR review agent (#77)',
   'v1.15.12 测试 / Tests: tls: retry transient port collisions (#78)',
@@ -86,8 +89,10 @@ export const RELEASE_NOTES: string[] = [
 // Keep the complete release history above for release automation, while the
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
-  'zh-CN': RELEASE_NOTES.slice(0, 1),
+  'zh-CN': RELEASE_NOTES.slice(0, 3),
   'en-US': [
-    'v1.15.13 Fixed: keep Slave Point Details readable and usable at narrow widths (#81)',
+    'v1.15.14 Added: table-header selection and connection editing shortcuts; X.509 v1/v3 support and editable server TLS settings',
+    'v1.15.14 Fixed: master: stop automatic reconnect after manual disconnect',
+    'v1.15.14 Changed: release: bound Ubuntu dependency installation (#82)',
   ],
 } as const

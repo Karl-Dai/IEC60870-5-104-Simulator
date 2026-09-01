@@ -71,6 +71,7 @@ const emit = defineEmits<{
   (e: 'station-select', serverId: string, ca: number, state: string, stationName: string): void
   (e: 'category-select', serverId: string, ca: number, category: string, state: string, stationName: string): void
   (e: 'edit-runtime-params', serverId: string, label: string): void
+  (e: 'edit-server', serverId: string): void
 }>()
 
 const treeRefreshKey = inject<Ref<number>>('treeRefreshKey')!
@@ -363,6 +364,12 @@ function ctxEditRuntimeParams() {
   emit('edit-runtime-params', serverId, serverLabel)
 }
 
+function ctxEditServer() {
+  const id = contextMenu.value.serverId
+  closeContextMenu()
+  emit('edit-server', id)
+}
+
 function isServerSelected(ts: TreeServer): boolean {
   return ts.server.id === selectedServerId.value && selectedCA.value === null
 }
@@ -406,6 +413,7 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
         <span class="node-arrow" @click.stop="toggleServer(ts)">{{ ts.expanded ? '\u25BC' : '\u25B6' }}</span>
         <span :class="['node-status', ts.server.state === 'Running' ? 'running' : 'stopped']"></span>
         <span class="node-label">{{ ts.server.bind_address }}:{{ ts.server.port }}</span>
+        <span v-if="ts.server.use_tls" class="tls-badge">TLS</span>
         <button
           type="button"
           class="client-count-badge"
@@ -473,6 +481,7 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
         <div class="context-menu-item" @click="ctxViewClientConnections">
           {{ t('tree.ctxViewConnections', { n: contextServerClientCount() }) }}
         </div>
+        <div class="context-menu-item" @click="ctxEditServer">{{ t('serverSettings.entry') }}</div>
         <div class="context-menu-item" @click="ctxEditRuntimeParams">{{ t('tree.ctxEditRuntimeParams') }}</div>
         <div class="context-menu-item danger" @click="ctxDeleteServer">{{ t('tree.ctxDeleteServer') }}</div>
       </template>
@@ -569,6 +578,7 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
   white-space: nowrap;
   min-width: 0;
 }
+.tls-badge { flex-shrink: 0; padding: 1px 4px; border-radius: 3px; background: color-mix(in srgb, var(--c-blue) 15%, transparent); color: var(--c-blue); font-size: 10px; line-height: 1.4; }
 
 .client-count-badge {
   margin-left: auto;

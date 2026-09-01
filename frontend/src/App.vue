@@ -8,6 +8,8 @@ import ValuePanel from './components/ValuePanel.vue'
 import LogPanel from './components/LogPanel.vue'
 import RemoteParamsDrawer from './components/RemoteParamsDrawer.vue'
 import RemoteParamsModal from './components/RemoteParamsModal.vue'
+import ServerSettingsModal from './components/ServerSettingsModal.vue'
+import type { ServerInfo } from './types'
 import AppDialog from '@shared/components/AppDialog.vue'
 import UpdateDialog from '@shared/components/UpdateDialog.vue'
 import ParseFrameDialog from '@shared/components/ParseFrameDialog.vue'
@@ -83,6 +85,23 @@ function refreshTree() {
   treeRefreshKey.value++
 }
 provide('refreshTree', refreshTree)
+
+const serverSettingsVisible = ref(false)
+const serverSettingsId = ref<string | null>(null)
+function openServerSettings(id: string | null = selectedServerId.value) {
+  if (!id) return
+  serverSettingsId.value = id
+  serverSettingsVisible.value = true
+}
+provide('openServerSettings', () => openServerSettings())
+function onServerSettingsSaved(info: ServerInfo) {
+  if (selectedServerId.value === info.id) selectedServerState.value = info.state
+  refreshTree()
+}
+function onServerSettingsStopped(id: string) {
+  if (selectedServerId.value === id) selectedServerState.value = 'Stopped'
+  refreshTree()
+}
 
 // Data refresh trigger
 const dataRefreshKey = ref(0)
@@ -242,6 +261,8 @@ function resetWorkspaceView() {
   runtimeParamsModalServerId.value = null
   runtimeParamsModalLabel.value = ''
   runtimeParamsDrawerVisible.value = false
+  serverSettingsVisible.value = false
+  serverSettingsId.value = null
 
   workspaceEpoch.value++
 }
@@ -268,6 +289,7 @@ provide('resetWorkspaceView', resetWorkspaceView)
         @station-select="handleStationSelect"
         @category-select="handleCategorySelect"
         @edit-runtime-params="openRuntimeParamsModal"
+        @edit-server="openServerSettings"
       />
     </aside>
     <Splitter
@@ -319,6 +341,14 @@ provide('resetWorkspaceView', resetWorkspaceView)
       :version="updateMeta?.version ?? ''"
       :notes="updateMeta?.notes ?? ''"
       @close="updateVisible = false"
+    />
+    <ServerSettingsModal
+      :key="`server-settings-${workspaceEpoch}`"
+      :visible="serverSettingsVisible"
+      :server-id="serverSettingsId"
+      @close="serverSettingsVisible = false"
+      @saved="onServerSettingsSaved"
+      @stopped="onServerSettingsStopped"
     />
     <RemoteParamsModal
       :key="`remote-params-modal-${workspaceEpoch}`"

@@ -68,6 +68,10 @@ export type DictShape = {
   }
   newServer: {
     title: string
+    createAndStart: string
+    creating: string
+    retry: string
+    failureKept: string
     bindAddressLabel: string
     bindAddressHint: string
     portLabel: string
@@ -84,6 +88,20 @@ export type DictShape = {
     serverKey: string
     caFile: string
     requireClientCert: string
+  }
+  serverSettings: {
+    title: string
+    entry: string
+    loading: string
+    runningHint: string
+    stopAndEdit: string
+    stopping: string
+    tlsOnHint: string
+    tlsOffHint: string
+    saveHint: string
+    requiredFiles: string
+    caRequiredLabel: string
+    reload: string
   }
   prompt: {
     inputCommonAddress: string
@@ -652,6 +670,10 @@ const dict: DictShape = {
   },
   newServer: {
     title: '新建服务器',
+    createAndStart: '创建并启动',
+    creating: '正在创建…',
+    retry: '重试创建',
+    failureKept: '创建或启动失败，填写内容已保留。',
     bindAddressLabel: '监听地址',
     bindAddressHint: '0.0.0.0 监听全部网卡；也可输入指定网卡的 IP 地址。',
     portLabel: '端口号',
@@ -668,6 +690,20 @@ const dict: DictShape = {
     serverKey: '服务器密钥文件 (PEM)',
     caFile: 'CA 证书文件 (PEM, 可选)',
     requireClientCert: '要求客户端证书 (mTLS)',
+  },
+  serverSettings: {
+    title: '服务器设置',
+    entry: '服务器设置（地址 / TLS）',
+    loading: '正在读取服务器设置…',
+    runningHint: '服务器正在运行。修改地址或 TLS 前需先停止，这会断开当前客户端连接。',
+    stopAndEdit: '停止并编辑',
+    stopping: '正在停止…',
+    tlsOnHint: '使用 TLS 加密通信；启用双向认证时必须填写 CA 证书。',
+    tlsOffHint: '关闭 TLS 后使用普通 TCP，原证书路径会保留，方便下次启用。',
+    saveHint: '保存后保持停止状态',
+    requiredFiles: '请填写服务器证书和私钥；启用双向认证时还需填写 CA 证书。',
+    caRequiredLabel: 'CA 证书文件 (PEM, 必填)',
+    reload: '重新读取',
   },
   prompt: {
     inputCommonAddress: '输入公共地址 (CA)',
