@@ -5,6 +5,7 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.15 修复 / Fixed: 树节点选中态改为深蓝底和高对比度前景色，提升服务器、站和分类的可读性',
   'v1.15.14 新增 / Added: 补齐表头全选和连接配置快捷编辑 (#83); 兼容 X.509 v1/v3 证书并支持编辑或关闭服务器 TLS',
   'v1.15.14 修复 / Fixed: 主站手动断开后停止自动重连',
   'v1.15.14 改进 / Changed: 发布构建为 Ubuntu 依赖安装增加超时限制 (#82)',
@@ -90,10 +91,8 @@ export const RELEASE_NOTES: string[] = [
 // Keep the complete release history above for release automation, while the
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
-  'zh-CN': RELEASE_NOTES.slice(0, 3),
+  'zh-CN': RELEASE_NOTES.slice(0, 1),
   'en-US': [
-    'v1.15.14 Added: table-header selection and connection editing shortcuts; X.509 v1/v3 support and editable server TLS settings',
-    'v1.15.14 Fixed: master: stop automatic reconnect after manual disconnect',
-    'v1.15.14 Changed: release: bound Ubuntu dependency installation (#82)',
+    'v1.15.15 Fixed: improve selected server, station, and category contrast and readability',
   ],
 } as const
