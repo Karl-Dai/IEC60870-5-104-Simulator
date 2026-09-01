@@ -12,3 +12,4 @@ pub mod timing;
 pub mod ca_debouncer;
 pub mod decode;
 pub(crate) mod tls_key;
+mod tls_compat;

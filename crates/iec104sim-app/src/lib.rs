@@ -19,12 +19,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Server commands
             commands::create_server,
+            commands::create_and_start_server,
             commands::start_server,
             commands::stop_server,
             commands::delete_server,
             commands::list_servers,
             commands::list_client_connections,
             commands::update_server_transport,
+            commands::get_server_transport,
             commands::list_bind_address_suggestions,
             // Station commands
             commands::add_station,

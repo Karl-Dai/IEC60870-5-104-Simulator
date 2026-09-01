@@ -30,6 +30,7 @@ const { showAlert, showPrompt, showConfirm } = inject<{
 }>(dialogKey)!
 const openParseFrame = inject<(prefill?: string) => void>('openParseFrame')!
 const openRuntimeParamsDrawer = inject<() => void>('openRuntimeParamsDrawer')!
+const openServerSettings = inject<() => void>('openServerSettings', () => {})
 
 type UpdateMeta = { version: string; notes: string; pub_date?: string | null }
 const checkUpdate = inject<(force?: boolean) => Promise<UpdateMeta | null>>('checkUpdate')!
@@ -289,6 +290,9 @@ async function downloadCsvTemplate() {
         :title="t('toolbar.titleStopServer')"
       >
         <span class="toolbar-label">{{ t('toolbar.stop') }}</span>
+      </button>
+      <button class="toolbar-btn" :disabled="!selectedServerId || serverActionPending" @click="openServerSettings" :title="t('serverSettings.entry')">
+        <span class="toolbar-label">{{ t('serverSettings.title') }}</span>
       </button>
     </div>
     <div class="toolbar-divider"></div>

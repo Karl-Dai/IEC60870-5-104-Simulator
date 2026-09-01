@@ -28,6 +28,8 @@ const certFile = ref('')
 const keyFile = ref('')
 const caFile = ref('')
 const requireClientCert = ref(false)
+const pending = ref(false)
+const errorText = ref('')
 
 function reset() {
   bindAddress.value = '0.0.0.0'
@@ -41,6 +43,7 @@ function reset() {
   keyFile.value = ''
   caFile.value = ''
   requireClientCert.value = false
+  errorText.value = ''
 }
 
 // 监听地址建议:0.0.0.0 / 127.0.0.1 / 各网卡 IPv4 地址(issue #28)。
@@ -55,11 +58,12 @@ async function loadBindSuggestions() {
 
 watch(() => props.visible, (v) => { if (v) { reset(); loadBindSuggestions() } })
 
-function close() { emit('update:visible', false) }
+function close() { if (!pending.value) emit('update:visible', false) }
 
 async function submit() {
+  if (pending.value) return
   const p = Number(port.value)
-  if (!p || p < 1 || p > 65535) {
+  if (!Number.isInteger(p) || p < 1 || p > 65535) {
     await showAlert(t('errors.invalidPort'))
     return
   }
@@ -68,12 +72,13 @@ async function submit() {
     await showAlert(t('errors.invalidCa'))
     return
   }
-  close()
+  pending.value = true
+  errorText.value = ''
   try {
     const c = Number.isFinite(count.value) && count.value >= 0
       ? Math.min(65534, Math.floor(count.value))
       : 0
-    const info = await invoke<{ id: string }>('create_server', {
+    await invoke('create_and_start_server', {
       request: {
         bind_address: bindAddress.value.trim() || undefined,
         port: p,
@@ -88,10 +93,12 @@ async function submit() {
         require_client_cert: requireClientCert.value || undefined,
       },
     })
-    await invoke('start_server', { id: info.id })
     refreshTree()
+    emit('update:visible', false)
   } catch (e) {
-    await showAlert(formatStartServerError(e, t))
+    errorText.value = formatStartServerError(e, t)
+  } finally {
+    pending.value = false
   }
 }
 </script>
@@ -99,13 +106,14 @@ async function submit() {
 <template>
   <Teleport to="body">
     <Transition name="dialog-pop">
-    <div v-if="visible" class="modal-overlay dialog-blur" @mousedown.self="close">
-      <div class="modal-box">
-        <div class="modal-title">{{ t('newServer.title') }}</div>
-        <div class="modal-body">
+    <div v-if="visible" class="modal-overlay dialog-blur">
+      <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="new-server-title" :aria-busy="pending">
+        <div id="new-server-title" class="modal-title">{{ t('newServer.title') }}</div>
+        <fieldset class="modal-body" :disabled="pending">
           <div class="modal-field">
-            <label>{{ t('newServer.bindAddressLabel') }}</label>
+            <label for="new-server-bind">{{ t('newServer.bindAddressLabel') }}</label>
             <input
+              id="new-server-bind"
               v-model="bindAddress"
               type="text"
               list="bind-address-suggestions"
@@ -118,16 +126,17 @@ async function submit() {
             <div class="field-hint">{{ t('newServer.bindAddressHint') }}</div>
           </div>
           <div class="modal-field">
-            <label>{{ t('newServer.portLabel') }}</label>
-            <input v-model="port" type="number" min="1" max="65535" @keyup.enter="submit" />
+            <label for="new-server-port">{{ t('newServer.portLabel') }}</label>
+            <input id="new-server-port" v-model="port" type="number" min="1" max="65535" @keyup.enter="submit" />
           </div>
           <div class="modal-field">
-            <label>{{ t('newServer.commonAddressLabel') }}</label>
-            <input v-model.number="commonAddress" type="number" min="1" max="65534" step="1" @keyup.enter="submit" />
+            <label for="new-server-ca">{{ t('newServer.commonAddressLabel') }}</label>
+            <input id="new-server-ca" v-model.number="commonAddress" type="number" min="1" max="65534" step="1" @keyup.enter="submit" />
           </div>
           <div class="modal-field">
-            <label>{{ t('newServer.stationNameLabel') }}</label>
+            <label for="new-server-station">{{ t('newServer.stationNameLabel') }}</label>
             <input
+              id="new-server-station"
               v-model="stationName"
               type="text"
               :placeholder="t('newServer.stationNamePlaceholder')"
@@ -146,8 +155,8 @@ async function submit() {
             </div>
           </div>
           <div class="modal-field">
-            <label>{{ t('newServer.countPerCategory') }}</label>
-            <input v-model.number="count" type="number" min="0" max="65534" @keyup.enter="submit" />
+            <label for="new-server-count">{{ t('newServer.countPerCategory') }}</label>
+            <input id="new-server-count" v-model.number="count" type="number" min="0" max="65534" @keyup.enter="submit" />
             <div class="field-hint">{{ t('newServer.countHint') }}</div>
           </div>
           <div class="modal-field">
@@ -173,7 +182,7 @@ async function submit() {
             <FilePathInput
               v-model="caFile"
               class="modal-field"
-              :label="t('newServer.caFile')"
+              :label="requireClientCert ? t('serverSettings.caRequiredLabel') : t('newServer.caFile')"
               placeholder="/path/to/ca.crt"
               kind="certificate"
             />
@@ -183,10 +192,14 @@ async function submit() {
               </label>
             </div>
           </template>
+        </fieldset>
+        <div v-if="errorText" class="submit-error" role="alert">
+          <strong>{{ t('newServer.failureKept') }}</strong>
+          <p>{{ errorText }}</p>
         </div>
         <div class="modal-actions">
-          <button class="modal-btn cancel" @click="close">{{ t('common.cancel') }}</button>
-          <button class="modal-btn confirm" @click="submit">{{ t('common.ok') }}</button>
+          <button class="modal-btn cancel" :disabled="pending" @click="close">{{ t('common.cancel') }}</button>
+          <button class="modal-btn confirm" :disabled="pending" @click="submit">{{ pending ? t('newServer.creating') : errorText ? t('newServer.retry') : t('newServer.createAndStart') }}</button>
         </div>
       </div>
     </div>
@@ -227,10 +240,17 @@ async function submit() {
   margin-bottom: 16px;
 }
 .modal-body {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
 }
+.submit-error { margin-top: 12px; padding: 10px; color: var(--c-red); background: color-mix(in srgb, var(--c-red) 10%, transparent); border-radius: 5px; font-size: 12px; max-height: 150px; overflow-y: auto; }
+.submit-error p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.modal-btn:disabled { opacity: 0.55; cursor: wait; }
 .modal-field { margin-bottom: 14px; }
 .modal-field label {
   display: block;

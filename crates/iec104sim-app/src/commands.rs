@@ -67,15 +67,37 @@ pub async fn create_server(
     request: CreateServerRequest,
 ) -> Result<ServerInfo, String> {
     state.wait_workspace_ready().await;
-    // A full config load replaces both the server table and the ID allocation
-    // range. Keep creation serialized with that workspace-wide mutation.
     let _workspace_guard = state.workspace_mutation.lock().await;
-    let id = {
-        let mut counter = state.next_server_id.write().await;
-        let id = format!("server_{}", *counter);
-        *counter += 1;
-        id
-    };
+    let info = create_server_in_workspace(&state, request, false).await.map_err(|e| e.message)?;
+    persist_workspace_after(&state, &app_handle, "creating a server").await;
+    Ok(info)
+}
+
+/// The creation dialog uses one transaction: a failed bind/TLS setup must not
+/// leave an invisible stopped server behind or duplicate it when retried.
+#[tauri::command]
+pub async fn create_and_start_server(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    request: CreateServerRequest,
+) -> Result<ServerInfo, StartServerError> {
+    state.wait_workspace_ready().await;
+    let _workspace_guard = state.workspace_mutation.lock().await;
+    let info = create_server_in_workspace(&state, request, true).await?;
+    persist_workspace_after(&state, &app_handle, "creating and starting a server").await;
+    Ok(info)
+}
+
+async fn create_server_in_workspace(
+    state: &AppState,
+    request: CreateServerRequest,
+    start: bool,
+) -> Result<ServerInfo, StartServerError> {
+    if request.port == 0 {
+        return Err(StartServerError::new("invalid_port", "端口必须在 1–65535 之间"));
+    }
+    // A full config load replaces both the server table and the ID allocation
+    // range. The command caller holds the workspace mutation guard.
 
     let transport = SlaveTransportConfig {
         bind_address: request.bind_address.unwrap_or_else(|| "0.0.0.0".to_string()),
@@ -92,7 +114,7 @@ pub async fn create_server(
     };
 
     let log_collector = Arc::new(LogCollector::new());
-    let server = SlaveServer::new(transport).with_log_collector(log_collector.clone());
+    let mut server = SlaveServer::new(transport).with_log_collector(log_collector.clone());
 
     // 在加站点之前应用服务器级配置,以便首次 set 后的任何上送都按目标参数发送。
     if let Some(mut t) = request.protocol_timing {
@@ -119,7 +141,17 @@ pub async fn create_server(
     server
         .add_station(default_station)
         .await
-        .map_err(|e| format!("failed to add default station: {}", e))?;
+        .map_err(StartServerError::from_slave)?;
+
+    // Acquire both publication locks before starting. There are no suspension
+    // points between successful startup and inserting the live server.
+    let mut counter = state.next_server_id.write().await;
+    let mut servers = state.servers.write().await;
+    if start {
+        server.start().await.map_err(StartServerError::from_slave)?;
+    }
+    let id = format!("server_{}", *counter);
+    *counter += 1;
 
     let info = ServerInfo {
         id: id.clone(),
@@ -131,15 +163,13 @@ pub async fn create_server(
         use_tls: server.transport.tls.enabled,
     };
 
-    state.servers.write().await.insert(
+    servers.insert(
         id,
         SlaveServerState {
             server,
             log_collector,
         },
     );
-
-    persist_workspace_after(&state, &app_handle, "creating a server").await;
 
     Ok(info)
 }
@@ -335,14 +365,14 @@ pub async fn list_client_connections(
         .collect())
 }
 
-/// 校验传输配置(监听地址 / 端口)改动是否被允许。纯函数,便于单测:
+/// 校验传输配置(监听地址 / 端口 / TLS)改动是否被允许。纯函数,便于单测:
 /// 端口 0 非法;运行中的服务器端口被监听 socket 占用,必须先停止再改。
 fn validate_transport_change(state: ServerState, port: u16) -> Result<(), String> {
     if port == 0 {
         return Err("端口必须在 1–65535 之间".to_string());
     }
     if state == ServerState::Running {
-        return Err("请先停止服务器再修改监听地址 / 端口".to_string());
+        return Err("请先停止服务器再修改监听地址 / 端口 / TLS".to_string());
     }
     Ok(())
 }
@@ -353,10 +383,78 @@ pub struct UpdateServerTransportRequest {
     pub server_id: String,
     pub bind_address: String,
     pub port: u16,
+    /// Omitted by older address/port editors: preserve their existing TLS config.
+    #[serde(default)]
+    pub tls: Option<ServerTlsSettings>,
 }
 
-/// 修改已存在服务器的监听地址 / 端口。传输配置原本只在 `create_server` 时设定,
-/// 本命令让用户无需删除重建即可改端口。运行中拒绝(端口被监听占用,见
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServerTlsSettings {
+    pub enabled: bool,
+    pub cert_file: String,
+    pub key_file: String,
+    pub ca_file: String,
+    pub require_client_cert: bool,
+}
+
+impl From<&iec104sim_core::slave::SlaveTlsConfig> for ServerTlsSettings {
+    fn from(tls: &iec104sim_core::slave::SlaveTlsConfig) -> Self {
+        Self { enabled: tls.enabled, cert_file: tls.cert_file.clone(), key_file: tls.key_file.clone(),
+            ca_file: tls.ca_file.clone(), require_client_cert: tls.require_client_cert }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServerTransportInfo {
+    pub id: String,
+    pub bind_address: String,
+    pub port: u16,
+    pub state: String,
+    pub tls: ServerTlsSettings,
+}
+
+#[tauri::command]
+pub async fn get_server_transport(state: State<'_, AppState>, server_id: String) -> Result<ServerTransportInfo, String> {
+    state.wait_workspace_ready().await;
+    let servers = state.servers.read().await;
+    let srv = servers.get(&server_id).ok_or_else(|| format!("server {} not found", server_id))?;
+    Ok(ServerTransportInfo {
+        id: server_id, bind_address: srv.server.transport.bind_address.clone(),
+        port: srv.server.transport.port, state: format!("{:?}", srv.server.state()),
+        tls: ServerTlsSettings::from(&srv.server.transport.tls),
+    })
+}
+
+fn apply_server_transport(server: &mut SlaveServer, request: &UpdateServerTransportRequest) -> Result<(), String> {
+    validate_transport_change(server.state(), request.port)?;
+    let tls = match &request.tls {
+        Some(tls) => {
+            let mut updated = server.transport.tls.clone();
+            updated.enabled = tls.enabled;
+            updated.cert_file = tls.cert_file.clone();
+            updated.key_file = tls.key_file.clone();
+            updated.ca_file = tls.ca_file.clone();
+            updated.require_client_cert = tls.require_client_cert;
+            if updated.cert_file != server.transport.tls.cert_file || updated.key_file != server.transport.tls.key_file {
+                updated.pkcs12_file.clear();
+                updated.pkcs12_password.clear();
+            }
+            updated.validate().map_err(|e| e.to_string())?;
+            updated
+        }
+        None => server.transport.tls.clone(),
+    };
+    let bind = request.bind_address.trim();
+    // Commit only after validation, retaining stations, points and runtime params.
+    server.transport = SlaveTransportConfig {
+        bind_address: if bind.is_empty() { "0.0.0.0".into() } else { bind.into() },
+        port: request.port, tls,
+    };
+    Ok(())
+}
+
+/// 修改已存在服务器的监听地址 / 端口 / TLS,保留站点与点位。
+/// 本命令让用户无需删除重建即可更改传输。运行中拒绝(见
 /// `validate_transport_change`),需先 `stop_server`。
 #[tauri::command]
 pub async fn update_server_transport(
@@ -364,20 +462,14 @@ pub async fn update_server_transport(
     app_handle: AppHandle,
     request: UpdateServerTransportRequest,
 ) -> Result<ServerInfo, String> {
+    state.wait_workspace_ready().await;
+    let _workspace_guard = state.workspace_mutation.lock().await;
     let mut servers = state.servers.write().await;
     let srv = servers
         .get_mut(&request.server_id)
         .ok_or_else(|| format!("server {} not found", request.server_id))?;
 
-    validate_transport_change(srv.server.state(), request.port)?;
-
-    // 空地址回落到 0.0.0.0(与 create_server 默认一致),避免 bind 到空串失败。
-    let bind = {
-        let b = request.bind_address.trim();
-        if b.is_empty() { "0.0.0.0".to_string() } else { b.to_string() }
-    };
-    srv.server.transport.bind_address = bind;
-    srv.server.transport.port = request.port;
+    apply_server_transport(&mut srv.server, &request)?;
 
     let station_count = srv.server.stations.read().await.len();
     let info = ServerInfo {
@@ -3553,6 +3645,99 @@ mod tests {
     }
 
     // ---- update_server_transport 的端口/运行态守卫(纯函数) ----
+
+    fn server_ui_request(port: u16, tls: bool) -> CreateServerRequest {
+        serde_json::from_value(serde_json::json!({
+            "bind_address": "127.0.0.1", "port": port,
+            "common_address": 456, "station_name": "保留的站点",
+            "count_per_category": 2, "use_tls": tls,
+            "cert_file": "/missing/server.crt", "key_file": "/missing/server.key",
+            "ca_file": "/missing/ca.crt", "require_client_cert": true,
+        })).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn server_ui_creation_failures_publish_nothing_and_retry_creates_once() {
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        let state = AppState::new();
+        let bind_error = create_server_in_workspace(&state, server_ui_request(port, false), true).await.unwrap_err();
+        assert_eq!(bind_error.code, "addr_in_use");
+        drop(occupied);
+        let tls_error = create_server_in_workspace(&state, server_ui_request(port, true), true).await.unwrap_err();
+        assert_eq!(tls_error.code, "start_failed");
+        assert!(state.servers.read().await.is_empty());
+        assert_eq!(*state.next_server_id.read().await, 1);
+        let info = create_server_in_workspace(&state, server_ui_request(port, false), true).await.unwrap();
+        assert_eq!(info.id, "server_1");
+        assert_eq!(info.state, "Running");
+        assert_eq!(state.servers.read().await.len(), 1);
+        let saved = SlaveConfigFile::from_json(&serialize_workspace(&state).await.unwrap()).unwrap();
+        assert_eq!(saved.servers[0].stations[0].common_address, 456);
+        assert_eq!(saved.servers[0].stations[0].name, "保留的站点");
+        state.servers.write().await.get_mut(&info.id).unwrap().server.stop().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn server_ui_tls_can_be_disabled_without_losing_stations_or_partial_updates() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        let state = AppState::new();
+        let info = create_server_in_workspace(&state, server_ui_request(port, true), false).await.unwrap();
+        let before = SlaveConfigFile::from_json(&serialize_workspace(&state).await.unwrap()).unwrap();
+        {
+            let mut servers = state.servers.write().await;
+            let server = &mut servers.get_mut(&info.id).unwrap().server;
+            let mut tls = ServerTlsSettings::from(&server.transport.tls);
+            tls.enabled = false;
+            let request = UpdateServerTransportRequest {
+                server_id: info.id.clone(), bind_address: "127.0.0.1".into(), port, tls: Some(tls.clone()),
+            };
+            apply_server_transport(server, &request).unwrap();
+            assert!(!server.transport.tls.enabled);
+            assert_eq!(server.transport.tls.cert_file, "/missing/server.crt");
+            // Validation must finish before any address/port/TLS mutation.
+            tls.enabled = true;
+            let invalid = UpdateServerTransportRequest { bind_address: "0.0.0.0".into(), port: 1, tls: Some(tls), ..request };
+            assert!(apply_server_transport(server, &invalid).is_err());
+            assert_eq!(server.transport.port, port);
+            assert_eq!(server.transport.bind_address, "127.0.0.1");
+            assert!(!server.transport.tls.enabled);
+            drop(probe);
+            server.start().await.unwrap();
+            assert!(apply_server_transport(server, &invalid).unwrap_err().contains("停止"));
+            assert_eq!(server.transport.port, port);
+        }
+        let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        client.write_all(&[0x68, 4, 7, 0, 0, 0]).await.unwrap();
+        let mut reply = [0; 6];
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.read_exact(&mut reply)).await.unwrap().unwrap();
+        assert_eq!(reply, [0x68, 4, 0x0b, 0, 0, 0]);
+        let after = SlaveConfigFile::from_json(&serialize_workspace(&state).await.unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(&before.servers[0].stations).unwrap(), serde_json::to_value(&after.servers[0].stations).unwrap());
+        assert!(!after.servers[0].tls.enabled);
+        assert_eq!(after.servers[0].tls.cert_file, before.servers[0].tls.cert_file);
+        state.servers.write().await.get_mut(&info.id).unwrap().server.stop().await.unwrap();
+    }
+
+    #[test]
+    fn server_ui_old_address_editor_preserves_tls_and_readback_excludes_passwords() {
+        let mut server = SlaveServer::new(SlaveTransportConfig {
+            bind_address: "127.0.0.1".into(), port: 2404,
+            tls: SlaveTlsConfig { enabled: true, cert_file: "/retained.crt".into(),
+                pkcs12_password: "not-for-the-frontend".into(), ..Default::default() },
+        });
+        let request: UpdateServerTransportRequest = serde_json::from_value(serde_json::json!({
+            "server_id": "server_1", "bind_address": "0.0.0.0", "port": 2405,
+        })).unwrap();
+        apply_server_transport(&mut server, &request).unwrap();
+        assert!(server.transport.tls.enabled);
+        assert_eq!(server.transport.tls.cert_file, "/retained.crt");
+        let readback = serde_json::to_string(&ServerTlsSettings::from(&server.transport.tls)).unwrap();
+        assert!(!readback.contains("password"));
+        assert!(!readback.contains("not-for-the-frontend"));
+    }
 
     #[test]
     fn validate_transport_ok_when_stopped_and_valid_port() {

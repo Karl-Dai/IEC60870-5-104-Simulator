@@ -156,6 +156,7 @@ Since v1.12.10 the in-app updater tries a **self-hosted mainland accelerator** (
 - [Rust](https://rustup.rs/) 1.77+
 - [Node.js](https://nodejs.org/) 18+
 - [Tauri CLI](https://tauri.app/) — `cargo install tauri-cli`
+- A C compiler, Perl, and Make (MSVC/NMake on Windows) — the X.509 compatibility layer statically builds OpenSSL; installed apps do not require a separate OpenSSL installation.
 
 ### Steps
 
@@ -189,6 +190,20 @@ Open **IEC104Slave** and click **新建服务器 (New Server)**: it binds `0.0.0
 This tutorial image follows the current `main` frontend after the v1.15.6 tag, not the v1.15.6 release artifact. The UI still reports `v1.15.6` until the next version bump; the 1600×900 capture keeps the post-release point CSV actions, **Simulation Settings**, control-point guidance, active Random indicator, and complete point count visible.
 
 **Tip · batch-add**: the **批量添加 (Batch Add)** dialog takes an IOA range (e.g. `1-200`) and an ASDU type, creating hundreds of points in one shot.
+
+**Server settings:** select a server and click **服务器设置 (Server Settings)**, or use its context menu, to edit the address, port and TLS. A running server offers **停止并编辑 (Stop and Edit)** and explains that clients will disconnect. Saving keeps the server stopped and preserves its stations and points. Disabling TLS retains certificate paths for later reuse. If creation/startup fails, the creation dialog retains its input and shows an inline error; retrying does not leave duplicate servers behind.
+
+**TLS certificates:** the slave accepts both X.509 v3 and legacy v1 PEM server/client certificates, including mixed-version mutual TLS. X.509 versions describe the certificate format; they are independent of TLS 1.2/1.3. The v3 verification path is unchanged. A v1 client must chain to the configured CA, be currently valid, and prove possession of its private key; weak keys/signatures remain rejected. v1 has no SAN or key-usage extensions, so compatibility cannot provide the identity/usage restrictions carried by v3 extensions. Prefer v3 for newly issued certificates. Existing PEM files are not rewritten and the slave does not import keys into the macOS Keychain.
+
+For the master, configure a **CA file plus PEM client certificate/key** (if mutual TLS is required) to use v1/v3 compatibility. These connections use OpenSSL while retaining CA/time/purpose/signature verification, the existing hostname policy, and system roots alongside the configured CA. PKCS#12 identities and connections without a custom CA retain the existing native TLS backend and its platform limitations; they are not covered by the new v1 compatibility path.
+
+To check a local certificate directory against the real master and slave without modifying its files:
+
+```bash
+IEC104_TLS_CERT_DIR=/path/to/certs cargo test -p iec104sim-core --lib tls_compat::tests::configured_certificate_directory -- --ignored
+```
+
+The directory must contain `ca.crt`, `server.crt`, `server.key`, `client.crt`, and `client.key`. The check uses loopback, verifies mutual TLS 1.2/1.3, exchanges IEC 104 STARTDT/TESTFR frames, and confirms that the application master receives GI data. Never commit private keys or site certificates as test fixtures.
 
 ### Step 2 · Master — create a connection
 

@@ -58,6 +58,17 @@ pub struct SlaveTlsConfig {
     pub pkcs12_password: String,
 }
 
+impl SlaveTlsConfig {
+    /// Validate an enabled TLS identity without binding a socket or changing
+    /// runtime state. Disabled TLS deliberately ignores retained file paths.
+    pub fn validate(&self) -> Result<(), SlaveError> {
+        if self.enabled {
+            build_rustls_server_config(self)?;
+        }
+        Ok(())
+    }
+}
+
 fn load_pem_certificates(
     path: &str,
     label: &str,
@@ -103,10 +114,14 @@ fn build_rustls_server_config(cfg: &SlaveTlsConfig) -> Result<rustls::ServerConf
     let private_key = load_pem_private_key(&cfg.key_file)?;
 
     let builder = rustls::ServerConfig::builder();
+    let provider = builder.crypto_provider().clone();
+    let identity = crate::tls_compat::certified_key(certificates, private_key, &provider)
+        .map_err(|e| SlaveError::TlsError(format!("创建 rustls 服务端配置失败: {}", e)))?;
+    let resolver = Arc::new(rustls::sign::SingleCertAndKey::from(identity));
     if cfg.require_client_cert {
         let ca_certificates = load_pem_certificates(&cfg.ca_file, "客户端 CA 证书")?;
         let mut roots = rustls::RootCertStore::empty();
-        for certificate in ca_certificates {
+        for certificate in ca_certificates.iter().cloned() {
             roots.add(certificate).map_err(|e| {
                 SlaveError::TlsError(format!("客户端 CA 证书不可用: {}", e))
             })?;
@@ -114,15 +129,15 @@ fn build_rustls_server_config(cfg: &SlaveTlsConfig) -> Result<rustls::ServerConf
         let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
             .build()
             .map_err(|e| SlaveError::TlsError(format!("创建客户端证书校验器失败: {}", e)))?;
-        builder
-            .with_client_cert_verifier(verifier)
-            .with_single_cert(certificates, private_key)
-            .map_err(|e| SlaveError::TlsError(format!("创建 rustls 服务端配置失败: {}", e)))
+        let verifier = crate::tls_compat::ClientVerifier::new(verifier, &ca_certificates, provider)
+            .map_err(|e| SlaveError::TlsError(format!("创建客户端证书校验器失败: {}", e)))?;
+        Ok(builder
+            .with_client_cert_verifier(Arc::new(verifier))
+            .with_cert_resolver(resolver))
     } else {
-        builder
+        Ok(builder
             .with_no_client_auth()
-            .with_single_cert(certificates, private_key)
-            .map_err(|e| SlaveError::TlsError(format!("创建 rustls 服务端配置失败: {}", e)))
+            .with_cert_resolver(resolver))
     }
 }
 
