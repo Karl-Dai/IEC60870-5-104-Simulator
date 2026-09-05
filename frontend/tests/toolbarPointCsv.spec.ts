@@ -41,7 +41,7 @@ function mountToolbar(commonAddress: number | null = 12, serverState = 'Stopped'
           showConfirm,
         },
       },
-      stubs: { AboutDialog: true, LangSwitch: true, VersionBadge: true, NewServerModal: true },
+      stubs: { teleport: true, AboutDialog: true, LangSwitch: true, VersionBadge: true, NewServerModal: true },
     },
   })
 }

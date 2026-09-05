@@ -43,7 +43,7 @@ function mountToolbar() {
           showConfirm: () => Promise.resolve(false),
         },
       },
-      stubs: { AboutDialog: true, LangSwitch: true, VersionBadge: true, NewServerModal: true },
+      stubs: { teleport: true, AboutDialog: true, LangSwitch: true, VersionBadge: true, NewServerModal: true },
     },
   })
 }
