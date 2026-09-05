@@ -5,6 +5,7 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  "v1.15.17 版本同步：本次更新集中于从站工具栏、批量启停和配置加载，主站无功能变更",
   'v1.15.16 修复：点位变值仅强调数值，不再加深整行背景，保留选中行可读性',
   'v1.15.15 修复 / Fixed: 树节点选中态改为深蓝底和高对比度前景色，提升服务器、站和分类的可读性',
   'v1.15.14 新增 / Added: 补齐表头全选和连接配置快捷编辑 (#83); 兼容 X.509 v1/v3 证书并支持编辑或关闭服务器 TLS',
@@ -92,8 +93,10 @@ export const RELEASE_NOTES: string[] = [
 // Keep the complete release history above for release automation, while the
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
-  'zh-CN': RELEASE_NOTES.slice(0, 1),
-  'en-US': [
-    'v1.15.16 Fixed: highlight changed values without darkening entire rows, preserving selection readability',
+  "zh-CN": [
+    "v1.15.17 版本同步：本次更新集中于从站工具栏、批量启停和配置加载，主站无功能变更",
+  ],
+  "en-US": [
+    "v1.15.17 Release alignment: this update focuses on slave toolbar menus, bulk server controls and configuration loading; no master features change",
   ],
 } as const

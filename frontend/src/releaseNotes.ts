@@ -5,6 +5,9 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  "v1.15.17 新增：全部启动、全部停止，显示进度并汇总失败原因；支持输入完整路径加载配置",
+  "v1.15.17 改进：工具栏按功能分组，保留一键启停，支持键盘导航和 800 像素窗口",
+  "v1.15.17 修复：弹窗期间统一锁定冲突操作，切换服务器或站不会改变本次操作目标",
   'v1.15.16 新增：全部点位仿真模式支持每上送 N 个点等待 D 毫秒，按主站连接分别计数，设置实时生效',
   'v1.15.16 修复：大批量操作时可关闭仿真侧栏，活动点位分页显示；变值仅强调数值，保留行背景',
   'v1.15.15 修复 / Fixed: 树节点选中态改为深蓝底和高对比度前景色，提升服务器、站和分类的可读性',
@@ -92,9 +95,14 @@ export const RELEASE_NOTES: string[] = [
 // Keep the complete release history above for release automation, while the
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
-  'zh-CN': RELEASE_NOTES.slice(0, 2),
-  'en-US': [
-    'v1.15.16 Added: live upload pacing for all point simulation modes, counted separately for each master connection',
-    'v1.15.16 Fixed: keep the simulation drawer closable during bulk operations, paginate active points, and highlight only changed values',
+  "zh-CN": [
+    "v1.15.17 新增：全部启动、全部停止，显示进度并汇总失败原因；支持输入完整路径加载配置",
+    "v1.15.17 改进：工具栏按功能分组，保留一键启停，支持键盘导航和 800 像素窗口",
+    "v1.15.17 修复：弹窗期间统一锁定冲突操作，切换服务器或站不会改变本次操作目标",
+  ],
+  "en-US": [
+    "v1.15.17 Added: start and stop all servers with progress and failure details, and load configuration by pasted path",
+    "v1.15.17 Changed: grouped toolbar menus with direct bulk controls, keyboard navigation, and support for 800-pixel windows",
+    "v1.15.17 Fixed: coordinate dialog workflows and preserve operation targets when selection changes",
   ],
 } as const

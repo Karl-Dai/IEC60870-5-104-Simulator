@@ -2,6 +2,33 @@
 
 本项目的所有重要变更记录在此文件。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.15.17] - 2026-09-05
+
+### Highlights / 亮点
+
+- 从站新增一键全部启动和全部停止，跳过已处于目标状态的服务器，显示进度并汇总失败原因 / Start or stop all slave servers in one click, skip servers already in the target state, and show progress and failure details.
+- 工具栏按配置、新建、点表、设置、工具和帮助分组，当前服务器与全部服务器启停保持直接可用，中英文界面适配 800 像素窗口 / Group toolbar commands into menus while keeping current-server and bulk controls directly accessible, including in 800-pixel windows.
+- 可粘贴完整文件路径加载配置；文件选择、输入和导入模式弹窗期间统一锁定冲突操作，切换选中站不会改变已开始操作的目标 / Load configuration by pasted path and keep operation targets stable throughout file pickers, prompts, and CSV import dialogs.
+
+### Added 新增
+
+- 配置菜单支持输入路径，接受带成对引号的中文或空格路径，失败后保留路径供修改 / Accept quoted configuration paths containing spaces or Chinese characters and retain failed paths for correction.
+- 全部停止保留服务器和站点配置，单个服务器失败后继续处理其余项 / Stop all servers without deleting configuration and continue processing after individual failures.
+
+### Changed 改进
+
+- 将服务器、配置和点表操作拆分为独立模块；菜单支持方向键、Home/End、Esc、Tab 和窗口边缘定位 / Separate server, configuration, and point CSV operations; support keyboard menu navigation and keep popups inside the viewport.
+- 主站同步发布版本号，本次无主站功能变更 / Synchronize the master release version; no master features change in this release.
+
+### Fixed 修复
+
+- 文件选择器打开时即阻止重复或冲突操作，取消及失败后恢复可用状态 / Block repeated or conflicting actions from the moment a file picker opens and unlock after cancellation or failure.
+- 修复单台启动完成后覆盖另一台选中服务器状态、以及 CSV 弹窗期间切换站导致目标变化的问题 / Preserve the original target when selection changes during server startup or CSV dialogs.
+
+### Tests 测试
+
+- 从站前端 273 项测试通过；真实浏览器验证中英文窄窗口菜单、焦点与键盘交互 / All 273 slave frontend tests pass, with real-browser checks for bilingual narrow-window menus, focus, and keyboard interaction.
+
 ## [1.15.16] - 2026-09-05
 
 ### Added 新增
