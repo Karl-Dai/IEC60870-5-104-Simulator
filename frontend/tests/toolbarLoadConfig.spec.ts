@@ -21,6 +21,7 @@ const refreshTree = vi.fn()
 const refreshData = vi.fn()
 const resetWorkspaceView = vi.fn()
 const showAlert = vi.fn(() => Promise.resolve())
+const showPrompt = vi.fn()
 
 function mountToolbar() {
   return mount(Toolbar, {
@@ -38,7 +39,7 @@ function mountToolbar() {
         checkUpdate: () => Promise.resolve(null),
         [dialogKey as symbol]: {
           showAlert,
-          showPrompt: () => Promise.resolve(null),
+          showPrompt,
           showConfirm: () => Promise.resolve(false),
         },
       },
@@ -60,10 +61,84 @@ beforeEach(() => {
   refreshData.mockClear()
   resetWorkspaceView.mockClear()
   showAlert.mockClear()
+  showPrompt.mockReset()
+  showPrompt.mockResolvedValue(null)
   useI18n().setLocale('en-US')
 })
 
 describe('Toolbar full-workspace config loading', () => {
+  it('loads a pasted path without invoking the native file picker', async () => {
+    showPrompt.mockResolvedValue('  "/tmp/配置 files/cfg.json"  ')
+    const w = mountToolbar()
+
+    await w.find('[data-testid="open-config-by-path"]').trigger('click')
+    await flushPromises()
+
+    expect(openMock).not.toHaveBeenCalled()
+    expect(invokeMock).toHaveBeenCalledWith('load_config', { path: '/tmp/配置 files/cfg.json' })
+    expect(resetWorkspaceView).toHaveBeenCalledTimes(1)
+    expect(resetWorkspaceView.mock.invocationCallOrder[0])
+      .toBeLessThan(refreshTree.mock.invocationCallOrder[0])
+    expect(refreshData).toHaveBeenCalledTimes(1)
+    expect(showAlert).toHaveBeenCalledWith('Loaded 3 server(s)')
+    w.unmount()
+  })
+
+  it.each([null, '   ', '""'])( 'does not load a cancelled or empty path: %s', async (input) => {
+    showPrompt.mockResolvedValue(input)
+    const w = mountToolbar()
+
+    await w.find('[data-testid="open-config-by-path"]').trigger('click')
+    await flushPromises()
+
+    expect(openMock).not.toHaveBeenCalled()
+    expect(invokeMock).not.toHaveBeenCalled()
+    expect(resetWorkspaceView).not.toHaveBeenCalled()
+    expect(refreshTree).not.toHaveBeenCalled()
+    expect(showAlert).toHaveBeenCalledTimes(input === null ? 0 : 1)
+    w.unmount()
+  })
+
+  it('retains a rejected path for correction and leaves the workspace untouched', async () => {
+    showPrompt.mockResolvedValueOnce('/tmp/missing.json')
+    invokeMock.mockRejectedValueOnce(new Error('file not found'))
+    const w = mountToolbar()
+
+    await w.find('[data-testid="open-config-by-path"]').trigger('click')
+    await flushPromises()
+    expect(showAlert.mock.calls.at(-1)?.[0]).toContain('file not found')
+    expect(resetWorkspaceView).not.toHaveBeenCalled()
+    expect(refreshTree).not.toHaveBeenCalled()
+    expect(refreshData).not.toHaveBeenCalled()
+
+    await w.find('[data-testid="open-config-by-path"]').trigger('click')
+    await flushPromises()
+    expect(showPrompt.mock.calls.at(-1)?.[1]).toBe('/tmp/missing.json')
+    expect(openMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('prevents overlapping imports while the direct load is pending', async () => {
+    showPrompt.mockResolvedValue('/tmp/cfg.json')
+    let finishLoad!: (count: number) => void
+    invokeMock.mockImplementationOnce(() => new Promise<number>((resolve) => { finishLoad = resolve }))
+    const w = mountToolbar()
+
+    await w.find('[data-testid="open-config-by-path"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="open-config-by-path"]').attributes('aria-busy')).toBe('true')
+    expect(loadConfigButton(w).attributes('disabled')).toBeDefined()
+    await w.find('[data-testid="open-config-by-path"]').trigger('click')
+    await loadConfigButton(w).trigger('click')
+    expect(invokeMock).toHaveBeenCalledTimes(1)
+    expect(openMock).not.toHaveBeenCalled()
+
+    finishLoad(3)
+    await flushPromises()
+    expect(w.find('[data-testid="open-config-by-path"]').attributes('disabled')).toBeUndefined()
+    w.unmount()
+  })
+
   it('resets the old workspace before refreshing the newly loaded snapshot', async () => {
     openMock.mockResolvedValue('/tmp/cfg.json')
     const w = mountToolbar()

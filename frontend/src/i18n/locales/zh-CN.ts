@@ -18,6 +18,12 @@ export type DictShape = {
   toolbar: {
     newServer: string
     start: string
+    startAll: string
+    titleStartAll: string
+    startAllProgress: string
+    startAllEmpty: string
+    startAllResult: string
+    startAllFailed: string
     stop: string
     addStation: string
     randomMutation: string
@@ -43,6 +49,10 @@ export type DictShape = {
     parseFrameInLog: string
     saveConfig: string
     openConfig: string
+    openConfigByPath: string
+    openConfigByPathTitle: string
+    configPathPrompt: string
+    configPathRequired: string
     configSaved: string
     configLoaded: string
     configSaveFailed: string
@@ -626,6 +636,12 @@ const dict: DictShape = {
   toolbar: {
     newServer: '新建服务器',
     start: '启动',
+    startAll: '全部启动',
+    titleStartAll: '启动所有未运行的服务器及其下属站，跳过已运行项',
+    startAllProgress: '启动中 {completed}/{total}',
+    startAllEmpty: '暂无服务器，请先新建服务器或加载配置。',
+    startAllResult: '全部启动完成：成功 {started} 个，已运行跳过 {skipped} 个，失败 {failed} 个。',
+    startAllFailed: '无法获取服务器列表',
     stop: '停止',
     addStation: '添加站',
     randomMutation: '随机变化',
@@ -651,6 +667,10 @@ const dict: DictShape = {
     parseFrameInLog: '解析此报文',
     saveConfig: '保存配置',
     openConfig: '打开配置',
+    openConfigByPath: '输入路径',
+    openConfigByPathTitle: '通过文件路径打开配置',
+    configPathPrompt: '粘贴 JSON 配置文件的完整路径。建议使用已下载到本地的文件。',
+    configPathRequired: '请输入配置文件的完整路径',
     configSaved: '配置已保存',
     configLoaded: '已加载 {count} 个服务器',
     configSaveFailed: '保存失败',

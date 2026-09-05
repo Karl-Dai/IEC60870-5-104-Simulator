@@ -12,6 +12,7 @@ import NewServerModal from './NewServerModal.vue'
 import CsvImportModeModal from './CsvImportModeModal.vue'
 import { useI18n } from '@shared/i18n'
 import { formatStartServerError } from '../errors'
+import type { ServerInfo } from '../types'
 
 const { t } = useI18n()
 const showAbout = ref(false)
@@ -63,6 +64,12 @@ const serverActionPending = ref(false)
 const csvActionPending = ref(false)
 const csvImportPath = ref<string | null>(null)
 const showCsvImportMode = ref(false)
+const configActionPending = ref(false)
+const configLoading = ref(false)
+const lastConfigPath = ref('')
+const startingAll = ref(false)
+const startAllCompleted = ref(0)
+const startAllTotal = ref(0)
 
 type PointCsvImportResult = {
   imported: number
@@ -94,6 +101,47 @@ async function stopServer() {
   } catch (e) {
     await showAlert(String(e))
   } finally {
+    serverActionPending.value = false
+  }
+}
+
+async function startAllServers() {
+  if (serverActionPending.value || configActionPending.value || csvActionPending.value) return
+  serverActionPending.value = true
+  startingAll.value = true
+  startAllCompleted.value = 0
+  startAllTotal.value = 0
+  try {
+    const servers = await invoke<ServerInfo[]>('list_servers')
+    if (!servers.length) {
+      await showAlert(t('toolbar.startAllEmpty'))
+      return
+    }
+    const pending = servers.filter(server => server.state !== 'Running')
+    startAllTotal.value = pending.length
+    const skipped = servers.length - pending.length
+    let started = 0
+    const failures: string[] = []
+    // The backend serializes listener changes; start one at a time and keep
+    // going after errors so a conflicting port cannot block the other servers.
+    for (const server of pending) {
+      try {
+        await invoke('start_server', { id: server.id })
+        started++
+        if (selectedServerId.value === server.id) selectedServerState.value = 'Running'
+      } catch (error) {
+        failures.push(`${server.bind_address}:${server.port} (${server.id}): ${formatStartServerError(error, t)}`)
+      } finally {
+        startAllCompleted.value++
+      }
+    }
+    const summary = t('toolbar.startAllResult', { started, skipped, failed: failures.length })
+    await showAlert([summary, ...failures].join('\n'))
+  } catch (error) {
+    await showAlert(`${t('toolbar.startAllFailed')}: ${formatStartServerError(error, t)}`)
+  } finally {
+    refreshTree()
+    startingAll.value = false
     serverActionPending.value = false
   }
 }
@@ -138,12 +186,8 @@ async function saveConfig() {
   }
 }
 
-async function openConfig() {
-  const path = await open({
-    multiple: false,
-    filters: [{ name: 'IEC104 Config', extensions: ['json'] }],
-  })
-  if (!path || typeof path !== 'string') return
+async function loadConfigPath(path: string) {
+  configLoading.value = true
   try {
     const count = await invoke<number>('load_config', { path })
     resetWorkspaceView()
@@ -152,8 +196,49 @@ async function openConfig() {
     // 否则数据表沿用旧快照,+TB 徽标按老配置显示(issue #28 同类残余)。
     refreshData()
     await showAlert(t('toolbar.configLoaded', { count }))
+  } finally {
+    configLoading.value = false
+  }
+}
+
+async function openConfig() {
+  if (configActionPending.value || startingAll.value) return
+  configActionPending.value = true
+  try {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: 'IEC104 Config', extensions: ['json'] }],
+    })
+    if (typeof path === 'string' && path) await loadConfigPath(path)
   } catch (e) {
     await showAlert(`${t('toolbar.configLoadFailed')}: ${e}`)
+  } finally {
+    configActionPending.value = false
+  }
+}
+
+async function openConfigByPath() {
+  if (configActionPending.value || startingAll.value) return
+  configActionPending.value = true
+  try {
+    const input = await showPrompt(t('toolbar.configPathPrompt'), lastConfigPath.value)
+    if (input === null) return
+    let path = input.trim()
+    // Accept a copied path wrapped in matching quotes, preserving spaces inside it.
+    if (path.length >= 2 && ((path.startsWith('"') && path.endsWith('"'))
+      || (path.startsWith("'") && path.endsWith("'")))) {
+      path = path.slice(1, -1)
+    }
+    if (!path.trim()) {
+      await showAlert(t('toolbar.configPathRequired'))
+      return
+    }
+    lastConfigPath.value = path
+    await loadConfigPath(path)
+  } catch (e) {
+    await showAlert(`${t('toolbar.configLoadFailed')}: ${e}`)
+  } finally {
+    configActionPending.value = false
   }
 }
 
@@ -291,6 +376,18 @@ async function downloadCsvTemplate() {
       >
         <span class="toolbar-label">{{ t('toolbar.stop') }}</span>
       </button>
+      <button
+        class="toolbar-btn btn-start"
+        data-testid="start-all-servers"
+        @click="startAllServers"
+        :disabled="serverActionPending || configActionPending || csvActionPending"
+        :aria-busy="startingAll"
+        :title="t('toolbar.titleStartAll')"
+      >
+        <span class="toolbar-label" role="status">{{ startingAll
+          ? (startAllTotal ? t('toolbar.startAllProgress', { completed: startAllCompleted, total: startAllTotal }) : t('common.loading'))
+          : t('toolbar.startAll') }}</span>
+      </button>
       <button class="toolbar-btn" :disabled="!selectedServerId || serverActionPending" @click="openServerSettings" :title="t('serverSettings.entry')">
         <span class="toolbar-label">{{ t('serverSettings.title') }}</span>
       </button>
@@ -329,8 +426,11 @@ async function downloadCsvTemplate() {
       <button class="toolbar-btn" @click="saveConfig" :title="t('toolbar.saveConfig')">
         <span class="toolbar-label">{{ t('toolbar.saveConfig') }}</span>
       </button>
-      <button class="toolbar-btn" data-testid="open-config" @click="openConfig" :title="t('toolbar.openConfig')">
+      <button class="toolbar-btn" data-testid="open-config" :disabled="configActionPending || startingAll" @click="openConfig" :title="t('toolbar.openConfig')">
         <span class="toolbar-label">{{ t('toolbar.openConfig') }}</span>
+      </button>
+      <button class="toolbar-btn" data-testid="open-config-by-path" :disabled="configActionPending || startingAll" :aria-busy="configLoading" @click="openConfigByPath" :title="t('toolbar.openConfigByPathTitle')">
+        <span class="toolbar-label">{{ configLoading ? t('common.loading') : t('toolbar.openConfigByPath') }}</span>
       </button>
       <button
         class="toolbar-btn"
