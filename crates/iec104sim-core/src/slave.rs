@@ -11,6 +11,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as AsyncTcpListener, TcpStream as AsyncTcpStream};
 use tokio::sync::RwLock;
 
+mod simulation_pacing;
+use simulation_pacing::SimulationWriter;
+
 fn slave_server_log(started: bool, address: Option<&str>, is_tls: bool) -> LogEntry {
     let detail = if started {
         format!(
@@ -225,10 +228,18 @@ impl CommandAckCot {
     pub fn as_u8(self) -> u8 { self as u8 }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Per-master upload pacing for every timed point simulation mode. The legacy
+/// type/field names are retained for compatibility with saved configurations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RandomMutationPacing {
     pub batch_size: u32,
     pub delay_ms: u32,
+}
+
+impl RandomMutationPacing {
+    pub fn normalized(self) -> Self {
+        Self { batch_size: self.batch_size.clamp(1, 100_000), delay_ms: self.delay_ms.min(60_000) }
+    }
 }
 
 impl Default for RandomMutationPacing {
@@ -740,6 +751,7 @@ pub struct ClientConnectionSnapshot {
 
 /// Per-connection write queue. The async write task drains this queue.
 struct ConnectionWrite {
+    simulation_tx: tokio::sync::mpsc::Sender<simulation_pacing::PendingPoint>,
     /// Mutex-protected byte queue. Write task drains this.
     queue: Arc<tokio::sync::Mutex<Vec<u8>>>,
     /// Shared sequence state used by all senders (read loop, cyclic, spontaneous).
@@ -758,7 +770,7 @@ struct ConnectionWrite {
     /// 明文路径读任务句柄。stop() 用它 abort 驻留在 read().await 的读任务,
     /// drop ReadHalf 以立即关闭已建立的连接 socket(写任务靠 shutdown_flag
     /// 在 5ms 内自退并 drop WriteHalf)。TLS 阻塞任务不可 abort,恒为 None,
-    /// 由 100ms 读超时轮询 flag 自退。
+    /// 由 5ms 读超时轮询 flag 自退。
     reader_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -1396,6 +1408,11 @@ impl SlaveServer {
         std::mem::replace(&mut *guard, new_ops)
     }
 
+    /// Updates only simulation pacing; unrelated remote settings remain intact.
+    pub async fn set_simulation_pacing(&self, pacing: RandomMutationPacing) {
+        self.remote_ops.write().await.random_pacing = pacing.normalized();
+    }
+
     pub async fn get_remote_ops(&self) -> RemoteOperationConfig {
         self.remote_ops.read().await.clone()
     }
@@ -1593,10 +1610,9 @@ impl SlaveServer {
         let params = normalize_mutation_params(asdu_type, params);
         let stations = self.stations.clone();
         let mutation_connections = Arc::clone(&self.mutation_connections);
-        let remote_ops = self.remote_ops.clone();
-        let log_collector = self.log_collector.clone();
         let period_ms = period_ms.max(50);
         let handle = tokio::spawn(async move {
+            let lifetime = simulation_pacing::MutationLifetime::default();
             let period = std::time::Duration::from_millis(period_ms as u64);
             let mut interval = tokio::time::interval(period);
             // A delayed spontaneous-send path must not replay every missed
@@ -1632,10 +1648,7 @@ impl SlaveServer {
                 interval.reset_after(period);
                 if mutated {
                     let connections = mutation_connections.read().await.clone();
-                    do_queue_spontaneous(
-                        &stations, &connections, &remote_ops, &log_collector,
-                        ca, &[(ioa, asdu_type)],
-                    ).await;
+                    simulation_pacing::enqueue(&stations, &connections, ca, ioa, asdu_type, &lifetime).await;
                 }
             }
         });
@@ -1919,7 +1932,7 @@ impl SlaveServer {
         } else { None };
 
         // 每次启动重建停止标志与通知句柄:上一轮的任务(写任务 5ms 轮询、TLS 阻塞
-        // 任务 100ms 轮询)可能尚未观察到 flag=true;若复用同一 Arc 并 store(false),
+        // 任务 5ms 轮询)可能尚未观察到 flag=true;若复用同一 Arc 并 store(false),
         // 快速 stop→start 会让旧任务永远错过停止信号而滞留。旧任务继续持有
         // 旧 Arc(恒为 true),新任务用新 Arc。
         self.shutdown_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2051,7 +2064,9 @@ impl SlaveServer {
                             let tls_queue: SharedQueue = Arc::new(tokio::sync::Mutex::new(Vec::new()));
                             let tls_seq: SharedSeq = Arc::new(tokio::sync::Mutex::new(SeqState::default()));
                             let tls_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                            let (simulation_tx, simulation_rx) = tokio::sync::mpsc::channel(simulation_pacing::QUEUE_CAPACITY);
                             connections.write().await.insert(peer_addr, ConnectionWrite {
+                                simulation_tx,
                                 queue: Arc::clone(&tls_queue),
                                 seq: Arc::clone(&tls_seq),
                                 started: Arc::clone(&tls_started),
@@ -2095,15 +2110,17 @@ impl SlaveServer {
                                         return;
                                     }
                                 }
-                                // Set read timeout so the loop can periodically drain the write queue.
-                                let _ = tls_stream.get_ref().set_read_timeout(Some(std::time::Duration::from_millis(100)));
+                                // Match the TCP writer's 5ms poll so TLS does not
+                                // stretch a short simulation delay to 100ms.
+                                let _ = tls_stream.get_ref().set_read_timeout(Some(std::time::Duration::from_millis(5)));
                                 if let Some(ref lc) = lc {
                                     lc.try_add(LogEntry::new(
                                         Direction::Rx, FrameLabel::ConnectionEvent,
                                         format!("TLS 握手成功: {}", peer_str),
                                     ));
                                 }
-                                handle_client_blocking(&mut tls_stream, stations, lc, flag, tls_queue, tls_seq, tls_started, tls_connections, peer_addr, conn_remote_ops, conn_protocol_timing);
+                                let simulation = SimulationWriter::new(simulation_rx, tls_queue.clone(), tls_seq.clone(), tls_started.clone(), conn_remote_ops.clone(), lc.clone());
+                                handle_client_blocking(&mut tls_stream, stations, lc, flag, tls_seq, tls_started, tls_connections, peer_addr, conn_remote_ops, conn_protocol_timing, simulation);
                             });
                         } else {
                             // Plain TCP: async with queue-based cyclic writes.
@@ -2130,8 +2147,14 @@ impl SlaveServer {
                             let stations_for_reader = stations.clone();
                             let addr_for_read = peer_addr;
 
+                            let seq_for_writer = seq.clone();
+                            let started_for_writer = started.clone();
+                            let ops_for_writer = conn_remote_ops.clone();
+                            let lc_for_writer = lc.clone();
                             // Register connection for cyclic task.
+                            let (simulation_tx, simulation_rx) = tokio::sync::mpsc::channel(simulation_pacing::QUEUE_CAPACITY);
                             connections.write().await.insert(peer_addr, ConnectionWrite {
+                                simulation_tx,
                                 queue,
                                 seq,
                                 started,
@@ -2145,21 +2168,16 @@ impl SlaveServer {
                             let conn_for_writer = Arc::clone(&connections);
                             tokio::spawn(async move {
                                 let mut wh = wh;
+                                let mut simulation = SimulationWriter::new(simulation_rx, queue_for_writer, seq_for_writer, started_for_writer, ops_for_writer, lc_for_writer);
                                 loop {
                                     if flag_for_writer.load(std::sync::atomic::Ordering::SeqCst) { break; }
                                     // 读任务已检测到对端关闭 → 退出并 drop WriteHalf,彻底关闭 socket。
                                     if conn_closed_for_writer.load(std::sync::atomic::Ordering::SeqCst) { break; }
                                     // Atomically drain pending bytes under lock, then write outside lock
-                                    let snapshot = {
-                                        let mut bytes = queue_for_writer.lock().await;
-                                        if bytes.is_empty() { Vec::new() } else { bytes.drain(..).collect::<Vec<u8>>() }
-                                    };
+                                    let (snapshot, point_count) = simulation.prepare().await;
                                     if !snapshot.is_empty() {
                                         match wh.write_all(&snapshot).await {
-                                            Ok(()) => {}
-                                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                                            }
+                                            Ok(()) => { simulation.sent(point_count); }
                                             Err(_) => {
                                                 conn_for_writer.write().await.remove(&addr_for_read);
                                                 return;
@@ -2651,13 +2669,13 @@ fn handle_client_blocking(
     stations: SharedStations,
     log_collector: Option<Arc<LogCollector>>,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
-    write_queue: SharedQueue,
     seq: SharedSeq,
     started: Arc<std::sync::atomic::AtomicBool>,
     connections: SharedConnections,
     peer_addr: SocketAddr,
     remote_ops: SharedRemoteOps,
     _protocol_timing: SharedProtocolTiming,
+    mut simulation: SimulationWriter,
 ) {
     use std::io::{Read, Write};
     let mut buf = [0u8; 512];
@@ -2669,25 +2687,25 @@ fn handle_client_blocking(
     // SBO select 状态(每连接独立)。
     let mut select_state: SelectStateMap = SelectStateMap::new();
 
-    // Drain the shared write queue to the TLS stream.
-    let drain_queue = |stream: &mut SlaveTlsStream, queue: &SharedQueue, rt: &tokio::runtime::Handle| {
-        let pending = rt.block_on(async {
-            let mut q = queue.lock().await;
-            if q.is_empty() { Vec::new() } else { q.drain(..).collect::<Vec<u8>>() }
-        });
+    // Meter simulations at the socket, while draining protocol replies even
+    // during cooldown. A failed write closes the connection rather than losing
+    // a drained batch and continuing with a sequence gap.
+    let mut drain_queue = |stream: &mut SlaveTlsStream| -> std::io::Result<()> {
+        let (pending, count) = rt.block_on(simulation.prepare());
         if !pending.is_empty() {
-            let _ = stream.write_all(&pending);
+            stream.write_all(&pending)?;
+            simulation.sent(count);
         }
+        Ok(())
     };
 
     loop {
         if shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) { break; }
+        if drain_queue(stream).is_err() { break; }
         let n = match stream.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
-                // Timeout hit — drain queue and continue waiting for data.
-                drain_queue(stream, &write_queue, &rt);
                 continue;
             }
             Err(_) => break,
@@ -3562,7 +3580,7 @@ fn step_value(value: &DataPointValue, params: &MutationParams, dir: f64) -> (Dat
 }
 
 /// 模块级 `queue_spontaneous` 实现,供 `SlaveServer.queue_spontaneous` 和
-/// `start_point_mutation` 后台任务共用。
+/// 远方命令及手工变位共用;周期点位仿真由 simulation_pacing 在连接写出时节流。
 async fn do_queue_spontaneous(
     stations: &SharedStations,
     connections: &SharedConnections,
@@ -4339,6 +4357,7 @@ mod tests {
         let active = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let peer_addr: SocketAddr = "127.0.0.1:31001".parse().unwrap();
         server.connections.write().await.insert(peer_addr, ConnectionWrite {
+            simulation_tx: tokio::sync::mpsc::channel(simulation_pacing::QUEUE_CAPACITY).0,
             queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             seq: Arc::new(tokio::sync::Mutex::new(SeqState::default())),
             started: Arc::clone(&active),

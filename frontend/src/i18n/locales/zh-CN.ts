@@ -257,6 +257,10 @@ export type DictShape = {
     noSelection: string
     mixedValues: string
     activeTitle: string
+    processing: string
+    previousPage: string
+    nextPage: string
+    pageCount: string
     noActive: string
     currentValue: string
     apply: string
@@ -573,6 +577,8 @@ export type DictShape = {
     syncTb: string
     syncTbNote: string
     mutationSim: string
+    pacingHint: string
+    pacingSaved: string
     randomPacing: string
     perSend: string
     unitCount: string
@@ -859,6 +865,10 @@ const dict: DictShape = {
     noSelection: '先在点表中选择一个或多个点位；下方仍可查看和停止活动模拟。',
     mixedValues: '所选点位的活动参数不一致；应用后将使用下方参数统一更新。',
     activeTitle: '活动模拟',
+    processing: '正在处理 {done} / {total} 个点位，可关闭此面板，操作会继续执行。',
+    previousPage: '上一页',
+    nextPage: '下一页',
+    pageCount: '第 {page} / {total} 页',
     noActive: '当前站没有活动模拟。',
     currentValue: '当前值',
     apply: '启动 / 更新',
@@ -1194,7 +1204,9 @@ const dict: DictShape = {
     syncTb: '变位同步上送 TB（按分类）',
     syncTbNote: '开启后变位时在 NA 帧之后追加一帧对应 TB 类型；点位自身的 Type ID 不变，数据表类型列会显示 +TB 徽标提示。',
     mutationSim: '变位仿真',
-    randomPacing: '随机变位节流',
+    randomPacing: '点位仿真上送节流',
+    pacingHint: '当前服务器全部站点共用，翻转、递增、递减、随机均生效。每个主站连接累计上送指定数量的点后等待；延迟 0 表示不等待。',
+    pacingSaved: '已保存，运行中的仿真立即生效',
     perSend: '每发送',
     unitCount: '个',
     delay: '延迟',

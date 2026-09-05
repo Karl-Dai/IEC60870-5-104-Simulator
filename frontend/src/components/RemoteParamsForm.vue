@@ -233,6 +233,7 @@ const timingMeta: { key: 't0' | 't1' | 't2' | 't3' | 'k' | 'w'; hintKey: string;
 
     <div class="rp-group">
       <span class="rp-group-label">{{ t('remoteParams.randomPacing') }}</span>
+      <p class="rp-sec-sub">{{ t('remoteParams.pacingHint') }}</p>
       <div class="rp-pacing">
         <div class="rp-field">
           <label>{{ t('remoteParams.perSend') }}</label>

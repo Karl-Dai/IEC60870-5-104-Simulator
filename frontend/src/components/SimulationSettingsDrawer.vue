@@ -7,6 +7,7 @@ import { useI18n } from '@shared/i18n'
 import { formatAsduTypeWithId } from '../constants/asduTypes'
 import { formatDataPointValue } from '@shared/utils/dataPointValue'
 import type { DataPointInfo, MutationMode, PointMutationRow } from '../types'
+import SimulationPacingSettings from './SimulationPacingSettings.vue'
 
 const props = defineProps<{
   visible: boolean
@@ -30,6 +31,19 @@ const step = ref(1)
 const min = ref(0)
 const max = ref(100)
 const actionPending = ref(false)
+const processedCount = ref(0)
+const targetCount = ref(0)
+
+const ACTIVE_PAGE_SIZE = 50
+const activePage = ref(1)
+const activePageCount = computed(() => Math.max(1, Math.ceil(props.activeRows.length / ACTIVE_PAGE_SIZE)))
+const visibleActiveRows = computed(() =>
+  props.activeRows.slice((activePage.value - 1) * ACTIVE_PAGE_SIZE, activePage.value * ACTIVE_PAGE_SIZE),
+)
+watch(activePageCount, count => { activePage.value = Math.min(activePage.value, count) })
+watch([() => props.visible, () => props.serverId, () => props.commonAddress], () => {
+  activePage.value = 1
+})
 
 function pointKey(ioa: number, asduType: string) {
   return `${ioa}:${asduType}`
@@ -111,7 +125,14 @@ watch(
 )
 
 function close() {
-  if (!actionPending.value) emit('close')
+  // Dismissing this view does not cancel the operation already submitted.
+  emit('close')
+}
+
+async function reportProgress(completed: number) {
+  if (completed % 50 === 0 || completed === targetCount.value) processedCount.value = completed
+  // Large batches must yield to input/paint even when IPC resolves immediately.
+  if (completed % 50 === 0) await new Promise<void>(resolve => window.setTimeout(resolve, 0))
 }
 
 function handleBackdrop(event: MouseEvent) {
@@ -157,20 +178,25 @@ async function applyToSelection() {
     ioa: point.ioa,
     asdu_type: point.asdu_type,
   }))
+  // Closing/reopening the drawer or changing the selection must not change the
+  // settings halfway through an in-flight batch.
+  const settings = {
+    periodMs: period.value, mode: mode.value, step: step.value, min: min.value, max: max.value,
+  }
+  processedCount.value = 0
+  targetCount.value = targets.length
   actionPending.value = true
   try {
-    for (const target of targets) {
+    for (const [index, target] of targets.entries()) {
       await invoke('start_point_mutation', {
         serverId,
         commonAddress,
         ioa: target.ioa,
         asduType: target.asdu_type,
-        periodMs: period.value,
-        mode: pointSupportsStep(target.asdu_type) ? mode.value : 'flip',
-        step: step.value,
-        min: min.value,
-        max: max.value,
+        ...settings,
+        mode: pointSupportsStep(target.asdu_type) ? settings.mode : 'flip',
       })
+      await reportProgress(index + 1)
     }
     emit('changed')
   } catch (error) {
@@ -184,15 +210,19 @@ async function stopPoints(points: Array<{ ioa: number; asdu_type: string }>) {
   if (actionPending.value || points.length === 0) return
   const serverId = props.serverId
   const commonAddress = props.commonAddress
+  const targets = points.map(({ ioa, asdu_type }) => ({ ioa, asdu_type }))
+  processedCount.value = 0
+  targetCount.value = targets.length
   actionPending.value = true
   try {
-    for (const point of points) {
+    for (const [index, point] of targets.entries()) {
       await invoke('stop_point_mutation', {
         serverId,
         commonAddress,
         ioa: point.ioa,
         asduType: point.asdu_type,
       })
+      await reportProgress(index + 1)
     }
     emit('changed')
   } catch (error) {
@@ -235,13 +265,16 @@ function modeLabel(value: MutationMode) {
             </div>
             <button
               class="sim-close"
-              :disabled="actionPending"
               :aria-label="t('common.close')"
               @click="close"
             >×</button>
           </header>
 
           <div class="sim-drawer-body">
+            <SimulationPacingSettings :server-id="serverId" :visible="visible" />
+            <p v-if="actionPending" class="sim-progress" role="status">
+              {{ t('simulationSettings.processing', { done: processedCount, total: targetCount }) }}
+            </p>
             <section class="sim-section">
               <h4>{{ t('simulationSettings.selectionHint', { count: selectedPoints.length }) }}</h4>
               <p v-if="selectedPoints.length === 0" class="sim-empty">
@@ -329,9 +362,18 @@ function modeLabel(value: MutationMode) {
               <p v-if="activeRows.length === 0" class="sim-empty">
                 {{ t('simulationSettings.noActive') }}
               </p>
-              <div v-else class="sim-active-list">
+              <nav v-if="activePageCount > 1" class="sim-pagination" :aria-label="t('simulationSettings.activeTitle')">
+                <button class="sim-page-prev" :disabled="activePage === 1" @click="activePage--">
+                  {{ t('simulationSettings.previousPage') }}
+                </button>
+                <span>{{ t('simulationSettings.pageCount', { page: activePage, total: activePageCount }) }}</span>
+                <button class="sim-page-next" :disabled="activePage === activePageCount" @click="activePage++">
+                  {{ t('simulationSettings.nextPage') }}
+                </button>
+              </nav>
+              <div v-if="activeRows.length > 0" class="sim-active-list">
                 <article
-                  v-for="row in activeRows"
+                  v-for="row in visibleActiveRows"
                   :key="pointKey(row.ioa, row.asdu_type)"
                   class="sim-active-card"
                 >
@@ -392,8 +434,11 @@ function modeLabel(value: MutationMode) {
 
 .sim-drawer {
   width: 460px;
+  min-width: 0;
   max-width: 94vw;
   height: 100vh;
+  box-sizing: border-box;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   color: var(--c-text);
@@ -430,6 +475,7 @@ function modeLabel(value: MutationMode) {
 }
 
 .sim-close {
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
   color: var(--c-overlay0);
@@ -440,7 +486,7 @@ function modeLabel(value: MutationMode) {
   cursor: pointer;
 }
 
-.sim-close:hover:not(:disabled) {
+.sim-close:hover {
   color: var(--c-text);
   background: var(--c-surface0);
 }
@@ -608,7 +654,7 @@ function modeLabel(value: MutationMode) {
 
 .sim-btn:disabled,
 .sim-row-stop:disabled,
-.sim-close:disabled {
+.sim-pagination button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -630,6 +676,32 @@ function modeLabel(value: MutationMode) {
   flex-direction: column;
   gap: 8px;
   margin-top: 10px;
+}
+
+.sim-progress {
+  margin: 0 0 14px;
+  color: var(--c-subtext1);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sim-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--c-subtext0);
+  font-size: 11px;
+}
+
+.sim-pagination button {
+  padding: 5px 8px;
+  color: var(--c-text);
+  background: var(--c-surface0);
+  border: 1px solid var(--c-surface1);
+  border-radius: 4px;
+  cursor: pointer;
 }
 
 .sim-active-card {

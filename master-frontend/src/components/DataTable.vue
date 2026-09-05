@@ -584,7 +584,7 @@ function isCtxActiveOption(optValue: string): boolean {
               <tr
                 v-for="(point, i) in visibleRows"
                 :key="pointKey(point)"
-                :class="{ selected: selectedKeys.has(pointKey(point)), 'value-changed': changedKeys.has(pointKey(point)) }"
+                :class="{ selected: selectedKeys.has(pointKey(point)) }"
                 @click="handleRowClick(i, $event)"
                 @contextmenu="handleRowContextMenu(i, $event)"
               >
@@ -698,7 +698,6 @@ function isCtxActiveOption(optValue: string): boolean {
 .table tbody tr:hover { background: var(--c-base); }
 .table tbody tr.selected { background: var(--c-blue) !important; color: var(--c-base); }
 .table tbody tr.selected td { color: var(--c-base) !important; }
-.table tbody tr.value-changed { background: rgba(250, 179, 135, 0.15); }
 .table td {
   height: 36px; padding: 2px 10px; border-bottom: 1px solid var(--c-base); box-sizing: border-box;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -718,7 +717,12 @@ function isCtxActiveOption(optValue: string): boolean {
 .col-ioa { font-family: var(--font-mono); width: 80px; color: var(--c-blue); }
 .col-type { font-family: var(--font-mono); width: 210px; }
 .col-value { font-family: var(--font-mono); transition: color 0.3s; }
-.col-value.value-highlight { color: var(--c-peach); font-weight: 700; }
+.col-value.value-highlight .value-text { color: var(--c-peach); font-weight: 700; }
+.table tbody tr.selected .col-value.value-highlight .value-text {
+  color: var(--c-base);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 .col-quality { width: 96px; font-weight: 600; font-size: 11px; }
 .th-value, .th-quality { display: inline-flex; align-items: center; gap: 4px; }
 .col-quality.quality-ok { color: var(--c-green); }
