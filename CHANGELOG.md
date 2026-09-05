@@ -2,6 +2,18 @@
 
 本项目的所有重要变更记录在此文件。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.15.16] - 2026-09-05
+
+### Added 新增
+
+- 点位模拟设置新增按服务器保存的上送节流入口：每上送 N 个点位等待 D 毫秒，覆盖翻转、递增、递减和随机模式；各主站连接分别计数，TCP/TLS 均生效，运行中可修改，延迟 0 取消等待 / Add per-server upload pacing for all four point simulation modes, with separate counters for each TCP/TLS master and live updates.
+
+### Fixed 修复
+
+- 主从站点位变值仅强调数值，不再加深整行背景，保留选中行可读性 / Highlight changed values without darkening entire rows in either app.
+- 批量启停仿真时可通过关闭按钮、遮罩或 Esc 关闭侧栏，操作在后台继续；固定本批操作的点位和参数 / Allow closing the simulation drawer during bulk operations while preserving the batch targets and settings.
+- 活动仿真列表每页显示 50 个点，避免大量点位阻塞界面；停止或重新设置仿真时取消积压的旧上送 / Paginate active simulations and invalidate queued updates when simulations stop or are replaced.
+
 ## [1.15.15] - 2026-09-01
 
 ### Fixed 修复
