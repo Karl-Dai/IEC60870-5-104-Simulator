@@ -16,6 +16,15 @@ export type DictShape = {
     privateKeyFiles: string
   }
   toolbar: {
+    menuConfig: string
+    menuNew: string
+    menuPoints: string
+    menuSettings: string
+    menuTools: string
+    menuHelp: string
+    currentScope: string
+    currentServer: string
+    allServers: string
     newServer: string
     start: string
     startAll: string
@@ -24,6 +33,12 @@ export type DictShape = {
     startAllEmpty: string
     startAllResult: string
     startAllFailed: string
+    stopAll: string
+    titleStopAll: string
+    stopAllProgress: string
+    stopAllEmpty: string
+    stopAllResult: string
+    stopAllFailed: string
     stop: string
     addStation: string
     randomMutation: string
@@ -634,6 +649,15 @@ const dict: DictShape = {
     privateKeyFiles: '私钥文件',
   },
   toolbar: {
+    menuConfig: '配置',
+    menuNew: '新建',
+    menuPoints: '点表',
+    menuSettings: '设置',
+    menuTools: '工具',
+    menuHelp: '帮助',
+    currentScope: '当前',
+    currentServer: '当前服务器',
+    allServers: '全部服务器',
     newServer: '新建服务器',
     start: '启动',
     startAll: '全部启动',
@@ -642,6 +666,12 @@ const dict: DictShape = {
     startAllEmpty: '暂无服务器，请先新建服务器或加载配置。',
     startAllResult: '全部启动完成：成功 {started} 个，已运行跳过 {skipped} 个，失败 {failed} 个。',
     startAllFailed: '无法获取服务器列表',
+    stopAll: '全部停止',
+    titleStopAll: '停止所有运行中的服务器及其下属站，断开连接并释放监听端口，保留配置',
+    stopAllProgress: '停止中 {completed}/{total}',
+    stopAllEmpty: '暂无服务器，无需停止。',
+    stopAllResult: '全部停止完成：成功 {stopped} 个，已停止跳过 {skipped} 个，失败 {failed} 个。',
+    stopAllFailed: '无法获取服务器列表',
     stop: '停止',
     addStation: '添加站',
     randomMutation: '随机变化',
@@ -744,7 +774,7 @@ const dict: DictShape = {
   tree: {
     title: '服务器',
     noServers: '暂无服务器',
-    noServersHint: '点击左上角「+ 新建服务器」开始',
+    noServersHint: '从「新建」菜单选择「新建服务器」开始',
     ctxStartServer: '启动服务器',
     ctxStopServer: '停止服务器',
     ctxDeleteServer: '删除服务器',

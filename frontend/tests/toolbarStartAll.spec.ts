@@ -43,7 +43,7 @@ function mountToolbar() {
           showConfirm: () => Promise.resolve(false),
         },
       },
-      stubs: { AboutDialog: true, LangSwitch: true, VersionBadge: true, NewServerModal: true },
+      stubs: { teleport: true, AboutDialog: true, LangSwitch: true, VersionBadge: true, NewServerModal: true },
     },
   })
 }
@@ -113,6 +113,7 @@ describe('Toolbar start all servers', () => {
     const w = mountToolbar()
     await button(w).trigger('click')
     await flushPromises()
+    expect(w.get('[data-testid="stop-all-servers"]').attributes('disabled')).toBeDefined()
     expect(button(w).text()).toBe('Starting 0/2')
     expect(button(w).attributes('aria-busy')).toBe('true')
     expect(w.get('[data-testid="open-config"]').attributes('disabled')).toBeDefined()
@@ -141,6 +142,96 @@ describe('Toolbar start all servers', () => {
     await button(w).trigger('click')
     await flushPromises()
     expect(invokeMock).toHaveBeenLastCalledWith('start_server', { id: 's1' })
+    w.unmount()
+  })
+})
+
+
+const stopAllButton = (w: ReturnType<typeof mountToolbar>) => w.get('[data-testid="stop-all-servers"]')
+
+describe('Toolbar stop all servers', () => {
+  it('stops running servers without a selection, skips stopped ones and preserves configuration', async () => {
+    invokeMock.mockResolvedValueOnce([server('s1', 'Running'), server('s2'), server('s3', 'Running')])
+    const w = mountToolbar()
+    await stopAllButton(w).trigger('click')
+    await flushPromises()
+    expect(invokeMock.mock.calls).toEqual([
+      ['list_servers'], ['stop_server', { id: 's1' }], ['stop_server', { id: 's3' }],
+    ])
+    expect(showAlert).toHaveBeenCalledWith('Stop all completed: 2 stopped, 1 already stopped, 0 failed.')
+    expect(resetWorkspaceView).not.toHaveBeenCalled()
+    expect(refreshTree).toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('continues after failure, reports the endpoint and updates only the selected server', async () => {
+    selectedServerId.value = 's3'
+    selectedServerState.value = 'Running'
+    invokeMock.mockResolvedValueOnce([server('s1', 'Running'), server('s2', 'Running'), server('s3', 'Running')])
+      .mockResolvedValueOnce(undefined).mockRejectedValueOnce('stop failed').mockResolvedValueOnce(undefined)
+    const w = mountToolbar()
+    await stopAllButton(w).trigger('click')
+    await flushPromises()
+    expect(invokeMock).toHaveBeenLastCalledWith('stop_server', { id: 's3' })
+    expect(selectedServerState.value).toBe('Stopped')
+    expect(showAlert).toHaveBeenCalledTimes(1)
+    expect(showAlert.mock.calls[0]?.[0]).toContain('2 stopped, 0 already stopped, 1 failed')
+    expect(showAlert.mock.calls[0]?.[0]).toContain('127.0.0.1:2404 (s2): stop failed')
+    w.unmount()
+  })
+
+  it.each([{ servers: [] }, { servers: [server('s1')] }])('handles nothing to stop: $servers', async ({ servers }) => {
+    invokeMock.mockResolvedValueOnce(servers)
+    const w = mountToolbar()
+    await stopAllButton(w).trigger('click')
+    await flushPromises()
+    expect(invokeMock).toHaveBeenCalledTimes(1)
+    expect(showAlert).toHaveBeenCalledWith(servers.length
+      ? 'Stop all completed: 0 stopped, 1 already stopped, 0 failed.'
+      : 'No servers to stop.')
+    expect(stopAllButton(w).attributes('disabled')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('shows progress and prevents overlapping starts, stops or config replacement', async () => {
+    let finish!: () => void
+    selectedServerId.value = 's1'
+    selectedServerState.value = 'Running'
+    invokeMock.mockResolvedValueOnce([server('s1', 'Running'), server('s2', 'Running')])
+      .mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+      .mockResolvedValueOnce(undefined)
+    const w = mountToolbar()
+    await stopAllButton(w).trigger('click')
+    await flushPromises()
+    expect(stopAllButton(w).text()).toBe('Stopping 0/2')
+    expect(stopAllButton(w).attributes('aria-busy')).toBe('true')
+    for (const selector of ['[data-testid="start-all-servers"]', '[data-testid="stop-all-servers"]', '.btn-stop', '[data-testid="open-config"]', '[data-testid="open-config-by-path"]']) {
+      expect(w.get(selector).attributes('disabled')).toBeDefined()
+      await w.get(selector).trigger('click')
+    }
+    expect(invokeMock).toHaveBeenCalledTimes(2)
+    expect(openMock).not.toHaveBeenCalled()
+    expect(showPrompt).not.toHaveBeenCalled()
+    selectedServerId.value = 'unrelated'
+    finish()
+    await flushPromises()
+    expect(selectedServerState.value).toBe('Running')
+    expect(invokeMock).toHaveBeenCalledTimes(3)
+    expect(stopAllButton(w).attributes('disabled')).toBeUndefined()
+    expect(w.get('[data-testid="open-config"]').attributes('disabled')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('recovers after a list failure and allows retry', async () => {
+    invokeMock.mockRejectedValueOnce('unavailable').mockResolvedValueOnce([server('s1', 'Running')])
+    const w = mountToolbar()
+    await stopAllButton(w).trigger('click')
+    await flushPromises()
+    expect(showAlert).toHaveBeenCalledWith('Unable to list servers: unavailable')
+    expect(stopAllButton(w).attributes('disabled')).toBeUndefined()
+    await stopAllButton(w).trigger('click')
+    await flushPromises()
+    expect(invokeMock).toHaveBeenLastCalledWith('stop_server', { id: 's1' })
     w.unmount()
   })
 })
