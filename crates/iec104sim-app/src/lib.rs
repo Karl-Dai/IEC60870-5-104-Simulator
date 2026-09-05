@@ -63,6 +63,7 @@ pub fn run() {
             commands::get_protocol_timing,
             commands::set_remote_operation_config,
             commands::get_remote_operation_config,
+            commands::set_simulation_pacing,
             commands::start_point_mutation,
             commands::stop_point_mutation,
             commands::list_point_mutations,

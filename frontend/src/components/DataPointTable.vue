@@ -1476,7 +1476,6 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
               :key="point.ioa + ':' + point.asdu_type"
               :class="{
                 selected: isSelected(point),
-                'value-changed': changedKeys.has(point.ioa + ':' + point.asdu_type),
                 mutating: activeMutations.has(point.ioa + ':' + point.asdu_type)
               }"
               @click="selectRow($event, point)"
@@ -1584,7 +1583,7 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
       :server-id="selectedServerId ?? ''"
       :common-address="currentCA ?? 0"
       :selected-points="selectedRows"
-      :active-rows="activeMutationRows"
+      :active-rows="showSimulationDrawer ? activeMutationRows : []"
       @close="showSimulationDrawer = false"
       @changed="refreshActiveMutations"
     />
@@ -1871,10 +1870,6 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
   color: var(--c-base);
 }
 
-.table tbody tr.value-changed {
-  background: rgba(250, 179, 135, 0.15);
-}
-
 .col-ioa {
   font-family: var(--font-mono);
   color: var(--c-blue);
@@ -1982,9 +1977,15 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
   font-family: var(--font-mono);
 }
 
-.col-value.value-highlight {
+.col-value.value-highlight .value-text {
   color: var(--c-peach);
   font-weight: 700;
+}
+
+.table tbody tr.selected .col-value.value-highlight .value-text {
+  color: var(--c-base);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .th-value,

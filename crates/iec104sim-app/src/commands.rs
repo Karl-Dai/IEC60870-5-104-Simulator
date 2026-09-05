@@ -4,7 +4,7 @@ use iec104sim_core::data_point::{ControlTarget, DataPoint, DataPointValue, Infor
 use iec104sim_core::log_collector::LogCollector;
 use iec104sim_core::log_entry::LogEntry;
 use iec104sim_core::slave::{
-    MutationMode, MutationParams, PointMutationUpdate, ProtocolTimingConfig,
+    MutationMode, MutationParams, PointMutationUpdate, ProtocolTimingConfig, RandomMutationPacing,
     RemoteOperationConfig, ServerState, SlaveError, SlaveServer, SlaveTransportConfig, Station,
     StationMutationBatchMode,
 };
@@ -2130,6 +2130,23 @@ pub async fn get_protocol_timing(
 pub struct RemoteOpsRequest {
     pub server_id: String,
     pub ops: RemoteOperationConfig,
+}
+
+#[tauri::command]
+pub async fn set_simulation_pacing(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    server_id: String,
+    pacing: RandomMutationPacing,
+) -> Result<RandomMutationPacing, String> {
+    let pacing = pacing.normalized();
+    let servers = state.servers.read().await;
+    let srv = servers.get(&server_id)
+        .ok_or_else(|| format!("server {} not found", server_id))?;
+    srv.server.set_simulation_pacing(pacing).await;
+    drop(servers);
+    persist_workspace_after(&state, &app_handle, "updating simulation pacing").await;
+    Ok(pacing)
 }
 
 #[tauri::command]

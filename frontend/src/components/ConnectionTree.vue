@@ -533,8 +533,9 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
 }
 
 .tree-node.selected {
-  background: var(--c-blue);
-  color: var(--c-base);
+  background: color-mix(in srgb, var(--c-blue) 24%, var(--c-surface0));
+  color: var(--c-text);
+  box-shadow: inset 3px 0 0 var(--c-blue);
 }
 
 .tree-child {
@@ -554,7 +555,11 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
 }
 
 .tree-node.selected .node-arrow {
-  color: var(--c-base);
+  color: var(--c-text);
+}
+
+.tree-node.selected .node-status {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-text) 75%, transparent);
 }
 
 .node-status {
@@ -579,6 +584,11 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
   min-width: 0;
 }
 .tls-badge { flex-shrink: 0; padding: 1px 4px; border-radius: 3px; background: color-mix(in srgb, var(--c-blue) 15%, transparent); color: var(--c-blue); font-size: 10px; line-height: 1.4; }
+
+.tree-node.selected .tls-badge {
+  color: var(--c-text);
+  background: rgba(17, 17, 27, 0.35);
+}
 
 .client-count-badge {
   margin-left: auto;
@@ -613,8 +623,8 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
 }
 
 .tree-node.selected .client-count-badge {
-  color: var(--c-base);
-  background: rgba(0, 0, 0, 0.18);
+  color: var(--c-text);
+  background: rgba(17, 17, 27, 0.38);
 }
 
 .node-badge {
@@ -627,8 +637,8 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
 }
 
 .tree-node.selected .node-badge {
-  background: rgba(0, 0, 0, 0.2);
-  color: var(--c-base);
+  background: rgba(17, 17, 27, 0.38);
+  color: var(--c-text);
 }
 
 .node-typeid {
@@ -647,7 +657,8 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
 }
 
 .tree-node.selected .node-typeid {
-  color: rgba(30, 30, 46, 0.7);
+  color: var(--c-sky);
+  opacity: 1;
 }
 
 /* Context Menu */
