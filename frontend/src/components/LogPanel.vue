@@ -509,7 +509,9 @@ onUnmounted(() => {
                 :title="row.log.raw_bytes && row.log.raw_bytes.length ? t('toolbar.parseFrameInLog') : ''"
                 @contextmenu="onLogContextMenu($event, row.log)">
               <td class="col-time">{{ formatTimestamp(row.log.timestamp) }}</td>
-              <td :class="['col-dir', row.log.direction.toLowerCase()]">{{ formatDirection(row.log.direction) }}</td>
+              <td :class="['col-dir', row.log.direction.toLowerCase()]">
+                <span class="dir-pill" :class="row.log.direction.toLowerCase()">{{ formatDirection(row.log.direction) }}</span>
+              </td>
               <td class="col-frame">{{ formatFrameLabel(row.log) }}</td>
               <td class="col-detail" :title="formatDetail(row.log)">{{ formatDetail(row.log) }}</td>
             </tr>
@@ -529,7 +531,7 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
   transition: height 0.2s ease;
-  border-top: 1px solid rgba(137, 180, 250, 0.25);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .log-panel:not(.expanded) {
@@ -695,6 +697,11 @@ onUnmounted(() => {
   border-bottom: none;
 }
 
+/* 行 hover 不作用于 spacer 行,且不破坏 25px 固定行高(虚拟滚动前提)。 */
+.log-table tbody tr:not(.log-spacer):hover {
+  background: var(--bg-hover);
+}
+
 .log-table th {
   background: var(--c-base);
   color: var(--c-overlay0);
@@ -739,12 +746,26 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-.col-dir.rx {
-  color: var(--c-green);
+/* 方向做成 pill 徽章:RX 绿 / TX 蓝(子站日志无 INFO/WARN/ERROR 级别字段,
+   方向列是最接近的分级视觉)。行高固定 25px,pill 限制在 16px 行盒内。 */
+.dir-pill {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  vertical-align: middle;
 }
 
-.col-dir.tx {
-  color: var(--c-blue);
+.col-dir.rx .dir-pill {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+}
+
+.col-dir.tx .dir-pill {
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 15%, transparent);
 }
 
 .col-frame {

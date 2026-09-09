@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type { ReceivedDataPointInfo, IncrementalDataResponse, CommandType, ControlResult, ChangedCategoriesMap, CategoryCountsMap } from '../types'
 import { getControlConfig, asduHasTimestamp } from '../types'
 import ControlDialog from './ControlDialog.vue'
+import AppInput from '@shared/components/ui/AppInput.vue'
 import QualityIndicator from '@shared/components/QualityIndicator.vue'
 import QualityLegend from '@shared/components/QualityLegend.vue'
 import DoublePointLegend from '@shared/components/DoublePointLegend.vue'
@@ -528,7 +529,7 @@ function isCtxActiveOption(optValue: string): boolean {
     <template v-else>
       <div class="table-header">
         <span class="header-title">{{ categoryTitle }}</span>
-        <input v-model="searchFilter" class="search-input" type="text" :placeholder="t('table.searchPlaceholder')" />
+        <AppInput v-model="searchFilter" class="search-input" :placeholder="t('table.searchPlaceholder')" />
         <MultiSelectActions
           v-if="multiSelectMode"
           :total="filteredPoints.length"
@@ -676,30 +677,33 @@ function isCtxActiveOption(optValue: string): boolean {
 
 .table-header {
   display: flex; align-items: center; gap: 8px; padding: 6px 10px;
-  border-bottom: 1px solid var(--c-surface0); flex-shrink: 0; background: var(--c-base);
+  border-bottom: 1px solid var(--border-subtle); flex-shrink: 0; background: var(--bg-panel);
 }
-.header-title { font-size: 12px; font-weight: 600; color: var(--c-blue); white-space: nowrap; }
-.search-input {
-  flex: 1; max-width: 200px; padding: 3px 8px; background: var(--c-surface0);
-  border: 1px solid var(--c-surface1); border-radius: 4px; color: var(--c-text); font-size: 12px; margin-left: auto;
-}
-.search-input:focus { outline: none; border-color: var(--c-blue); }
-.point-count { font-size: 11px; color: var(--c-overlay0); white-space: nowrap; }
+.header-title { font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }
+/* AppInput 自带主题化外观，这里只保留在工具条中的布局约束。 */
+.search-input { flex: 1; max-width: 200px; margin-left: auto; }
+.point-count { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 
 .table-scroll { flex: 1; overflow-y: auto; }
 .table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
 .table thead { position: sticky; top: 0; z-index: 2; }
 .table th {
-  background: var(--c-base); color: var(--c-overlay0); font-weight: 500;
-  padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--c-surface0);
+  background: var(--bg-panel); color: var(--text-muted); font-weight: 500;
+  padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border-subtle);
 }
 .table-body { position: absolute; top: 0; left: 0; width: 100%; }
 .table tbody tr { cursor: pointer; height: 36px; }
-.table tbody tr:hover { background: var(--c-base); }
-.table tbody tr.selected { background: var(--c-blue) !important; color: var(--c-base); }
-.table tbody tr.selected td { color: var(--c-base) !important; }
+.table tbody tr:hover { background: var(--bg-hover); }
+/* 选中行：accent 左竖条 + 轻量着色，不再整行反色。 */
+.table tbody tr.selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.table tbody tr.selected:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
 .table td {
-  height: 36px; padding: 2px 10px; border-bottom: 1px solid var(--c-base); box-sizing: border-box;
+  height: 36px; padding: 2px 10px; border-bottom: 1px solid var(--border-subtle); box-sizing: border-box;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
@@ -711,61 +715,61 @@ function isCtxActiveOption(optValue: string): boolean {
 }
 .col-select input {
   margin: 0;
-  accent-color: var(--c-blue);
+  accent-color: var(--accent);
   cursor: pointer;
 }
-.col-ioa { font-family: var(--font-mono); width: 80px; color: var(--c-blue); }
+.col-ioa { font-family: var(--font-mono); width: 80px; color: var(--accent); text-align: right; }
 .col-type { font-family: var(--font-mono); width: 210px; }
-.col-value { font-family: var(--font-mono); transition: color 0.3s; }
+.col-value { font-family: var(--font-mono); text-align: right; transition: color 0.3s; }
 .col-value.value-highlight .value-text { color: var(--c-peach); font-weight: 700; }
 .table tbody tr.selected .col-value.value-highlight .value-text {
-  color: var(--c-base);
+  color: var(--c-peach);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 .col-quality { width: 96px; font-weight: 600; font-size: 11px; }
 .th-value, .th-quality { display: inline-flex; align-items: center; gap: 4px; }
-.col-quality.quality-ok { color: var(--c-green); }
-.col-quality.quality-iv { color: var(--c-red); }
-.col-timestamp { font-family: var(--font-mono); width: 120px; color: var(--c-overlay0); }
+.col-quality.quality-ok { color: var(--success); }
+.col-quality.quality-iv { color: var(--danger); }
+.col-timestamp { font-family: var(--font-mono); width: 120px; color: var(--text-muted); }
 
 /* Context menu */
 .context-menu {
   position: fixed;
-  background: var(--c-base);
-  border: 1px solid var(--c-surface1);
-  border-radius: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   padding: 4px 0;
-  z-index: 999;
+  z-index: var(--z-dropdown);
   min-width: 150px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
 }
 
 .ctx-item {
   padding: 6px 14px;
   cursor: pointer;
   font-size: 12px;
-  color: var(--c-text);
+  color: var(--text-primary);
   white-space: nowrap;
 }
 
 .ctx-item:hover {
-  background: var(--c-surface0);
+  background: var(--bg-hover);
 }
 
 .ctx-active {
   font-weight: 600;
-  color: var(--c-blue);
+  color: var(--accent);
 }
 
 .ctx-sub {
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   font-size: 11px;
 }
 
 .ctx-divider {
   height: 1px;
-  background: var(--c-surface0);
+  background: var(--border-subtle);
   margin: 4px 0;
 }
 </style>

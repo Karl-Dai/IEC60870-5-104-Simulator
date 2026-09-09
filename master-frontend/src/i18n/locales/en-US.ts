@@ -379,6 +379,8 @@ const dict: DictShape = {
     frameS: 'S-frame',
     frameU: 'U-frame',
     lengthSummary: '{frameType}, LEN={declared} (expected total {expected}/actual {actual}) {status}',
+    lengthOk: 'valid',
+    lengthBad: 'length mismatch',
     noConnection: 'No connection selected',
     sent: 'Sent:',
     byteCount: '{n} bytes @ {timestamp}',
@@ -420,6 +422,10 @@ const dict: DictShape = {
     colRaw: 'Raw Bytes',
     dpIntermediate: 'Intermediate',
     dpIndeterminate: 'Indeterminate',
+  },
+  theme: {
+    toLight: 'Switch to light theme',
+    toDark: 'Switch to dark theme',
   },
   _test: {
     interp: 'Order #{id} created by {user}',

@@ -650,6 +650,10 @@ const dict: DictShape = {
     saveAll: 'Save All',
     configTimingCorrected: 'Timing was auto-adjusted on config import to satisfy constraints (t2<t1<t3, w≤⌊2k/3⌋):',
   },
+  theme: {
+    toLight: 'Switch to light theme',
+    toDark: 'Switch to dark theme',
+  },
   _test: {
     interp: 'Order #{id} created by {user}',
   },

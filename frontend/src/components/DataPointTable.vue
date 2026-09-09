@@ -20,6 +20,8 @@ import BatchTypeMigrationModal from './BatchTypeMigrationModal.vue'
 import SimulationSettingsDrawer from './SimulationSettingsDrawer.vue'
 import { findAsduTypeOption, formatAsduTypeWithId } from '../constants/asduTypes'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
+import AppIcon from '@shared/components/ui/AppIcon.vue'
+import AppInput from '@shared/components/ui/AppInput.vue'
 import EmptyState from '@shared/components/EmptyState.vue'
 import QualityIndicator from '@shared/components/QualityIndicator.vue'
 import QualityLegend from '@shared/components/QualityLegend.vue'
@@ -1239,10 +1241,9 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
         <template v-if="selectedStationLabel">{{ selectedStationLabel }} · </template>
         {{ selectedCategory ? localizeCategoryLabel(selectedCategory) : t('table.allPoints') }}
       </span>
-      <input
+      <AppInput
         v-model="searchQuery"
         class="search-input"
-        type="text"
         :placeholder="t('table.searchPlaceholder')"
       />
       <MultiSelectActions
@@ -1260,7 +1261,7 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
         :disabled="!selectedServerId || currentCA === null"
         @click="showAddModal = true"
         :title="t('table.addPointTitle')"
-      >+</button>
+      ><AppIcon name="plus" :size="12" /></button>
       <button
         v-if="!multiSelectMode"
         class="add-btn batch"
@@ -1501,7 +1502,7 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
                   v-if="duplicateIoaTypes(point)"
                   class="dup-ioa-badge"
                   :title="t('table.dupIoaTitle', { ioa: point.ioa, types: duplicateIoaTypes(point)! })"
-                >⚠</span>
+                ><AppIcon name="warning" :size="11" /></span>
               </td>
               <td class="col-type">
                 <div class="type-cell-content">
@@ -1721,21 +1722,7 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
 .search-input {
   flex: 1;
   min-width: 140px;
-  padding: 4px 8px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
-  font-size: 12px;
-  outline: none;
-}
-
-.search-input:focus {
-  border-color: var(--c-blue);
-}
-
-.search-input::placeholder {
-  color: var(--c-overlay0);
+  font-size: var(--text-sm);
 }
 
 .add-btn {
@@ -1743,7 +1730,7 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
   background: var(--c-surface0);
   border: 1px solid var(--c-surface1);
   border-radius: 4px;
-  color: var(--c-green);
+  color: var(--success);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -1757,7 +1744,7 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
 }
 
 .add-btn.simulation {
-  color: var(--c-sapphire);
+  color: var(--info);
 }
 
 .add-btn.settings {
@@ -1799,12 +1786,12 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
 }
 
 .table th {
-  background: var(--c-base);
+  background: var(--bg-panel);
   color: var(--c-overlay0);
   font-weight: 500;
   text-align: left;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--c-surface0);
+  border-bottom: 1px solid var(--border-subtle);
   position: sticky;
   top: 0;
   overflow: hidden;
@@ -1862,17 +1849,19 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
 }
 
 .table tbody tr:hover {
-  background: var(--c-base);
+  background: var(--bg-hover);
 }
 
+/* 选中行:淡 accent 底 + 左侧 2px 竖条,不再整体反色 */
 .table tbody tr.selected {
-  background: var(--c-blue);
-  color: var(--c-base);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-panel));
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .col-ioa {
   font-family: var(--font-mono);
   color: var(--c-blue);
+  text-align: right;
 }
 
 .col-select {
@@ -1883,12 +1872,13 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
 
 .col-select input {
   margin: 0;
-  accent-color: var(--c-blue);
+  accent-color: var(--accent);
   cursor: pointer;
 }
 
-.table tbody tr.selected .col-ioa {
-  color: var(--c-base);
+th.col-ioa,
+th.col-value {
+  text-align: right;
 }
 
 .col-type {
@@ -1933,28 +1923,28 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
   cursor: help;
 }
 
-/* 同 CASDU 跨类型重复 IOA:标红 + ⚠(issue #28,仅警示不阻断) */
+/* 同 CASDU 跨类型重复 IOA:标红 + 警示徽标(issue #28,仅警示不阻断) */
 .col-ioa.ioa-dup {
-  color: var(--c-red);
+  color: var(--danger);
 }
 
 .dup-ioa-badge {
   margin-left: 4px;
-  color: var(--c-red);
+  color: var(--danger);
   font-size: 10px;
   cursor: help;
 }
 
-/* 选中态:行底色是 --c-blue,上面 `tr.selected .col-ioa` 会把 IOA 压成 --c-base,
-   红字直接消失(而"点中行→改 IOA"正是修冲突的操作路径)。这里反过来把冲突
-   单元格整块刷成红底 + 深色字 —— 特异性高于选中态规则,深色主题下对比最强。 */
+/* 选中态是淡 accent 底,冲突单元格再叠一层红底保证可辨(点中行→改 IOA
+   正是修冲突的操作路径);特异性须高于上面的选中行规则。 */
 .table tbody tr.selected .col-ioa.ioa-dup {
-  background: var(--c-red);
-  color: var(--c-crust);
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .table tbody tr.selected .col-ioa.ioa-dup .dup-ioa-badge {
-  color: var(--c-crust);
+  color: var(--danger);
 }
 
 .col-name {
@@ -1970,6 +1960,7 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
 
 .col-value {
   font-family: var(--font-mono);
+  text-align: right;
   transition: color 0.3s;
 }
 
@@ -1978,12 +1969,11 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
 }
 
 .col-value.value-highlight .value-text {
-  color: var(--c-peach);
+  color: var(--warning);
   font-weight: 700;
 }
 
 .table tbody tr.selected .col-value.value-highlight .value-text {
-  color: var(--c-base);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -2003,10 +1993,6 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--c-overlay0);
-}
-
-.table tbody tr.selected .col-timestamp {
-  color: var(--c-surface1);
 }
 
 .edit-input {
@@ -2049,7 +2035,7 @@ defineExpose({ loadData: loadDataPoints, resetAndReload: resetAndReloadDataPoint
 }
 
 .context-menu-item.danger:hover {
-  background: #3d2a30;
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg-panel));
 }
 
 .context-menu-sep {

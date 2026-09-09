@@ -3,6 +3,7 @@ import { ref, watch, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { RawSendResult } from '../types'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
 
 interface Props {
   visible: boolean
@@ -67,7 +68,7 @@ const previewMsg = computed(() => {
         declared: state.declared,
         expected: state.expected,
         actual: state.actual,
-        status: state.valid ? '✓' : '✗',
+        status: state.valid ? t('rawSend.lengthOk') : t('rawSend.lengthBad'),
       })
   }
 })
@@ -183,7 +184,7 @@ function handleKeydown(e: KeyboardEvent) {
           </label>
 
           <div class="preview-row">
-            <button class="btn btn-secondary btn-sm" type="button" @click="preview">{{ t('rawSend.preview') }}</button>
+            <AppButton size="sm" @click="preview">{{ t('rawSend.preview') }}</AppButton>
             <span class="preview-msg">{{ previewMsg || '—' }}</span>
           </div>
 
@@ -200,10 +201,10 @@ function handleKeydown(e: KeyboardEvent) {
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="emit('close')">{{ t('common.close') }}</button>
-          <button class="btn btn-primary" :disabled="sending || !connectionId" @click="send">
+          <AppButton @click="emit('close')">{{ t('common.close') }}</AppButton>
+          <AppButton variant="primary" :disabled="sending || !connectionId" @click="send">
             {{ sending ? t('rawSend.sending') : t('rawSend.send') }}
-          </button>
+          </AppButton>
         </div>
       </div>
     </div>
@@ -223,9 +224,9 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 .modal-box {
-  background: var(--c-base);
-  border: 1px solid var(--c-surface1);
-  border-radius: 8px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   padding: 20px;
   min-width: 480px;
   max-width: 90vw;
@@ -235,14 +236,14 @@ function handleKeydown(e: KeyboardEvent) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
 }
 
 .modal-title {
   flex-shrink: 0;
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 600;
-  color: var(--c-text);
+  color: var(--text-primary);
   margin-bottom: 16px;
 }
 
@@ -265,7 +266,7 @@ function handleKeydown(e: KeyboardEvent) {
 
 .hint {
   font-size: 11px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
@@ -274,15 +275,15 @@ function handleKeydown(e: KeyboardEvent) {
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
 }
 
 .hex-area {
   padding: 8px 10px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
   resize: vertical;
@@ -290,7 +291,8 @@ function handleKeydown(e: KeyboardEvent) {
 
 .hex-area:focus {
   outline: none;
-  border-color: var(--c-blue);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .preview-row {
@@ -301,7 +303,7 @@ function handleKeydown(e: KeyboardEvent) {
 
 .preview-msg {
   font-size: 11px;
-  color: var(--c-text);
+  color: var(--text-primary);
   font-family: var(--font-mono);
 }
 
@@ -314,81 +316,52 @@ function handleKeydown(e: KeyboardEvent) {
 
 .templates-label {
   font-size: 11px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
 }
 
 .template-btn {
   padding: 3px 8px;
   font-size: 11px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  color: var(--c-text);
-  border-radius: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: var(--font-mono);
 }
 
 .template-btn:hover {
-  background: var(--c-surface1);
-  border-color: var(--c-blue);
+  background: var(--bg-active);
+  border-color: var(--accent);
 }
 
 .error-msg {
   padding: 8px 10px;
-  background: rgba(243, 139, 168, 0.15);
-  border: 1px solid var(--c-red);
-  border-radius: 4px;
-  color: var(--c-red);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
   font-size: 12px;
   word-break: break-word;
 }
 
 .result-ok {
   padding: 8px 10px;
-  background: rgba(166, 227, 161, 0.12);
-  border: 1px solid rgba(166, 227, 161, 0.35);
-  border-radius: 4px;
-  color: var(--c-green);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--success);
   font-size: 11px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.result-line .k { color: var(--c-overlay0); margin-right: 6px; }
+.result-line .k { color: var(--text-muted); margin-right: 6px; }
 .result-line .v { font-family: var(--font-mono); }
 .result-bytes {
   font-family: var(--font-mono);
   word-break: break-all;
-  color: var(--c-text);
+  color: var(--text-primary);
 }
-
-.btn {
-  padding: 7px 20px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.btn-sm {
-  padding: 4px 10px;
-  font-size: 11px;
-}
-
-.btn-primary {
-  background: var(--c-blue);
-  color: var(--c-base);
-  font-weight: 600;
-}
-
-.btn-primary:hover:not(:disabled) { background: var(--c-sapphire); }
-.btn-primary:disabled { opacity: 0.5; cursor: default; }
-
-.btn-secondary {
-  background: var(--c-surface1);
-  color: var(--c-text);
-}
-
-.btn-secondary:hover { background: var(--c-surface2); }
 </style>

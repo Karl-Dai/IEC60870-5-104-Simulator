@@ -4,6 +4,9 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
+import AppCheckbox from '@shared/components/ui/AppCheckbox.vue'
+import AppInput from '@shared/components/ui/AppInput.vue'
 import FilePathInput from '@shared/components/FilePathInput.vue'
 import { formatStartServerError } from '../errors'
 
@@ -112,10 +115,9 @@ async function submit() {
         <fieldset class="modal-body" :disabled="pending">
           <div class="modal-field">
             <label for="new-server-bind">{{ t('newServer.bindAddressLabel') }}</label>
-            <input
+            <AppInput
               id="new-server-bind"
               v-model="bindAddress"
-              type="text"
               list="bind-address-suggestions"
               placeholder="0.0.0.0"
               @keyup.enter="submit"
@@ -135,10 +137,9 @@ async function submit() {
           </div>
           <div class="modal-field">
             <label for="new-server-station">{{ t('newServer.stationNameLabel') }}</label>
-            <input
+            <AppInput
               id="new-server-station"
               v-model="stationName"
-              type="text"
               :placeholder="t('newServer.stationNamePlaceholder')"
               @keyup.enter="submit"
             />
@@ -160,9 +161,9 @@ async function submit() {
             <div class="field-hint">{{ t('newServer.countHint') }}</div>
           </div>
           <div class="modal-field">
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="useTls" /> {{ t('newServer.enableTls') }}
-            </label>
+            <AppCheckbox v-model="useTls" class="checkbox-label">
+              {{ t('newServer.enableTls') }}
+            </AppCheckbox>
           </div>
           <template v-if="useTls">
             <FilePathInput
@@ -187,9 +188,9 @@ async function submit() {
               kind="certificate"
             />
             <div class="modal-field">
-              <label class="checkbox-label">
-                <input type="checkbox" v-model="requireClientCert" /> {{ t('newServer.requireClientCert') }}
-              </label>
+              <AppCheckbox v-model="requireClientCert" class="checkbox-label">
+                {{ t('newServer.requireClientCert') }}
+              </AppCheckbox>
             </div>
           </template>
         </fieldset>
@@ -198,8 +199,8 @@ async function submit() {
           <p>{{ errorText }}</p>
         </div>
         <div class="modal-actions">
-          <button class="modal-btn cancel" :disabled="pending" @click="close">{{ t('common.cancel') }}</button>
-          <button class="modal-btn confirm" :disabled="pending" @click="submit">{{ pending ? t('newServer.creating') : errorText ? t('newServer.retry') : t('newServer.createAndStart') }}</button>
+          <AppButton class="modal-btn cancel" :disabled="pending" @click="close">{{ t('common.cancel') }}</AppButton>
+          <AppButton variant="primary" class="modal-btn confirm" :disabled="pending" @click="submit">{{ pending ? t('newServer.creating') : errorText ? t('newServer.retry') : t('newServer.createAndStart') }}</AppButton>
         </div>
       </div>
     </div>
@@ -248,9 +249,9 @@ async function submit() {
   min-height: 0;
   overflow-y: auto;
 }
-.submit-error { margin-top: 12px; padding: 10px; color: var(--c-red); background: color-mix(in srgb, var(--c-red) 10%, transparent); border-radius: 5px; font-size: 12px; max-height: 150px; overflow-y: auto; }
+.submit-error { margin-top: 12px; padding: 10px; color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); border-radius: 5px; font-size: 12px; max-height: 150px; overflow-y: auto; }
 .submit-error p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.modal-btn:disabled { opacity: 0.55; cursor: wait; }
+.modal-btn:disabled { cursor: wait; }
 .modal-field { margin-bottom: 14px; }
 .modal-field label {
   display: block;
@@ -258,21 +259,21 @@ async function submit() {
   color: var(--c-subtext0);
   margin-bottom: 6px;
 }
-.modal-field input[type="number"],
-.modal-field input[type="text"] {
+/* 数字输入仍是原生控件,样式对齐 AppInput */
+.modal-field input[type="number"] {
   width: 100%;
-  padding: 6px 10px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
-  font-size: 13px;
+  padding: 6px var(--space-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-md);
   outline: none;
   box-sizing: border-box;
 }
-.modal-field input[type="number"]:focus,
-.modal-field input[type="text"]:focus {
-  border-color: var(--c-blue);
+.modal-field input[type="number"]:focus {
+  border-color: var(--accent);
 }
 .field-hint {
   margin-top: 4px;
@@ -280,7 +281,6 @@ async function submit() {
   color: var(--c-overlay0);
   line-height: 1.4;
 }
-.checkbox-label,
 .radio-label {
   display: flex;
   align-items: center;
@@ -289,9 +289,9 @@ async function submit() {
   color: var(--c-text);
   cursor: pointer;
 }
-.checkbox-label input[type="checkbox"],
+
 .radio-label input[type="radio"] {
-  accent-color: var(--c-blue);
+  accent-color: var(--accent);
 }
 .radio-group {
   display: flex;
@@ -304,22 +304,4 @@ async function submit() {
   gap: 8px;
   margin-top: 18px;
 }
-.modal-btn {
-  padding: 6px 16px;
-  border: none;
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.modal-btn.cancel {
-  background: var(--c-surface0);
-  color: var(--c-subtext0);
-}
-.modal-btn.cancel:hover { background: var(--c-surface1); }
-.modal-btn.confirm {
-  background: var(--c-blue);
-  color: var(--c-base);
-  font-weight: 600;
-}
-.modal-btn.confirm:hover { background: var(--c-sapphire); }
 </style>

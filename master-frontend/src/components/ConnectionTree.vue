@@ -330,13 +330,13 @@ function stateClass(state: string): string {
   padding: 8px 12px;
   font-size: 11px;
   text-transform: uppercase;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   letter-spacing: 0.5px;
 }
 
 .tree-empty {
   padding: 24px 12px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   text-align: center;
 }
 
@@ -351,19 +351,19 @@ function stateClass(state: string): string {
 }
 
 .tree-node:hover {
-  background: var(--c-base);
+  background: var(--bg-hover);
 }
 
+/* 选中项：accent 左竖条 + 轻量着色（与 DataTable 选中行同语言）。 */
 .tree-node.selected {
-  background: var(--c-blue);
-  color: var(--c-base);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .tree-node.selected .node-ca,
 .tree-node.selected .node-count,
 .tree-node.selected .ca-badge {
-  color: var(--c-base);
-  opacity: 0.85;
+  color: var(--text-secondary);
 }
 
 .tree-child {
@@ -394,7 +394,7 @@ function stateClass(state: string): string {
   font-size: 8px;
   width: 12px;
   text-align: center;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
 }
 
 .node-status {
@@ -404,9 +404,21 @@ function stateClass(state: string): string {
   flex-shrink: 0;
 }
 
-.node-status.connected { background: var(--c-green); }
-.node-status.disconnected { background: var(--c-overlay0); }
-.node-status.error { background: var(--c-red); }
+.node-status.connected { background: var(--success); }
+.node-status.disconnected { background: var(--text-disabled); }
+.node-status.error { background: var(--danger); }
+
+/* 运行中的连接：状态点呼吸光圈，prefers-reduced-motion 下保持静态。 */
+.node-status.connected {
+  animation: status-breathe 2.4s var(--ease-out) infinite;
+}
+@keyframes status-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 45%, transparent); }
+  60% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .node-status.connected { animation: none; }
+}
 
 .node-label {
   flex: 1;
@@ -417,7 +429,7 @@ function stateClass(state: string): string {
 
 .node-ca {
   font-size: 10px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
 }
 
 .node-features {
@@ -429,14 +441,14 @@ function stateClass(state: string): string {
 .feature-badge {
   min-width: 23px;
   padding: 1px 4px;
-  border: 1px solid var(--c-surface1);
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
-  background: var(--c-surface0);
+  background: var(--bg-raised);
   font: 600 9px/1.25 var(--font-mono);
   cursor: pointer;
 }
 
-.feature-badge.tls { color: var(--c-sapphire); }
+.feature-badge.tls { color: var(--info); }
 .feature-badge.socks { color: var(--c-mauve); }
 .feature-badge:hover,
 .feature-badge:focus-visible {
@@ -444,32 +456,22 @@ function stateClass(state: string): string {
   outline: none;
 }
 
-.tree-node.selected .feature-badge {
-  border-color: rgba(30, 30, 46, 0.28);
-  background: rgba(30, 30, 46, 0.14);
-  color: var(--c-base);
-}
-
 .node-typeid {
   margin-left: auto;
   margin-right: 6px;
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--c-sapphire);
+  color: var(--info);
   letter-spacing: 0.3px;
   opacity: 0.85;
   white-space: nowrap;
   flex-shrink: 0;
 }
 
-.tree-node.selected .node-typeid {
-  color: rgba(30, 30, 46, 0.7);
-}
-
 .node-count {
   font-size: 10px;
-  color: var(--c-overlay0);
-  background: var(--c-surface0);
+  color: var(--text-muted);
+  background: var(--bg-raised);
   padding: 0 5px;
   border-radius: 8px;
   min-width: 18px;
@@ -478,13 +480,13 @@ function stateClass(state: string): string {
 
 .context-menu {
   position: fixed;
-  background: var(--c-base);
-  border: 1px solid var(--c-surface1);
-  border-radius: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   padding: 4px 0;
-  z-index: 999;
+  z-index: var(--z-dropdown);
   min-width: 120px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
 }
 
 .ctx-item {
@@ -494,15 +496,15 @@ function stateClass(state: string): string {
 }
 
 .ctx-item:hover {
-  background: var(--c-surface0);
+  background: var(--bg-hover);
 }
 
 .ctx-item.danger {
-  color: var(--c-red);
+  color: var(--danger);
 }
 
 .cat-flash {
-  background: rgba(250, 179, 135, 0.2) !important;
+  background: color-mix(in srgb, var(--c-peach) 20%, transparent) !important;
 }
 
 .cat-flash .node-label {

@@ -4,6 +4,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { save } from '@tauri-apps/plugin-dialog'
 import type { LogEntry, ConnectionInfo } from '../types'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
+import AppInput from '@shared/components/ui/AppInput.vue'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { localizeLegacyBackendText } from '@shared/i18n/backendText'
@@ -541,9 +543,9 @@ onUnmounted(() => {
         <select v-model="selectedConnId" class="conn-select">
           <option v-for="conn in connectionList" :key="conn.id" :value="conn.id">{{ conn.label }}</option>
         </select>
-        <button class="log-btn" @click="loadLogs">{{ t('log.refresh') }}</button>
-        <button class="log-btn" @click="clearLogs">{{ t('log.clear') }}</button>
-        <button class="log-btn" :disabled="isExporting" @click="exportLogs">{{ isExporting ? t('log.exporting') : t('log.export') }}</button>
+        <AppButton variant="ghost" size="sm" class="log-btn" @click="loadLogs">{{ t('log.refresh') }}</AppButton>
+        <AppButton variant="ghost" size="sm" class="log-btn" @click="clearLogs">{{ t('log.clear') }}</AppButton>
+        <AppButton variant="ghost" size="sm" class="log-btn" :disabled="isExporting" @click="exportLogs">{{ isExporting ? t('log.exporting') : t('log.export') }}</AppButton>
       </div>
     </div>
 
@@ -573,7 +575,7 @@ onUnmounted(() => {
             <option v-for="typeId in frameTypeOptions" :key="typeId" :value="`type:${typeId}`">{{ typeId }}</option>
           </select>
         </label>
-        <input
+        <AppInput
           v-model="searchQuery"
           class="log-search"
           type="search"
@@ -615,7 +617,7 @@ onUnmounted(() => {
                 :title="row.log.raw_bytes && row.log.raw_bytes.length ? t('toolbar.parseFrameInLog') : ''"
                 @contextmenu="onLogContextMenu($event, row.log)">
               <td class="col-time">{{ formatTimestamp(row.log.timestamp) }}</td>
-              <td :class="['col-dir', dirClass(row.log.direction)]">{{ formatDirection(row.log.direction) }}</td>
+              <td :class="['col-dir', dirClass(row.log.direction)]"><span class="dir-pill">{{ formatDirection(row.log.direction) }}</span></td>
               <td :class="['col-frame', frameLabelClass(row.log)]">{{ formatFrameLabel(row.log) }}</td>
               <td class="col-cause">{{ formatCause(row.log) }}</td>
               <td class="col-detail" :title="formatDetail(row.log)">{{ formatDetail(row.log) }}</td>
@@ -636,7 +638,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  border-top: 1px solid rgba(137, 180, 250, 0.25);
+  border-top: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .log-panel:not(.expanded) {
@@ -651,27 +653,27 @@ onUnmounted(() => {
   padding: 0 8px;
   cursor: pointer;
   flex-shrink: 0;
-  background: var(--c-crust);
+  background: var(--bg-inset);
   min-width: 0;
 }
 
 .log-toggle {
   font-size: 10px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   width: 16px;
   text-align: center;
 }
 
 .log-title {
   font-size: 12px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
 .log-count {
   font-size: 10px;
-  background: var(--c-blue);
-  color: var(--c-base);
+  background: var(--accent);
+  color: var(--on-accent);
   padding: 0 6px;
   border-radius: 8px;
   font-weight: 600;
@@ -684,35 +686,22 @@ onUnmounted(() => {
   overflow-x: auto;
 }
 
+/* 原生 select：测试直接对元素 setValue / 读 .value，保持原生不换成 AppSelect。 */
 .conn-select {
   padding: 2px 6px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
   font-size: 11px;
   max-width: 160px;
 }
-
-.log-btn {
-  padding: 2px 8px;
-  background: transparent;
-  border: 1px solid var(--c-surface0);
-  border-radius: 4px;
-  color: var(--c-text);
-  cursor: pointer;
-  font-size: 11px;
+.conn-select:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
-.log-btn:hover {
-  background: var(--c-surface0);
-}
-
-.log-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
+/* AppButton(ghost) 自带外观；类名保留给 logPanelFeatures.spec 按序查找按钮。 */
 .log-content {
   flex: 1;
   min-height: 0;
@@ -726,19 +715,18 @@ onUnmounted(() => {
   gap: 8px;
   flex-wrap: wrap;
   padding: 6px 8px;
-  border-bottom: 1px solid var(--c-base);
-  background: var(--c-mantle);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
   flex-shrink: 0;
 }
 
 .auto-follow-btn,
-.filter-select,
-.log-search {
+.filter-select {
   min-height: 26px;
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  background: var(--c-surface0);
-  color: var(--c-text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-primary);
   font-size: 11px;
 }
 
@@ -748,16 +736,16 @@ onUnmounted(() => {
 }
 
 .auto-follow-btn.active {
-  color: var(--c-base);
-  border-color: var(--c-green);
-  background: var(--c-green);
+  color: var(--on-accent);
+  border-color: var(--success);
+  background: var(--success);
 }
 
 .filter-field {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -766,16 +754,20 @@ onUnmounted(() => {
   padding: 2px 24px 2px 6px;
   max-width: 190px;
 }
+.filter-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 
+/* AppInput 自带主题化外观，这里只保留在筛选行中的布局约束。 */
 .log-search {
   flex: 1 1 180px;
   min-width: 120px;
-  padding: 3px 8px;
 }
 
 .filter-count {
   margin-left: auto;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   font: 11px var(--font-mono);
   white-space: nowrap;
 }
@@ -784,13 +776,13 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  background: var(--c-crust);
+  background: var(--bg-inset);
 }
 
 .log-empty {
   padding: 24px;
   text-align: center;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -805,7 +797,7 @@ onUnmounted(() => {
 .log-table td {
   padding: 4px 10px;
   text-align: left;
-  border-bottom: 1px solid var(--c-base);
+  border-bottom: 1px solid var(--border-subtle);
   line-height: 16px;
   white-space: nowrap;
   overflow: hidden;
@@ -813,13 +805,17 @@ onUnmounted(() => {
 }
 
 .log-table th {
-  background: var(--c-base);
-  color: var(--c-overlay0);
+  background: var(--bg-panel);
+  color: var(--text-muted);
   font-weight: 500;
   position: sticky;
   top: 0;
   z-index: 1;
   overflow: visible;
+}
+
+.log-table tbody tr:not(.log-spacer):hover td {
+  background: var(--bg-hover);
 }
 
 .column-resizer {
@@ -840,12 +836,12 @@ onUnmounted(() => {
   bottom: 20%;
   left: 4px;
   width: 1px;
-  background: var(--c-surface1);
+  background: var(--border-strong);
 }
 
 .column-resizer:hover::after,
 .column-resizer:focus-visible::after {
-  background: var(--c-blue);
+  background: var(--accent);
 }
 
 .log-spacer td {
@@ -853,31 +849,40 @@ onUnmounted(() => {
 }
 
 .col-time {
-  color: var(--c-overlay0);
+  color: var(--text-muted);
 }
 
 .col-dir {
   font-weight: 600;
 }
 
-.col-dir.rx { color: var(--c-blue); }
-.col-dir.tx { color: var(--c-green); }
+/* 方向 pill 徽章：RX 蓝（--info）、TX 绿（--success）。 */
+.dir-pill {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+}
+.col-dir.rx .dir-pill { color: var(--info); background: color-mix(in srgb, var(--info) 15%, transparent); }
+.col-dir.tx .dir-pill { color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); }
 
 .col-frame {
 }
 
 .col-frame.frame-u { color: var(--c-mauve); }
-.col-frame.frame-i { color: var(--c-sky); }
-.col-frame.frame-s { color: var(--c-yellow); }
+.col-frame.frame-i { color: var(--info); }
+.col-frame.frame-s { color: var(--warning); }
 
 .col-cause {
   font-size: 11px;
-  color: var(--c-yellow);
+  color: var(--warning);
 }
 
 .col-raw {
   font-size: 11px;
-  color: var(--c-surface2);
+  color: var(--text-muted);
 }
 
 .log-status-dot {
@@ -886,8 +891,8 @@ onUnmounted(() => {
   border-radius: 50%;
   flex-shrink: 0;
 }
-.log-status-dot.active { background: var(--c-green); }
-.log-status-dot.idle { background: var(--c-overlay0); }
+.log-status-dot.active { background: var(--success); }
+.log-status-dot.idle { background: var(--text-disabled); }
 
 @media (max-width: 680px) {
   .log-header {
@@ -896,10 +901,6 @@ onUnmounted(() => {
 
   .conn-select {
     max-width: 100px;
-  }
-
-  .log-btn {
-    padding-inline: 5px;
   }
 
   .log-filters {

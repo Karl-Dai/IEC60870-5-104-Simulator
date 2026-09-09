@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { useI18n } from '@shared/i18n'
+import AppIcon from '@shared/components/ui/AppIcon.vue'
 import { useRemoteParams } from '../composables/useRemoteParams'
 import RemoteParamsForm from './RemoteParamsForm.vue'
 import type { ProtocolTimingConfig, RemoteOperationConfig } from '../types'
@@ -238,7 +239,7 @@ watch(() => props.visible, (v) => {
                 @click="close"
                 :title="t('remoteParams.closeEsc')"
                 :aria-label="t('common.close')"
-              >×</button>
+              ><AppIcon name="x" :size="14" /></button>
             </div>
           </header>
 

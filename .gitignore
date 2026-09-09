@@ -45,3 +45,4 @@ crates/*/gen/schemas/
 .opencode/
 .agents/
 .codegraph/
+.netcatty-paste-images/

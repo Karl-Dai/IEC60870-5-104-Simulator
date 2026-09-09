@@ -628,6 +628,7 @@ export type DictShape = {
     saveAll: string
     configTimingCorrected: string
   }
+  theme: { toLight: string; toDark: string }
   _test: { interp: string }
 }
 
@@ -1279,6 +1280,10 @@ const dict: DictShape = {
     saved: '已保存',
     saveAll: '保存全部',
     configTimingCorrected: '加载配置时已自动调整时序以满足约束 (t2<t1<t3, w≤⌊2k/3⌋):',
+  },
+  theme: {
+    toLight: '切换到亮色主题',
+    toDark: '切换到暗色主题',
   },
   _test: {
     interp: '订单 #{id} 由 {user} 创建',

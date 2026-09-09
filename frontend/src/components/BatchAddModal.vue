@@ -4,6 +4,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
+import AppCheckbox from '@shared/components/ui/AppCheckbox.vue'
+import AppIcon from '@shared/components/ui/AppIcon.vue'
+import AppInput from '@shared/components/ui/AppInput.vue'
 import { ASDU_TYPE_OPTIONS, findAsduTypeOption } from '../constants/asduTypes'
 import type { DataPointInfo } from '../types'
 import {
@@ -320,7 +324,7 @@ async function handleConfirm() {
       <div class="modal">
         <div class="modal-header">
           <span class="modal-title">{{ t('batchModal.title') }}</span>
-          <button class="btn-close" @click="$emit('close')">×</button>
+          <AppButton variant="ghost" icon="x" class="btn-close" :aria-label="t('common.cancel')" @click="$emit('close')" />
         </div>
 
         <div class="modal-body">
@@ -366,10 +370,10 @@ async function handleConfirm() {
           </div>
           <div v-else class="form-group">
             <label class="form-label">{{ t('batchModal.expressionLabel') }}</label>
-            <input
+            <AppInput
               v-model="ioaExpression"
-              type="text"
               class="form-input"
+              monospace
               :placeholder="t('batchModal.expressionPlaceholder')"
             />
             <div v-if="parsedExpr.error" class="expr-error">
@@ -432,23 +436,21 @@ async function handleConfirm() {
                 {{ t('batchModal.conflictDetail', { ranges: conflictRanges, count: conflictCount }) }}
               </div>
               <div v-if="crossTypeDupIoas.length > 0" class="summary-card__conflict summary-card__conflict--warn">
-                ⚠ {{ t('batchModal.crossTypeDup', { ranges: crossTypeDupRanges, count: crossTypeDupIoas.length }) }}
+                <AppIcon name="warning" :size="12" /> {{ t('batchModal.crossTypeDup', { ranges: crossTypeDupRanges, count: crossTypeDupIoas.length }) }}
               </div>
             </div>
           </div>
 
           <div class="form-group">
             <label class="form-label">{{ t('batchModal.namePrefix') }}</label>
-            <input
+            <AppInput
               v-model="namePrefix"
-              type="text"
               class="form-input"
               :placeholder="t('batchModal.namePrefixPlaceholder')"
             />
-            <label class="check-item">
-              <input v-model="nameWithTypeId" type="checkbox" />
-              <span>{{ t('batchModal.nameWithTypeId') }}</span>
-            </label>
+            <AppCheckbox v-model="nameWithTypeId" class="check-item">
+              {{ t('batchModal.nameWithTypeId') }}
+            </AppCheckbox>
             <div v-if="namePatternExample" class="form-hint">
               {{ t('batchModal.namePatternExample', { example: namePatternExample }) }}
             </div>
@@ -513,10 +515,10 @@ async function handleConfirm() {
         </div>
 
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="$emit('close')" :disabled="isSaving">{{ t('common.cancel') }}</button>
-          <button class="btn btn-primary" @click="handleConfirm" :disabled="!isValid || isSaving">
+          <AppButton class="btn-secondary" :disabled="isSaving" @click="$emit('close')">{{ t('common.cancel') }}</AppButton>
+          <AppButton variant="primary" class="btn-primary" :disabled="!isValid || isSaving" @click="handleConfirm">
             {{ isSaving ? t('batchModal.saving') : t('batchModal.add') }}
-          </button>
+          </AppButton>
         </div>
       </div>
     </div>
@@ -565,17 +567,7 @@ async function handleConfirm() {
 }
 
 .btn-close {
-  background: none;
-  border: none;
-  color: var(--c-overlay0);
-  font-size: 20px;
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-}
-
-.btn-close:hover {
-  color: var(--c-text);
+  padding: 2px 4px;
 }
 
 .modal-body {
@@ -605,22 +597,24 @@ async function handleConfirm() {
   margin-bottom: 6px;
 }
 
-.form-input,
+/* 数字输入与下拉仍是原生控件,样式对齐 AppInput */
+.form-input[type='number'],
 .form-select {
   width: 100%;
-  padding: 8px 12px;
-  background: var(--c-crust);
-  border: 1px solid var(--c-surface1);
-  border-radius: 6px;
-  color: var(--c-text);
-  font-size: 14px;
+  padding: 6px var(--space-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-md);
   box-sizing: border-box;
 }
 
-.form-input:focus,
+.form-input[type='number']:focus,
 .form-select:focus {
   outline: none;
-  border-color: var(--c-blue);
+  border-color: var(--accent);
 }
 
 .count-info {
@@ -666,19 +660,36 @@ async function handleConfirm() {
 }
 
 .check-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--c-text);
-  cursor: pointer;
   margin-top: 8px;
 }
 
-.check-item input[type='checkbox'] {
-  accent-color: var(--c-blue);
-  margin: 0;
+.summary-card__conflict {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--danger);
+  color: var(--danger);
+  font-size: 12px;
+  font-family: var(--font-mono);
 }
+
+/* 跨类型重复 IOA:仅警示,不阻断创建(issue #28) */
+.summary-card__conflict--warn {
+  border-top-color: var(--warning);
+  color: var(--warning);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.modal-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--c-surface0);
+}
+
 
 .radio-group {
   display: flex;
@@ -707,11 +718,11 @@ async function handleConfirm() {
 }
 
 .count-info strong {
-  color: var(--c-green);
+  color: var(--success);
 }
 
 .count-warn {
-  color: var(--c-red);
+  color: var(--danger);
 }
 
 .summary-card {
@@ -784,67 +795,6 @@ async function handleConfirm() {
 
 .summary-card__btn:disabled {
   opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.summary-card__conflict {
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--c-red);
-  color: var(--c-red);
-  font-size: 12px;
-  font-family: var(--font-mono);
-}
-
-/* 跨类型重复 IOA:仅警示,不阻断创建(issue #28) */
-.summary-card__conflict--warn {
-  border-top-color: var(--c-peach);
-  color: var(--c-peach);
-}
-
-.modal-footer {
-  flex-shrink: 0;
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 16px 20px;
-  border-top: 1px solid var(--c-surface0);
-}
-
-.btn {
-  padding: 8px 20px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.btn-primary {
-  background: var(--c-blue);
-  color: var(--c-base);
-  font-weight: 600;
-}
-
-.btn-primary:hover {
-  background: var(--c-sapphire);
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-secondary {
-  background: var(--c-surface1);
-  color: var(--c-text);
-}
-
-.btn-secondary:hover {
-  background: var(--c-surface2);
-}
-
-.btn-secondary:disabled {
-  opacity: 0.5;
   cursor: not-allowed;
 }
 </style>

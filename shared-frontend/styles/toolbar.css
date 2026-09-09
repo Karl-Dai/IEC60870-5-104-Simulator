@@ -49,7 +49,7 @@
 .toolbar-divider {
   width: 1px;
   height: 20px;
-  background: var(--c-surface0);
+  background: var(--border-subtle);
   margin: 0 4px;
 }
 
@@ -60,15 +60,17 @@
   padding: 4px 10px;
   border: none;
   background: transparent;
-  color: var(--c-text);
+  color: var(--text-primary);
   cursor: pointer;
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
   white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
 }
 
 .toolbar-btn:hover:not(:disabled) {
-  background: var(--c-surface0);
+  background: var(--bg-hover);
 }
 
 .toolbar-btn:disabled {
@@ -88,9 +90,9 @@
 .toolbar-btn.btn-close { color: var(--c-red); }
 
 .toolbar-title {
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 600;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   padding-right: 8px;
 }
 .toolbar-title.as-button {
@@ -98,5 +100,6 @@
   border: none;
   cursor: pointer;
   font-family: inherit;
+  transition: color var(--duration-fast) var(--ease-out);
 }
-.toolbar-title.as-button:hover { color: var(--c-text); }
+.toolbar-title.as-button:hover { color: var(--text-primary); }

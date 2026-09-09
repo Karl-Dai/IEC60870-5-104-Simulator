@@ -161,6 +161,8 @@ const activePointValues = [
 // ----------------------------------------------------------------------------
 function installTauriMock(cfg) {
   try { localStorage.setItem('iec104.locale', cfg.locale) } catch (e) { /* ignore */ }
+  // Pin the dark theme so captures don't follow the host OS preference.
+  try { localStorage.setItem('iec104-theme', 'dark') } catch (e) { /* ignore */ }
   try {
     for (const [key, value] of Object.entries(cfg.storage || {})) localStorage.setItem(key, value)
   } catch (e) { /* ignore */ }
