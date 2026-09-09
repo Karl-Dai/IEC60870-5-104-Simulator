@@ -2,6 +2,27 @@
 
 本项目的所有重要变更记录在此文件。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.15.19] - 2026-09-09
+
+### Highlights / 亮点
+
+- 主站和从站支持明暗主题切换并记住选择，统一表单、表格与日志面板外观 / Master and slave apps support persistent light and dark themes with consistent forms, tables, and log panels.
+- 从站支持批量删除服务器和站点，便于清理大型配置 / Delete multiple slave servers and stations to simplify configuration cleanup.
+- 事件回放导入允许匹配同 IOA、同数据类别的已有点位，提高不同报文类型之间的兼容性 / Event replay imports can resolve existing points with the same IOA and data category for better compatibility across ASDU variants.
+
+### Added 新增
+
+- 连接树增加服务器和站点批量删除操作 / Add bulk deletion of servers and stations to the slave connection tree.
+
+### Changed 改进
+
+- 两端新增明暗主题、共享基础控件和 SVG 图标，并统一连接树、表格、日志和弹窗样式 / Add light and dark themes, shared controls, and SVG icons across both apps, with consistent trees, tables, logs, and dialogs.
+- 回放点位优先精确匹配类型，未命中时选择同 IOA、同类别点位；优先 NA 变体，多候选按类型编号稳定选择。写入实际点位，上送保留文件声明的类型 / Replay resolution prefers exact types, then the same IOA and category, favoring NA variants and using type IDs for deterministic selection. Values update the resolved point while reports retain the imported type.
+
+### Fixed 修复
+
+- 修复两个 TLS 版本协商测试先释放临时端口再重新绑定的竞态：直接保留系统分配的监听器，消除 Windows CI 的该处 AddrInUse 偶发失败 / Fix the port reservation race in two TLS version negotiation tests by retaining the OS-assigned listener, eliminating the corresponding intermittent Windows CI AddrInUse failure.
+
 ## [1.15.18] - 2026-09-09
 
 ### Added 新增

@@ -5,6 +5,7 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  "v1.15.19 改进：新增明暗主题切换与统一界面样式；统一连接树、数据表、日志面板与弹窗控件",
   'v1.15.18 新增 / Added: slave: 支持导入 JSON 定时改变点位 (#88)',
   "v1.15.17 版本同步：本次更新集中于从站工具栏、批量启停和配置加载，主站无功能变更",
   'v1.15.16 修复：点位变值仅强调数值，不再加深整行背景，保留选中行可读性',
@@ -95,9 +96,11 @@ export const RELEASE_NOTES: string[] = [
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
   "zh-CN": [
-    "v1.15.18 版本同步：本次新增从站 JSON 定时改变点位功能，主站无功能变更"
+    "v1.15.19 改进：新增明暗主题切换与统一界面样式",
+    "统一连接树、数据表、日志面板与弹窗控件"
   ],
   "en-US": [
-    "v1.15.18 Release alignment: adds scheduled point changes from JSON in the slave; no master features change"
+    "v1.15.19 Improved: light and dark themes with consistent UI styling",
+    "Consistent controls across connection trees, data tables, logs, and dialogs"
   ]
 } as const
