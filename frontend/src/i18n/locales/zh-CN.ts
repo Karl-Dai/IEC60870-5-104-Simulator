@@ -90,6 +90,13 @@ export type DictShape = {
     csvReplace: string
     csvReplaceHint: string
     csvReplaceConfirm: string
+    importEventJson: string
+    downloadEventJsonExample: string
+    eventJsonRunningOnly: string
+    eventJsonConfirm: string
+    eventJsonImportFailed: string
+    eventJsonExampleSaved: string
+    eventJsonExampleFailed: string
   }
   newServer: {
     title: string
@@ -491,6 +498,8 @@ export type DictShape = {
     clockSyncInvalidCot: string
     clockSyncInvalidIoa: string
     clockSyncMalformed: string
+    pointEventScheduleStarted: string
+    pointEventScheduleFinished: string
   }
   about: {
     whatsNew: string
@@ -723,6 +732,13 @@ const dict: DictShape = {
     csvReplace: '替换',
     csvReplaceHint: '清空当前站点的点位和模拟任务，再按 CSV 完整重建。',
     csvReplaceConfirm: '替换会清空当前站点的全部点位和模拟任务，然后按 CSV 重建。确定继续吗？',
+    importEventJson: '导入事件 JSON',
+    downloadEventJsonExample: '下载事件 JSON 示例',
+    eventJsonRunningOnly: '事件回放要求服务器正在运行',
+    eventJsonConfirm: '文件校验通过：{events} 条事件，涉及 {points} 个点位，总时长 {duration} ms。\n确认后立即开始，运行结果写入通信日志。是否继续？',
+    eventJsonImportFailed: '导入事件 JSON 失败',
+    eventJsonExampleSaved: '事件 JSON 示例已保存，共 {count} 条事件',
+    eventJsonExampleFailed: '保存事件 JSON 示例失败',
   },
   newServer: {
     title: '新建服务器',
@@ -1139,6 +1155,8 @@ const dict: DictShape = {
     clockSyncInvalidCot: '时钟同步 拒收（非法 COT={cot}，回 COT=45 + P/N） CA={ca}',
     clockSyncInvalidIoa: '时钟同步 拒收（IOA={ioa}，应为 0；回 COT=47 + P/N） CA={ca}',
     clockSyncMalformed: '时钟同步畸形 ASDU 已丢弃（原因={reason}，长度={len}） CA={ca}',
+    pointEventScheduleStarted: '事件回放已开始 task={task_id} CA={common_address}，事件={event_count}，时长={duration_ms} ms',
+    pointEventScheduleFinished: '事件回放已结束 task={task_id} CA={common_address}，原因={reason}，已执行={events_executed}，已发送帧={frames_sent}',
   },
   about: {
     whatsNew: '本次更新',
