@@ -98,6 +98,7 @@ The bottom log panel shows every TLS handshake step, U/I/S frame, COT decode, an
 - **8 data types** — Single Point, Double Point, Step Position, Bitstring, Normalized, Scaled, Short Float, Integrated Totals; monitor direction includes CP24 (short) and CP56 (full) time-tagged variants
 - **Data point management** — add points singly or in batch, with IOA ranges and non-contiguous expressions (e.g. `6001, 6003, 6010-6050`); the edit dialog can move a point to a new IOA, and multi-select batch-sets control QU/QL and S/E
 - **Point-table CSV round-trip** — download a schema template, export a station's complete point configuration, then import it in Merge or Replace mode while the server is stopped; validation reports the exact row and field, and periodic-mutation settings round-trip with the points
+- **Point-event JSON playback** — set point values at relative millisecond offsets and send COT=3; same-time events of one type use SQ=0 packing, including repeated IOAs with different values in one ASDU
 - **Batch value write by IOA expression** — type a mix of single IOAs and ranges (e.g. `100, 1000-2000, 5000`), pick a type, and write one value to every matching point — with a live matched/ignored preview, no Ctrl-clicking across thousands of rows
 - **Per-point periodic mutation** — right-click any point(s) to start/stop a periodic change with an in-row pulse indicator; analog points and counters ramp as a triangle wave (increment/decrement with step and bounds), discrete points flip; points mutate concurrently and independently
 - **Random mutation** and **cyclic transmission** — simulate value changes / periodic sending at a configurable interval
@@ -109,6 +110,19 @@ The bottom log panel shows every TLS handshake step, U/I/S frame, COT decode, an
 - **Editable listen address/port** — change a stopped server's bind address/port in place, no delete-and-recreate
 - **Communication log analysis** — filter RX/TX and I/S/U frames or a specific Type ID, search decoded detail and raw bytes, resize columns and panel height, auto-follow live traffic, and export either all logs or the current filtered view to CSV
 - Server auto-starts on creation
+
+### Point-event JSON format
+
+Choose **Import Event JSON** from the **Points** menu. The server must be running and at least one Master must have completed STARTDT. Each `time_ms` is measured from the confirmed playback start.
+
+```json
+[
+  { "time_ms": 1000, "type": "M_SP_TB_1", "ioa": 1001, "value": false },
+  { "time_ms": 1000, "type": "M_SP_TB_1", "ioa": 1001, "value": true }
+]
+```
+
+Use booleans or numbers for simple values. Step position uses `{"value":-1,"transient":false}`; integrated totals use `{"value":123,"carry":false,"sequence":0}`. Normalized measurements use the raw wire NVA integer range `-32768..32767`. Files are limited to 20 MiB, 100,000 events, and seven days. The whole file is validated before playback; any error rejects it without changing points. **Download Event JSON Example** generates an editable file from the selected station's existing points.
 
 ### 📡 Master — `IEC104Master`
 

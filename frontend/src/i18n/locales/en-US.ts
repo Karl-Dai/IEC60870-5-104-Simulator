@@ -92,6 +92,13 @@ const dict: DictShape = {
     csvReplace: 'Replace',
     csvReplaceHint: 'Clear this station\'s points and simulation tasks, then rebuild them from the CSV.',
     csvReplaceConfirm: 'Replace will clear every point and simulation task in the selected station, then rebuild them from the CSV. Continue?',
+    importEventJson: 'Import Event JSON',
+    downloadEventJsonExample: 'Download Event JSON Example',
+    eventJsonRunningOnly: 'Event playback requires a running server.',
+    eventJsonConfirm: 'Validation passed: {events} event(s), {points} point(s), duration {duration} ms. Playback starts immediately and writes its result to the communication log. Continue?',
+    eventJsonImportFailed: 'Event JSON import failed',
+    eventJsonExampleSaved: 'Event JSON example saved with {count} event(s)',
+    eventJsonExampleFailed: 'Event JSON example save failed',
   },
   newServer: {
     title: 'New Server',
@@ -508,6 +515,8 @@ const dict: DictShape = {
     clockSyncInvalidCot: 'Clock sync rejected (invalid COT={cot}; reply COT=45 + P/N) CA={ca}',
     clockSyncInvalidIoa: 'Clock sync rejected (IOA={ioa}, expected 0; reply COT=47 + P/N) CA={ca}',
     clockSyncMalformed: 'Malformed clock-sync ASDU dropped (reason={reason}, length={len}) CA={ca}',
+    pointEventScheduleStarted: 'Event playback started task={task_id} CA={common_address}, events={event_count}, duration={duration_ms} ms',
+    pointEventScheduleFinished: 'Event playback finished task={task_id} CA={common_address}, reason={reason}, executed={events_executed}, frames sent={frames_sent}',
   },
   about: {
     whatsNew: 'What\'s New',

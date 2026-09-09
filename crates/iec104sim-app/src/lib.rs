@@ -1,4 +1,5 @@
 mod commands;
+mod point_event_json;
 mod point_csv;
 mod state;
 pub mod update;
@@ -67,6 +68,10 @@ pub fn run() {
             commands::start_point_mutation,
             commands::stop_point_mutation,
             commands::list_point_mutations,
+            // Imported point-event schedules
+            point_event_json::inspect_point_event_schedule,
+            point_event_json::start_point_event_schedule,
+            point_event_json::save_point_event_schedule_example,
             // Config file save/open
             commands::save_config,
             commands::load_config,

@@ -3,7 +3,7 @@ use crate::log_collector::LogCollector;
 use crate::log_entry::{Direction, FrameLabel, LogEntry};
 use crate::types::{AsduTypeId, DataCategory, QualityFlags};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
 use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
@@ -1356,6 +1356,23 @@ struct PointMutationTask {
     period_ms: u32,
 }
 
+/// One validated value change in a JSON event schedule. The application layer
+/// parses the file and converts every value to the point's runtime value type
+/// before handing the schedule to the protocol core.
+#[derive(Debug, Clone)]
+pub struct ScheduledPointEvent {
+    pub time_ms: u64,
+    pub ioa: u32,
+    pub asdu_type: AsduTypeId,
+    pub value: DataPointValue,
+}
+
+struct PointEventScheduleTask {
+    id: String,
+    targets: HashSet<(u32, AsduTypeId)>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
 pub struct SlaveServer {
     pub transport: SlaveTransportConfig,
     pub stations: SharedStations,
@@ -1375,6 +1392,10 @@ pub struct SlaveServer {
     /// `start_point_mutation` 对同一 key 重复调用会先 abort 旧任务。
     point_mutation_handles:
         tokio::sync::Mutex<HashMap<(u16, u32, AsduTypeId), PointMutationTask>>,
+    /// A station runs at most one imported event schedule. Keeping the target
+    /// set beside the handle lets point-mutation starts reject conflicting work.
+    point_event_schedule_handles:
+        Arc<tokio::sync::Mutex<HashMap<u16, PointEventScheduleTask>>>,
     connections: SharedConnections,
     /// Indirection used only by long-lived mutation tasks. Listener restarts
     /// replace `connections` to isolate old socket tasks; this registry lets a
@@ -1398,6 +1419,7 @@ impl SlaveServer {
             server_handle: None,
             cyclic_handle: None,
             point_mutation_handles: tokio::sync::Mutex::new(HashMap::new()),
+            point_event_schedule_handles: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             connections: Arc::clone(&connections),
             mutation_connections: Arc::new(RwLock::new(connections)),
         }
@@ -1437,6 +1459,12 @@ impl SlaveServer {
     /// by both the plain TCP and TLS handlers as soon as the session closes.
     pub async fn client_connection_count(&self) -> usize {
         self.connections.read().await.len()
+    }
+
+    /// Number of Master sessions that have completed STARTDT and may receive
+    /// slave-originated I-frames.
+    pub async fn active_client_connection_count(&self) -> usize {
+        active_point_event_client_count(&self.mutation_connections).await
     }
 
     /// Stable, read-only view of the currently connected Masters. Sorting by
@@ -1570,6 +1598,8 @@ impl SlaveServer {
     }
 
     pub async fn remove_station(&self, ca: u16) -> Result<Station, SlaveError> {
+        self.stop_point_event_schedule_for_station(ca, "station_removed")
+            .await;
         self.transact_station_point_mutations(
             ca,
             StationMutationBatchMode::Replace,
@@ -1685,6 +1715,14 @@ impl SlaveServer {
         }
         let key = (ca, ioa, asdu_type);
         let mut guard = self.point_mutation_handles.lock().await;
+        let schedules = self.point_event_schedule_handles.lock().await;
+        if schedules
+            .get(&ca)
+            .is_some_and(|schedule| schedule.targets.contains(&(ioa, asdu_type)))
+        {
+            return Err(SlaveError::PointEventTargetReserved { ioa, asdu_type });
+        }
+        drop(schedules);
         let replaced = guard.remove(&key);
         if let Some(task) = replaced.as_ref() {
             task.handle.abort();
@@ -1887,6 +1925,258 @@ impl SlaveServer {
             .iter()
             .map(|(&(ca, ioa, t), task)| (ca, ioa, t, task.params, task.period_ms))
             .collect()
+    }
+
+    /// Validate the runtime conditions shared by schedule inspection and
+    /// schedule start. File parsing and value-range checks stay in the app.
+    pub async fn validate_point_event_schedule(
+        &self,
+        common_address: u16,
+        events: &[ScheduledPointEvent],
+    ) -> Result<(), SlaveError> {
+        if self.state != ServerState::Running {
+            return Err(SlaveError::PointEventServerNotRunning);
+        }
+        if events.is_empty() {
+            return Err(SlaveError::PointEventScheduleEmpty);
+        }
+
+        let stations = self.stations.read().await;
+        let station = stations
+            .get(&common_address)
+            .ok_or(SlaveError::StationNotFound(common_address))?;
+        for event in events {
+            if event.asdu_type.is_control()
+                || event.asdu_type.category() == DataCategory::System
+            {
+                return Err(SlaveError::PointEventUnsupportedType(event.asdu_type));
+            }
+            if !station.data_points.contains(event.ioa, event.asdu_type) {
+                return Err(SlaveError::PointEventTargetNotFound {
+                    ioa: event.ioa,
+                    asdu_type: event.asdu_type,
+                });
+            }
+        }
+
+        let mutations = self.point_mutation_handles.lock().await;
+        if let Some(event) = events.iter().find(|event| {
+            mutations.contains_key(&(common_address, event.ioa, event.asdu_type))
+        }) {
+            return Err(SlaveError::PointEventMutationConflict {
+                ioa: event.ioa,
+                asdu_type: event.asdu_type,
+            });
+        }
+        let schedules = self.point_event_schedule_handles.lock().await;
+        if schedules.contains_key(&common_address) {
+            return Err(SlaveError::PointEventScheduleAlreadyRunning(common_address));
+        }
+        drop(schedules);
+        drop(mutations);
+        drop(stations);
+
+        if self.active_client_connection_count().await == 0 {
+            return Err(SlaveError::PointEventNoActiveClient);
+        }
+        Ok(())
+    }
+
+    /// Start one imported event schedule for a station. The returned ID is
+    /// written to communication logs and can correlate start/end entries.
+    pub async fn start_point_event_schedule(
+        &self,
+        common_address: u16,
+        mut events: Vec<ScheduledPointEvent>,
+    ) -> Result<String, SlaveError> {
+        events.sort_by_key(|event| event.time_ms);
+        self.validate_point_event_schedule(common_address, &events).await?;
+
+        // Repeat conflict checks while holding both registries. This closes the
+        // gap between validation and task installation for competing starts.
+        let mutations = self.point_mutation_handles.lock().await;
+        if let Some(event) = events.iter().find(|event| {
+            mutations.contains_key(&(common_address, event.ioa, event.asdu_type))
+        }) {
+            return Err(SlaveError::PointEventMutationConflict {
+                ioa: event.ioa,
+                asdu_type: event.asdu_type,
+            });
+        }
+        let mut schedules = self.point_event_schedule_handles.lock().await;
+        if schedules.contains_key(&common_address) {
+            return Err(SlaveError::PointEventScheduleAlreadyRunning(common_address));
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let targets: HashSet<(u32, AsduTypeId)> = events
+            .iter()
+            .map(|event| (event.ioa, event.asdu_type))
+            .collect();
+        let event_count = events.len();
+        let duration_ms = events.last().map(|event| event.time_ms).unwrap_or(0);
+        let stations = Arc::clone(&self.stations);
+        let connections = Arc::clone(&self.mutation_connections);
+        let registry = Arc::clone(&self.point_event_schedule_handles);
+        let log = self.log_collector.clone();
+        let task_id = id.clone();
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            if start_rx.await.is_err() {
+                return;
+            }
+            let result = run_point_event_schedule(
+                &stations,
+                &connections,
+                common_address,
+                events,
+            )
+            .await;
+            if let Some(log) = &log {
+                log.try_add(
+                    LogEntry::new(
+                        Direction::Tx,
+                        FrameLabel::ConnectionEvent,
+                        format!(
+                            "事件回放结束 task={} CA={} 原因={} 已执行={} 已发送帧={}",
+                            task_id,
+                            common_address,
+                            result.reason,
+                            result.events_executed,
+                            result.frames_sent,
+                        ),
+                    )
+                    .with_detail_event(
+                        "pointEventScheduleFinished",
+                        serde_json::json!({
+                            "task_id": task_id,
+                            "common_address": common_address,
+                            "reason": result.reason,
+                            "events_executed": result.events_executed,
+                            "frames_sent": result.frames_sent,
+                        }),
+                    ),
+                );
+            }
+            let mut schedules = registry.lock().await;
+            if schedules
+                .get(&common_address)
+                .is_some_and(|task| task.id == task_id)
+            {
+                schedules.remove(&common_address);
+            }
+        });
+        schedules.insert(
+            common_address,
+            PointEventScheduleTask {
+                id: id.clone(),
+                targets,
+                handle,
+            },
+        );
+        drop(schedules);
+        drop(mutations);
+
+        if let Some(log) = &self.log_collector {
+            log.try_add(
+                LogEntry::new(
+                    Direction::Tx,
+                    FrameLabel::ConnectionEvent,
+                    format!(
+                        "事件回放开始 task={} CA={} 事件={} 时长={}ms",
+                        id, common_address, event_count, duration_ms,
+                    ),
+                )
+                .with_detail_event(
+                    "pointEventScheduleStarted",
+                    serde_json::json!({
+                        "task_id": id,
+                        "common_address": common_address,
+                        "event_count": event_count,
+                        "duration_ms": duration_ms,
+                    }),
+                ),
+            );
+        }
+        let _ = start_tx.send(());
+        Ok(id)
+    }
+
+    /// Return whether a running schedule owns any listed point key.
+    pub async fn ensure_point_event_targets_editable(
+        &self,
+        common_address: u16,
+        targets: &[(u32, AsduTypeId)],
+    ) -> Result<(), SlaveError> {
+        let schedules = self.point_event_schedule_handles.lock().await;
+        let Some(schedule) = schedules.get(&common_address) else {
+            return Ok(());
+        };
+        if let Some((ioa, asdu_type)) = targets
+            .iter()
+            .find(|target| schedule.targets.contains(target))
+        {
+            return Err(SlaveError::PointEventTargetReserved {
+                ioa: *ioa,
+                asdu_type: *asdu_type,
+            });
+        }
+        Ok(())
+    }
+
+    async fn stop_point_event_schedule_for_station(
+        &self,
+        common_address: u16,
+        reason: &str,
+    ) -> usize {
+        let task = self
+            .point_event_schedule_handles
+            .lock()
+            .await
+            .remove(&common_address);
+        let Some(task) = task else { return 0 };
+        task.handle.abort();
+        let _ = task.handle.await;
+        if let Some(log) = &self.log_collector {
+            log.try_add(
+                LogEntry::new(
+                    Direction::Tx,
+                    FrameLabel::ConnectionEvent,
+                    format!(
+                        "事件回放结束 task={} CA={} 原因={}",
+                        task.id, common_address, reason,
+                    ),
+                )
+                .with_detail_event(
+                    "pointEventScheduleFinished",
+                    serde_json::json!({
+                        "task_id": task.id,
+                        "common_address": common_address,
+                        "reason": reason,
+                        "events_executed": "-",
+                        "frames_sent": "-",
+                    }),
+                ),
+            );
+        }
+        1
+    }
+
+    async fn stop_all_point_event_schedules(&self, reason: &str) -> usize {
+        let common_addresses: Vec<u16> = self
+            .point_event_schedule_handles
+            .lock()
+            .await
+            .keys()
+            .copied()
+            .collect();
+        let mut stopped = 0;
+        for common_address in common_addresses {
+            stopped += self
+                .stop_point_event_schedule_for_station(common_address, reason)
+                .await;
+        }
+        stopped
     }
 
     /// Capture one station's definitions and mutation settings under the same
@@ -2250,6 +2540,7 @@ impl SlaveServer {
             connections.clear();
         }
         if let Some(h) = self.cyclic_handle.take() { let _ = h.await; }
+        self.stop_all_point_event_schedules("server_stopped").await;
         self.stop_all_point_mutations().await;
         self.state = ServerState::Stopped;
         if let Some(ref lc) = self.log_collector {
@@ -2262,9 +2553,14 @@ impl SlaveServer {
 impl Drop for SlaveServer {
     fn drop(&mut self) {
         // Explicit lifecycle methods abort and join. This is a last-resort
-        // guard for callers that drop a stopped server without cleanup; dropping
-        // a Tokio JoinHandle alone would detach the mutation task.
+        // guard for callers that drop a server without cleanup; dropping a
+        // Tokio JoinHandle alone would detach a background task.
         if let Ok(mut tasks) = self.point_mutation_handles.try_lock() {
+            for (_, task) in tasks.drain() {
+                task.handle.abort();
+            }
+        }
+        if let Ok(mut tasks) = self.point_event_schedule_handles.try_lock() {
             for (_, task) in tasks.drain() {
                 task.handle.abort();
             }
@@ -3134,6 +3430,94 @@ fn encode_point_frame_ex(
     build_i_frame(na_type, cot, ca, &ioa_bytes[..3], &value_bytes, seq)
 }
 
+/// Encode imported schedule snapshots as SQ=0 ASDUs. Every information object
+/// carries its own IOA, so repeated IOAs with different values remain distinct.
+/// The caller groups points by exact ASDU type and preserves their file order.
+fn encode_points_discrete(
+    points: &[DataPoint],
+    cot: u8,
+    ca: &[u8; 2],
+    seq: &mut SeqState,
+) -> Vec<Vec<u8>> {
+    if points.is_empty() {
+        return Vec::new();
+    }
+    let asdu_type = points[0].asdu_type;
+    debug_assert!(points.iter().all(|point| point.asdu_type == asdu_type));
+
+    let objects: Vec<Vec<u8>> = points
+        .iter()
+        .map(|point| {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&point.ioa.to_le_bytes()[..3]);
+            if asdu_type == AsduTypeId::MMeNd1 {
+                let nva = match point.value {
+                    DataPointValue::Normalized { value } => {
+                        (value * 32767.0).round() as i16
+                    }
+                    _ => 0,
+                };
+                bytes.extend_from_slice(&nva.to_le_bytes());
+            } else {
+                let (_, value_bytes) = encode_na_value(&point.value, &point.quality);
+                bytes.extend_from_slice(&value_bytes);
+                if asdu_type.is_cp24() {
+                    let timestamp = point.timestamp.unwrap_or_else(chrono::Utc::now);
+                    bytes.extend_from_slice(&crate::asdu_encode::encode_cp24time2a(
+                        timestamp,
+                        point.quality.iv,
+                    ));
+                } else if asdu_type.is_timestamped() {
+                    let timestamp = point.timestamp.unwrap_or_else(chrono::Utc::now);
+                    bytes.extend_from_slice(&crate::asdu_encode::encode_cp56time2a(
+                        timestamp,
+                        point.quality.iv,
+                    ));
+                }
+            }
+            bytes
+        })
+        .collect();
+
+    let mut frames = Vec::new();
+    let mut start = 0usize;
+    while start < objects.len() {
+        // IEC APDU length counts the four control bytes and the ASDU. The
+        // one-byte length field caps that part at 253 bytes.
+        let mut payload_len = 0usize;
+        let mut end = start;
+        while end < objects.len()
+            && end - start < 0x7f
+            && 4 + 6 + payload_len + objects[end].len() <= 253
+        {
+            payload_len += objects[end].len();
+            end += 1;
+        }
+        debug_assert!(end > start, "one scheduled information object must fit in an APDU");
+
+        let total_len = 4 + 6 + payload_len;
+        let mut frame = Vec::with_capacity(2 + total_len);
+        frame.push(0x68);
+        frame.push(total_len as u8);
+        frame.push((seq.ssn & 0xff) as u8);
+        frame.push(((seq.ssn >> 8) & 0xff) as u8);
+        frame.push((seq.rsn & 0xff) as u8);
+        frame.push(((seq.rsn >> 8) & 0xff) as u8);
+        seq.ssn = seq.ssn.wrapping_add(2);
+        frame.push(asdu_type as u8);
+        frame.push((end - start) as u8); // VSQ.SQ=0
+        frame.push(cot);
+        frame.push(0x00); // ORG=0 for slave-originated data
+        frame.extend_from_slice(ca);
+        for object in &objects[start..end] {
+            frame.extend_from_slice(object);
+        }
+        frames.push(frame);
+        start = end;
+    }
+    frames
+}
+
 /// 把一组**连续 IOA 且同 NA 类型**的点合并到单个 ASDU 帧 (VSQ.SQ=1)。
 /// 返回 None 表示无法打包,调用方应回退到逐点路径。
 fn encode_points_grouped(
@@ -3579,6 +3963,191 @@ fn step_value(value: &DataPointValue, params: &MutationParams, dir: f64) -> (Dat
     (new_value, new_dir)
 }
 
+struct PointEventRunResult {
+    events_executed: usize,
+    frames_sent: usize,
+    reason: &'static str,
+}
+
+async fn active_point_event_client_count(
+    connections: &Arc<RwLock<SharedConnections>>,
+) -> usize {
+    let current = connections.read().await.clone();
+    let count = current
+        .read()
+        .await
+        .values()
+        .filter(|connection| {
+            connection
+                .started
+                .load(std::sync::atomic::Ordering::SeqCst)
+        })
+        .count();
+    count
+}
+
+/// Wait for an absolute schedule deadline while checking STARTDT state often
+/// enough to terminate a long-running schedule shortly after its last Master
+/// becomes inactive.
+async fn wait_for_point_event_deadline(
+    connections: &Arc<RwLock<SharedConnections>>,
+    deadline: tokio::time::Instant,
+) -> bool {
+    loop {
+        if active_point_event_client_count(connections).await == 0 {
+            return false;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return true;
+        }
+        tokio::time::sleep(
+            deadline
+                .saturating_duration_since(now)
+                .min(std::time::Duration::from_millis(50)),
+        )
+        .await;
+    }
+}
+
+async fn queue_point_event_groups(
+    connection_registry: &Arc<RwLock<SharedConnections>>,
+    common_address: u16,
+    groups: &[(AsduTypeId, Vec<DataPoint>)],
+) -> (usize, usize) {
+    let connections = connection_registry.read().await.clone();
+    let mut connections = connections.write().await;
+    let ca = common_address.to_le_bytes();
+    let mut client_count = 0usize;
+    let mut frame_count = 0usize;
+    for connection in connections.values_mut() {
+        if !connection
+            .started
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            continue;
+        }
+        client_count += 1;
+        {
+            let mut seq = connection.seq.lock().await;
+            let mut queue = connection.queue.lock().await;
+            for (_, points) in groups {
+                let frames = encode_points_discrete(points, 3, &ca, &mut seq);
+                frame_count += frames.len();
+                for frame in frames {
+                    queue.extend_from_slice(&frame);
+                }
+                for point in points {
+                    connection
+                        .last_sent
+                        .insert(point.ioa, point.value.display());
+                }
+            }
+        }
+    }
+    (client_count, frame_count)
+}
+
+async fn run_point_event_schedule(
+    stations: &SharedStations,
+    connections: &Arc<RwLock<SharedConnections>>,
+    common_address: u16,
+    events: Vec<ScheduledPointEvent>,
+) -> PointEventRunResult {
+    let started_at = tokio::time::Instant::now();
+    let wall_clock_started_at = chrono::Utc::now();
+    let mut events_executed = 0usize;
+    let mut frames_sent = 0usize;
+    let mut start = 0usize;
+
+    while start < events.len() {
+        let time_ms = events[start].time_ms;
+        let mut end = start + 1;
+        while end < events.len() && events[end].time_ms == time_ms {
+            end += 1;
+        }
+        let deadline = started_at + std::time::Duration::from_millis(time_ms);
+        if !wait_for_point_event_deadline(connections, deadline).await {
+            return PointEventRunResult {
+                events_executed,
+                frames_sent,
+                reason: "no_active_client",
+            };
+        }
+
+        let timestamp = wall_clock_started_at
+            .checked_add_signed(chrono::Duration::milliseconds(time_ms as i64))
+            .unwrap_or(wall_clock_started_at);
+        let groups = {
+            let mut stations = stations.write().await;
+            let Some(station) = stations.get_mut(&common_address) else {
+                return PointEventRunResult {
+                    events_executed,
+                    frames_sent,
+                    reason: "station_removed",
+                };
+            };
+
+            // Check the whole millisecond group before changing any point.
+            if events[start..end].iter().any(|event| {
+                !station
+                    .data_points
+                    .contains(event.ioa, event.asdu_type)
+            }) {
+                return PointEventRunResult {
+                    events_executed,
+                    frames_sent,
+                    reason: "target_removed",
+                };
+            }
+
+            let mut groups: Vec<(AsduTypeId, Vec<DataPoint>)> = Vec::new();
+            for event in &events[start..end] {
+                let snapshot = {
+                    let point = station
+                        .data_points
+                        .get_mut(event.ioa, event.asdu_type)
+                        .expect("point existence was checked above");
+                    point.value = event.value.clone();
+                    point.timestamp = Some(timestamp);
+                    point.clone()
+                };
+                station
+                    .data_points
+                    .mark_changed(event.ioa, event.asdu_type);
+                if let Some((_, points)) = groups
+                    .iter_mut()
+                    .find(|(asdu_type, _)| *asdu_type == event.asdu_type)
+                {
+                    points.push(snapshot);
+                } else {
+                    groups.push((event.asdu_type, vec![snapshot]));
+                }
+            }
+            groups
+        };
+
+        let (client_count, sent) =
+            queue_point_event_groups(connections, common_address, &groups).await;
+        events_executed += end - start;
+        frames_sent += sent;
+        if client_count == 0 {
+            return PointEventRunResult {
+                events_executed,
+                frames_sent,
+                reason: "no_active_client",
+            };
+        }
+        start = end;
+    }
+
+    PointEventRunResult {
+        events_executed,
+        frames_sent,
+        reason: "completed",
+    }
+}
+
 /// 模块级 `queue_spontaneous` 实现,供 `SlaveServer.queue_spontaneous` 和
 /// 远方命令及手工变位共用;周期点位仿真由 simulation_pacing 在连接写出时节流。
 async fn do_queue_spontaneous(
@@ -3716,6 +4285,22 @@ pub enum SlaveError {
     StationAddressChangeWhileRunning,
     #[error("server is already running")] AlreadyRunning,
     #[error("server is not running")] NotRunning,
+    #[error("事件回放要求服务器正在运行")]
+    PointEventServerNotRunning,
+    #[error("事件回放文件没有事件")]
+    PointEventScheduleEmpty,
+    #[error("事件回放不支持类型 {0:?}")]
+    PointEventUnsupportedType(AsduTypeId),
+    #[error("事件回放目标不存在: IOA={ioa} {asdu_type:?}")]
+    PointEventTargetNotFound { ioa: u32, asdu_type: AsduTypeId },
+    #[error("点位已有周期变位任务: IOA={ioa} {asdu_type:?}")]
+    PointEventMutationConflict { ioa: u32, asdu_type: AsduTypeId },
+    #[error("CA={0} 已有事件回放任务")]
+    PointEventScheduleAlreadyRunning(u16),
+    #[error("至少需要一个已完成 STARTDT 的主站连接")]
+    PointEventNoActiveClient,
+    #[error("事件回放运行期间不能修改目标点: IOA={ioa} {asdu_type:?}")]
+    PointEventTargetReserved { ioa: u32, asdu_type: AsduTypeId },
     #[error("bind error: {0}")] BindError(String),
     /// 结构化 bind 失败:app 层据此给出可操作的本地化指引
     /// (端口被占 / 系统保留段 / 权限或安全软件拦截)。
@@ -4377,6 +4962,160 @@ mod tests {
 
         server.connections.write().await.remove(&peer_addr);
         assert_eq!(server.client_connection_count().await, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn point_event_schedule_sends_duplicate_ioa_in_one_frame() {
+        let mut server = SlaveServer::new(SlaveTransportConfig::default());
+        server.state = ServerState::Running;
+        let mut station = Station::new(1, "events");
+        station
+            .add_point(InformationObjectDef {
+                ioa: 100,
+                asdu_type: AsduTypeId::MSpTb1,
+                category: DataCategory::SinglePoint,
+                name: String::new(),
+                comment: String::new(),
+                mapping: None,
+                command_qualifier: None,
+                select_before_operate: None,
+            })
+            .unwrap();
+        server.add_station(station).await.unwrap();
+        let queue = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let peer_addr: SocketAddr = "127.0.0.1:31002".parse().unwrap();
+        server.connections.write().await.insert(peer_addr, ConnectionWrite {
+            simulation_tx: tokio::sync::mpsc::channel(simulation_pacing::QUEUE_CAPACITY).0,
+            queue: Arc::clone(&queue),
+            seq: Arc::new(tokio::sync::Mutex::new(SeqState::default())),
+            started: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            last_sent: HashMap::new(),
+            log_collector: None,
+            reader_handle: None,
+        });
+        let events = vec![
+            ScheduledPointEvent {
+                time_ms: 100,
+                ioa: 100,
+                asdu_type: AsduTypeId::MSpTb1,
+                value: DataPointValue::SinglePoint { value: false },
+            },
+            ScheduledPointEvent {
+                time_ms: 100,
+                ioa: 100,
+                asdu_type: AsduTypeId::MSpTb1,
+                value: DataPointValue::SinglePoint { value: true },
+            },
+        ];
+
+        server.start_point_event_schedule(1, events).await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(queue.lock().await.is_empty(), "event must not run before 100 ms");
+        tokio::time::advance(std::time::Duration::from_millis(100)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            if !queue.lock().await.is_empty() {
+                break;
+            }
+        }
+
+        let bytes = queue.lock().await.clone();
+        assert_eq!(bytes[6], AsduTypeId::MSpTb1 as u8);
+        assert_eq!(bytes[7], 2);
+        assert_eq!(&bytes[12..15], &[100, 0, 0]);
+        assert_eq!(bytes[15] & 1, 0);
+        assert_eq!(&bytes[23..26], &[100, 0, 0]);
+        assert_eq!(bytes[26] & 1, 1);
+        assert!(matches!(
+            server
+                .stations
+                .read()
+                .await
+                .get(&1)
+                .unwrap()
+                .data_points
+                .get(100, AsduTypeId::MSpTb1)
+                .unwrap()
+                .value,
+            DataPointValue::SinglePoint { value: true }
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn point_event_schedule_reserves_target_and_stops_after_disconnect() {
+        let mut server = SlaveServer::new(SlaveTransportConfig::default());
+        server.state = ServerState::Running;
+        let mut station = Station::new(1, "events");
+        station
+            .add_point(InformationObjectDef {
+                ioa: 10,
+                asdu_type: AsduTypeId::MSpNa1,
+                category: DataCategory::SinglePoint,
+                name: String::new(),
+                comment: String::new(),
+                mapping: None,
+                command_qualifier: None,
+                select_before_operate: None,
+            })
+            .unwrap();
+        server.add_station(station).await.unwrap();
+        let peer_addr: SocketAddr = "127.0.0.1:31003".parse().unwrap();
+        server.connections.write().await.insert(peer_addr, ConnectionWrite {
+            simulation_tx: tokio::sync::mpsc::channel(simulation_pacing::QUEUE_CAPACITY).0,
+            queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            seq: Arc::new(tokio::sync::Mutex::new(SeqState::default())),
+            started: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            last_sent: HashMap::new(),
+            log_collector: None,
+            reader_handle: None,
+        });
+        server
+            .start_point_event_schedule(
+                1,
+                vec![ScheduledPointEvent {
+                    time_ms: 1_000,
+                    ioa: 10,
+                    asdu_type: AsduTypeId::MSpNa1,
+                    value: DataPointValue::SinglePoint { value: true },
+                }],
+            )
+            .await
+            .unwrap();
+
+        let error = server
+            .start_point_mutation(
+                1,
+                10,
+                AsduTypeId::MSpNa1,
+                100,
+                MutationParams::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SlaveError::PointEventTargetReserved { .. }));
+
+        server.connections.write().await.remove(&peer_addr);
+        tokio::time::advance(std::time::Duration::from_millis(50)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            if server.point_event_schedule_handles.lock().await.is_empty() {
+                break;
+            }
+        }
+        assert!(server.point_event_schedule_handles.lock().await.is_empty());
+        assert!(matches!(
+            server
+                .stations
+                .read()
+                .await
+                .get(&1)
+                .unwrap()
+                .data_points
+                .get(10, AsduTypeId::MSpNa1)
+                .unwrap()
+                .value,
+            DataPointValue::SinglePoint { value: false }
+        ));
     }
 
     #[tokio::test]
@@ -5145,6 +5884,58 @@ mod tests {
         assert_eq!(frame[6], 1);
         assert_eq!(frame[7], 0x85);
         assert_eq!(&frame[12..15], &[100, 0, 0]);
+    }
+
+    #[test]
+    fn encode_points_discrete_keeps_duplicate_ioa_values_and_timestamp() {
+        let timestamp = chrono::Utc::now();
+        let mut first = DataPoint::new(100, AsduTypeId::MSpTb1);
+        first.value = DataPointValue::SinglePoint { value: false };
+        first.timestamp = Some(timestamp);
+        let mut second = first.clone();
+        second.value = DataPointValue::SinglePoint { value: true };
+        let mut seq = SeqState::default();
+
+        let frames = encode_points_discrete(
+            &[first, second],
+            3,
+            &1u16.to_le_bytes(),
+            &mut seq,
+        );
+
+        assert_eq!(frames.len(), 1);
+        let frame = &frames[0];
+        assert_eq!(frame[6], AsduTypeId::MSpTb1 as u8);
+        assert_eq!(frame[7], 2, "VSQ.SQ=0 with two information objects");
+        assert_eq!(&frame[12..15], &[100, 0, 0]);
+        assert_eq!(frame[15] & 1, 0);
+        assert_eq!(&frame[23..26], &[100, 0, 0]);
+        assert_eq!(frame[26] & 1, 1);
+        assert_eq!(&frame[16..23], &frame[27..34]);
+    }
+
+    #[test]
+    fn encode_points_discrete_splits_at_apdu_limit() {
+        let points: Vec<DataPoint> = (0..130)
+            .map(|ioa| {
+                let mut point = DataPoint::new(ioa, AsduTypeId::MSpNa1);
+                point.value = DataPointValue::SinglePoint { value: ioa % 2 == 0 };
+                point
+            })
+            .collect();
+        let mut seq = SeqState::default();
+
+        let frames = encode_points_discrete(
+            &points,
+            3,
+            &1u16.to_le_bytes(),
+            &mut seq,
+        );
+
+        assert_eq!(frames.iter().map(|frame| frame[7] as usize).sum::<usize>(), 130);
+        assert!(frames.len() >= 3);
+        assert!(frames.iter().all(|frame| frame[1] <= 253));
+        assert!(frames.iter().all(|frame| frame[7] & 0x80 == 0));
     }
 
     #[test]

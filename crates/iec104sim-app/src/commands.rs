@@ -876,6 +876,18 @@ pub(crate) async fn update_data_point_definition_impl(
     } else {
         Vec::new()
     };
+    if key_changed {
+        srv.server
+            .ensure_point_event_targets_editable(
+                request.common_address,
+                &[
+                    (request.ioa, asdu_type),
+                    (target_ioa, target_asdu_type),
+                ],
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     srv.server
         .transact_station_point_mutations(
             request.common_address,
@@ -1104,6 +1116,10 @@ pub async fn remove_data_point(
         preserve_from: None,
     }];
     srv.server
+        .ensure_point_event_targets_editable(common_address, &[(ioa, asdu)])
+        .await
+        .map_err(|error| error.to_string())?;
+    srv.server
         .transact_station_point_mutations(
             common_address,
             StationMutationBatchMode::Merge,
@@ -1200,6 +1216,16 @@ pub(crate) async fn batch_migrate_data_point_types_impl(
             },
         )
         .collect();
+    let mut reserved_targets = sources.clone();
+    reserved_targets.extend(
+        migrations
+            .iter()
+            .map(|&(_, _, target_ioa, target_type)| (target_ioa, target_type)),
+    );
+    srv.server
+        .ensure_point_event_targets_editable(request.common_address, &reserved_targets)
+        .await
+        .map_err(|error| error.to_string())?;
     srv.server
         .transact_station_point_mutations(
             request.common_address,
@@ -1289,6 +1315,10 @@ pub async fn batch_remove_data_points(
             preserve_from: None,
         })
         .collect();
+    srv.server
+        .ensure_point_event_targets_editable(common_address, &targets)
+        .await
+        .map_err(|error| error.to_string())?;
     let removed = srv.server
         .transact_station_point_mutations(
             common_address,

@@ -13,6 +13,7 @@ import ToolbarMenu from './ToolbarMenu.vue'
 import { useServerActions } from '../composables/toolbar/useServerActions'
 import { useConfigActions } from '../composables/toolbar/useConfigActions'
 import { usePointCsvActions } from '../composables/toolbar/usePointCsvActions'
+import { usePointEventActions } from '../composables/toolbar/usePointEventActions'
 
 const { t } = useI18n()
 const selectedServerId = inject<Ref<string | null>>('selectedServerId')!
@@ -37,6 +38,7 @@ const context = { busy, t, selectedServerId, selectedServerState, selectedCA,
 const { bulkAction, completed, total, changeServer, changeAllServers, addStation } = useServerActions(context)
 const { loading: configLoading, openConfig, saveConfig } = useConfigActions(context)
 const { showImportMode, chooseMode, importCsv, exportCsv } = usePointCsvActions(context)
+const { importEventJson, saveEventExample } = usePointEventActions(context)
 const openMenu = ref<string | null>(null)
 const toggleMenu = (id: string) => { openMenu.value = openMenu.value === id ? null : id }
 const closeMenu = () => { openMenu.value = null }
@@ -86,6 +88,9 @@ const secondaryMenus = computed(() => [
       title: selectedServerState.value === 'Stopped' ? t('toolbar.importCsv') : t('toolbar.csvImportStoppedOnly'), action: importCsv },
     { id: 'export-point-csv', label: t('toolbar.exportCsv'), disabled: !selectedServerId.value || selectedCA.value === null, action: () => exportCsv() },
     { id: 'download-point-csv-template', label: t('toolbar.downloadCsvTemplate'), disabled: !selectedServerId.value || selectedCA.value === null, action: () => exportCsv(true) },
+    { id: 'import-point-event-json', label: t('toolbar.importEventJson'), disabled: !selectedServerId.value || selectedCA.value === null || selectedServerState.value !== 'Running',
+      title: selectedServerState.value === 'Running' ? t('toolbar.importEventJson') : t('toolbar.eventJsonRunningOnly'), action: importEventJson },
+    { id: 'download-point-event-example', label: t('toolbar.downloadEventJsonExample'), disabled: !selectedServerId.value || selectedCA.value === null, action: saveEventExample },
   ] },
   { id: 'settings', label: t('toolbar.menuSettings'), items: [
     { id: 'server-settings', label: t('serverSettings.title'), disabled: !selectedServerId.value, action: openServerSettings },
