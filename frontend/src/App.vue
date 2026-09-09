@@ -247,7 +247,7 @@ function onRuntimeParamsSaved() {
 }
 provide('openRuntimeParamsDrawer', openRuntimeParamsDrawer)
 
-function resetWorkspaceView() {
+function clearWorkspaceSelection() {
   selectedServerId.value = null
   selectedServerState.value = 'Stopped'
   selectedCA.value = null
@@ -256,14 +256,17 @@ function resetWorkspaceView() {
   selectedPoints.value = []
   categoryCounts.value = new Map()
 
-  // These editors are bound to a server from the replaced workspace.
+  // Close editors whose server may have been removed or replaced.
   runtimeParamsModalVisible.value = false
   runtimeParamsModalServerId.value = null
   runtimeParamsModalLabel.value = ''
   runtimeParamsDrawerVisible.value = false
   serverSettingsVisible.value = false
   serverSettingsId.value = null
+}
 
+function resetWorkspaceView() {
+  clearWorkspaceSelection()
   workspaceEpoch.value++
 }
 provide('resetWorkspaceView', resetWorkspaceView)
@@ -286,6 +289,7 @@ provide('resetWorkspaceView', resetWorkspaceView)
       <ConnectionTree
         :key="workspaceEpoch"
         @server-select="handleServerSelect"
+        @selection-cleared="clearWorkspaceSelection"
         @station-select="handleStationSelect"
         @category-select="handleCategorySelect"
         @edit-runtime-params="openRuntimeParamsModal"

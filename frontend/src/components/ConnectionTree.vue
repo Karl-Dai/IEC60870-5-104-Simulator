@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, inject, watch, onMounted, onBeforeUnmount, type Ref } from 'vue'
+import { computed, ref, inject, watch, onMounted, onBeforeUnmount, type Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert, showConfirm as ShowConfirm, showPrompt as ShowPrompt } from '@shared/composables/useDialog'
@@ -72,6 +72,7 @@ const emit = defineEmits<{
   (e: 'category-select', serverId: string, ca: number, category: string, state: string, stationName: string): void
   (e: 'edit-runtime-params', serverId: string, label: string): void
   (e: 'edit-server', serverId: string): void
+  (e: 'selection-cleared'): void
 }>()
 
 const treeRefreshKey = inject<Ref<number>>('treeRefreshKey')!
@@ -81,9 +82,96 @@ const selectedCA = inject<Ref<number | null>>('selectedCA')!
 const selectedCategory = inject<Ref<string | null>>('selectedCategory')!
 
 const treeData = ref<TreeServer[]>([])
+const batchMode = ref(false)
+const batchBusy = ref(false)
+const batchDeleting = ref(false)
+const batchProgress = ref({ completed: 0, total: 0 })
+const checkedKeys = ref(new Set<string>())
+const serverKey = (id: string) => JSON.stringify([id])
+const stationKey = (id: string, ca: number) => JSON.stringify([id, ca])
+const batchTargets = computed(() => treeData.value.flatMap(ts => {
+  const id = ts.server.id
+  const label = `${ts.server.bind_address}:${ts.server.port}`
+  if (checkedKeys.value.has(serverKey(id))) return [{ key: serverKey(id), id, ca: null as number | null, label }]
+  return ts.stations.filter(st => checkedKeys.value.has(stationKey(id, st.station.common_address)))
+    .map(st => ({ key: stationKey(id, st.station.common_address), id, ca: st.station.common_address as number | null,
+      label: `${label} / ${stationLabel(st.station)}` }))
+}))
+const allServersChecked = computed(() => treeData.value.length > 0 && treeData.value.every(ts => checkedKeys.value.has(serverKey(ts.server.id))))
+const someTargetsChecked = computed(() => batchTargets.value.length > 0 && !allServersChecked.value)
+function toggleChecked(key: string) {
+  if (batchBusy.value) return
+  const next = new Set(checkedKeys.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  checkedKeys.value = next
+}
+function toggleAllServers() {
+  if (batchBusy.value) return
+  checkedKeys.value = allServersChecked.value ? new Set() : new Set(treeData.value.map(ts => serverKey(ts.server.id)))
+}
+function exitBatchMode() {
+  if (batchBusy.value) return
+  batchMode.value = false
+  checkedKeys.value = new Set()
+}
+async function deleteBatch() {
+  if (batchBusy.value || batchTargets.value.length === 0) return
+  const targets = batchTargets.value.map(target => ({ ...target }))
+  batchBusy.value = true
+  closeContextMenu()
+  try {
+    const servers = targets.filter(target => target.ca === null).length
+    const stations = targets.length - servers
+    const message = t('tree.confirmBatchDelete', { servers, stations }) + '\n\n' + targets.map(target => target.label).join('\n')
+    if (!(await showConfirm(message)) || runtimeRefreshStopped) return
+    batchDeleting.value = true
+    batchProgress.value = { completed: 0, total: targets.length }
+    const failures: string[] = []
+    let deleted = 0
+    for (const target of targets) {
+      // Loading another workspace unmounts this tree. Never continue deleting
+      // the old selection against the replacement workspace.
+      if (runtimeRefreshStopped) return
+      try {
+        if (target.ca === null) await invoke('delete_server', { id: target.id })
+        else await invoke('remove_station', { serverId: target.id, commonAddress: target.ca })
+        if (runtimeRefreshStopped) return
+        deleted++
+        checkedKeys.value.delete(target.key)
+        if (target.ca === null) {
+          for (const key of checkedKeys.value) {
+            if (JSON.parse(key)[0] === target.id) checkedKeys.value.delete(key)
+          }
+        }
+        if (selectedServerId.value === target.id && (target.ca === null || selectedCA.value === target.ca)) {
+          selectedServerId.value = null
+          selectedCA.value = null
+          selectedCategory.value = null
+          emit('selection-cleared')
+        }
+      } catch (error) {
+        failures.push(`${target.label}: ${String(error)}`)
+      } finally {
+        batchProgress.value.completed++
+      }
+    }
+    if (runtimeRefreshStopped) return
+    await loadTree()
+    if (runtimeRefreshStopped) return
+    batchDeleting.value = false
+    await showAlert(t('tree.batchDeleteResult', { deleted, failed: failures.length }) + (failures.length ? '\n\n' + failures.join('\n') : ''))
+    if (!failures.length) { batchMode.value = false; checkedKeys.value.clear() }
+  } finally {
+    batchDeleting.value = false
+    batchBusy.value = false
+  }
+}
+
 const connectionsVisible = ref(false)
 const connectionsServerId = ref('')
 const connectionsServerLabel = ref('')
+const contextMenuElement = ref<HTMLElement | null>(null)
 const contextMenu = ref({
   show: false,
   x: 0,
@@ -95,7 +183,9 @@ const contextMenu = ref({
   serverState: '',
 })
 
+let loadGeneration = 0
 async function loadTree() {
+  const generation = ++loadGeneration
   try {
     const servers = await invoke<ServerInfo[]>('list_servers')
     const newTree: TreeServer[] = []
@@ -113,6 +203,7 @@ async function loadTree() {
         })),
       })
     }
+    if (generation !== loadGeneration || runtimeRefreshStopped) return
     treeData.value = newTree
   } catch (e) {
     console.error('Failed to load tree:', e)
@@ -154,10 +245,22 @@ onMounted(() => {
   runtimeRefreshStopped = false
   void loadTree()
   scheduleRuntimeRefresh()
+  // Capture outside interactions before tree nodes or other controls stop propagation.
+  document.addEventListener('pointerdown', dismissContextMenuOutside, true)
+  document.addEventListener('click', dismissContextMenuOutside, true)
+  document.addEventListener('scroll', dismissContextMenuOutside, true)
+  document.addEventListener('keydown', dismissContextMenuOnEscape, true)
+  window.addEventListener('blur', closeContextMenu)
 })
 onBeforeUnmount(() => {
   runtimeRefreshStopped = true
+  loadGeneration++
   if (runtimeRefreshTimer !== undefined) window.clearTimeout(runtimeRefreshTimer)
+  document.removeEventListener('pointerdown', dismissContextMenuOutside, true)
+  document.removeEventListener('click', dismissContextMenuOutside, true)
+  document.removeEventListener('scroll', dismissContextMenuOutside, true)
+  document.removeEventListener('keydown', dismissContextMenuOnEscape, true)
+  window.removeEventListener('blur', closeContextMenu)
 })
 
 function toggleServer(ts: TreeServer) {
@@ -169,10 +272,15 @@ function toggleStation(tst: TreeStation) {
 }
 
 function selectServer(ts: TreeServer) {
+  if (batchMode.value) { toggleChecked(serverKey(ts.server.id)); return }
   emit('server-select', ts.server.id, ts.server.state)
 }
 
 function selectStation(ts: TreeServer, tst: TreeStation) {
+  if (batchMode.value) {
+    if (!checkedKeys.value.has(serverKey(ts.server.id))) toggleChecked(stationKey(ts.server.id, tst.station.common_address))
+    return
+  }
   emit('station-select', ts.server.id, tst.station.common_address, ts.server.state, tst.station.name)
 }
 
@@ -181,6 +289,7 @@ function selectCategory(ts: TreeServer, tst: TreeStation, category: string) {
 }
 
 function showContextMenuForServer(e: MouseEvent, ts: TreeServer) {
+  if (batchMode.value) return
   e.preventDefault()
   contextMenu.value = {
     show: true,
@@ -195,6 +304,7 @@ function showContextMenuForServer(e: MouseEvent, ts: TreeServer) {
 }
 
 function showContextMenuForStation(e: MouseEvent, ts: TreeServer, tst: TreeStation) {
+  if (batchMode.value) return
   e.preventDefault()
   contextMenu.value = {
     show: true,
@@ -210,6 +320,15 @@ function showContextMenuForStation(e: MouseEvent, ts: TreeServer, tst: TreeStati
 
 function closeContextMenu() {
   contextMenu.value.show = false
+}
+
+function dismissContextMenuOutside(event: Event) {
+  if (!contextMenu.value.show || contextMenuElement.value?.contains(event.target as Node)) return
+  closeContextMenu()
+}
+
+function dismissContextMenuOnEscape(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeContextMenu()
 }
 
 function clientCount(server: ServerInfo) {
@@ -388,8 +507,18 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
 </script>
 
 <template>
-  <div class="connection-tree" @click="closeContextMenu">
-    <div class="tree-header">{{ t('tree.title') }}</div>
+  <div class="connection-tree">
+    <div class="tree-controls">
+      <div class="tree-header">
+        <span>{{ t('tree.title') }}</span>
+        <button v-if="!batchMode && treeData.length" type="button" @click="batchMode = true; closeContextMenu()">{{ t('tree.batchDelete') }}</button>
+        <button v-if="batchMode" type="button" :disabled="batchBusy" @click="exitBatchMode">{{ t('tree.batchCancel') }}</button>
+      </div>
+      <div v-if="batchMode" class="batch-actions">
+        <label><input type="checkbox" :checked="allServersChecked" :indeterminate="someTargetsChecked" :disabled="batchBusy" @change="toggleAllServers" />{{ t('tree.selectAllServers') }}</label>
+        <button type="button" class="batch-delete" :aria-busy="batchDeleting" :disabled="batchBusy || !batchTargets.length" @click="deleteBatch">{{ batchDeleting ? t('tree.batchDeleting', batchProgress) : t('tree.deleteSelected', { n: batchTargets.length }) }}</button>
+      </div>
+    </div>
     <EmptyState
       v-if="treeData.length === 0"
       compact
@@ -411,8 +540,9 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
         @contextmenu.prevent="showContextMenuForServer($event, ts)"
       >
         <span class="node-arrow" @click.stop="toggleServer(ts)">{{ ts.expanded ? '\u25BC' : '\u25B6' }}</span>
+        <input v-if="batchMode" type="checkbox" :aria-label="`${ts.server.bind_address}:${ts.server.port}`" :checked="checkedKeys.has(serverKey(ts.server.id))" :disabled="batchBusy" @click.stop @change="toggleChecked(serverKey(ts.server.id))" />
         <span :class="['node-status', ts.server.state === 'Running' ? 'running' : 'stopped']"></span>
-        <span class="node-label">{{ ts.server.bind_address }}:{{ ts.server.port }}</span>
+        <span class="node-label" :title="`${ts.server.bind_address}:${ts.server.port}`">{{ ts.server.bind_address }}:{{ ts.server.port }}</span>
         <span v-if="ts.server.use_tls" class="tls-badge">TLS</span>
         <button
           type="button"
@@ -437,12 +567,13 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
             @contextmenu.prevent="showContextMenuForStation($event, ts, tst)"
           >
             <span class="node-arrow" @click.stop="toggleStation(tst)">{{ tst.expanded ? '\u25BC' : '\u25B6' }}</span>
-            <span class="node-label">{{ stationLabel(tst.station) }}</span>
+            <input v-if="batchMode" type="checkbox" :aria-label="stationLabel(tst.station)" :checked="checkedKeys.has(serverKey(ts.server.id)) || checkedKeys.has(stationKey(ts.server.id, tst.station.common_address))" :disabled="batchBusy || checkedKeys.has(serverKey(ts.server.id))" @click.stop @change="toggleChecked(stationKey(ts.server.id, tst.station.common_address))" />
+            <span class="node-label" :title="stationLabel(tst.station)">{{ stationLabel(tst.station) }}</span>
             <span class="node-badge">{{ tst.station.point_count }}</span>
           </div>
 
           <!-- Category Nodes -->
-          <template v-if="tst.expanded">
+          <template v-if="tst.expanded && !batchMode">
             <div
               v-for="cat in CATEGORIES"
               :key="cat"
@@ -463,6 +594,7 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
     <!-- Context Menu -->
     <div
       v-if="contextMenu.show"
+      ref="contextMenuElement"
       class="context-menu"
       :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
       @click.stop
@@ -510,13 +642,37 @@ function isCategorySelected(ts: TreeServer, tst: TreeStation, category: string):
   position: relative;
 }
 
+.tree-controls { position: sticky; top: 0; z-index: 1; background: var(--c-mantle); }
+
 .tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 8px 12px;
   font-size: 11px;
   text-transform: uppercase;
   color: var(--c-overlay0);
   letter-spacing: 0.5px;
 }
+
+.batch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 12px 8px; }
+.batch-actions label { display: flex; align-items: center; gap: 4px; }
+.tree-header button, .batch-actions button {
+  font-size: 12px;
+  padding: 4px 8px;
+  min-height: 28px;
+  border: 1px solid var(--c-surface2);
+  border-radius: 4px;
+  background: var(--c-surface0);
+  color: var(--c-text);
+  cursor: pointer;
+}
+.tree-header button:hover:not(:disabled), .batch-actions button:hover:not(:disabled) { background: var(--c-surface1); }
+.tree-header button:disabled, .batch-actions button:disabled { opacity: 0.45; cursor: default; }
+.tree-header button:focus-visible, .batch-actions button:focus-visible, input[type="checkbox"]:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.batch-actions .batch-delete { color: var(--c-red); }
+input[type="checkbox"] { accent-color: var(--c-blue); flex-shrink: 0; }
 
 .tree-node {
   display: flex;

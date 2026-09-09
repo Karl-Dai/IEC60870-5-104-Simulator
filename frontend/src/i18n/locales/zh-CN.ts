@@ -159,6 +159,13 @@ export type DictShape = {
     connTooltip: string
     confirmDeleteServer: string
     confirmDeleteRunningServer: string
+    batchDelete: string
+    batchCancel: string
+    selectAllServers: string
+    deleteSelected: string
+    batchDeleting: string
+    confirmBatchDelete: string
+    batchDeleteResult: string
     confirmDeleteStation: string
   }
   runtimeParams: {
@@ -802,6 +809,13 @@ const dict: DictShape = {
     connTooltip: '已连接 {n} 个主站',
     confirmDeleteServer: '确定删除服务器 {server}？未保存的点表数据将丢失（可先「保存配置」）。',
     confirmDeleteRunningServer: '服务器 {server} 正在运行！删除会先停止监听并断开全部客户端，未保存的点表数据将丢失（可先「保存配置」）。确定删除？',
+    batchDelete: '批量删除',
+    batchCancel: '取消',
+    selectAllServers: '全选服务器',
+    deleteSelected: '删除所选 ({n})',
+    batchDeleting: '正在删除 ({completed}/{total})',
+    confirmBatchDelete: '确定删除 {servers} 个服务器及其全部子站、另选的 {stations} 个子站？运行中的服务器会停止，所含数据点将被删除。请先保存需要保留的配置。',
+    batchDeleteResult: '已删除 {deleted} 项，失败 {failed} 项。',
     confirmDeleteStation: '确定删除站 CA={ca} 及其全部数据点？',
   },
   runtimeParams: {

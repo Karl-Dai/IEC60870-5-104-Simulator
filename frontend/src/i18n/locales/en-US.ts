@@ -161,6 +161,13 @@ const dict: DictShape = {
     connTooltip: '{n} Master connection(s)',
     confirmDeleteServer: 'Delete server {server}? Unsaved point data will be lost (use "Save Config" first if needed).',
     confirmDeleteRunningServer: 'Server {server} is RUNNING! Deleting will stop the listener and disconnect all clients; unsaved point data will be lost (use "Save Config" first if needed). Delete anyway?',
+    batchDelete: 'Bulk delete',
+    batchCancel: 'Cancel',
+    selectAllServers: 'All servers',
+    deleteSelected: 'Delete selected ({n})',
+    batchDeleting: 'Deleting ({completed}/{total})',
+    confirmBatchDelete: 'Delete {servers} servers with all their stations and {stations} separately selected stations? Running servers will stop and their data points will be deleted. Save any configuration you want to keep first.',
+    batchDeleteResult: 'Deleted {deleted} items; {failed} failed.',
     confirmDeleteStation: 'Delete station CA={ca} and all of its data points?',
   },
   runtimeParams: {
