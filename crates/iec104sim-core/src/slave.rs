@@ -1367,6 +1367,18 @@ pub struct ScheduledPointEvent {
     pub value: DataPointValue,
 }
 
+/// 启动时解析过目标的事件。`wire_type` 是文件声明、编码上送使用的类型;
+/// `target_type` 是实际写入点位的类型(精确命中,或退化为同 IOA 下同类别
+/// 的已有点位类型)。
+#[derive(Debug, Clone)]
+struct ResolvedPointEvent {
+    time_ms: u64,
+    ioa: u32,
+    wire_type: AsduTypeId,
+    target_type: AsduTypeId,
+    value: DataPointValue,
+}
+
 struct PointEventScheduleTask {
     id: String,
     targets: HashSet<(u32, AsduTypeId)>,
@@ -1929,11 +1941,14 @@ impl SlaveServer {
 
     /// Validate the runtime conditions shared by schedule inspection and
     /// schedule start. File parsing and value-range checks stay in the app.
+    ///
+    /// 返回每个事件解析到的实际点位类型:声明类型精确存在时就是声明类型,
+    /// 否则退化为同 IOA 下同类别(优先 NA 变体)的已有点位类型。
     pub async fn validate_point_event_schedule(
         &self,
         common_address: u16,
         events: &[ScheduledPointEvent],
-    ) -> Result<(), SlaveError> {
+    ) -> Result<Vec<AsduTypeId>, SlaveError> {
         if self.state != ServerState::Running {
             return Err(SlaveError::PointEventServerNotRunning);
         }
@@ -1945,27 +1960,38 @@ impl SlaveServer {
         let station = stations
             .get(&common_address)
             .ok_or(SlaveError::StationNotFound(common_address))?;
+        let mut resolved_types = Vec::with_capacity(events.len());
         for event in events {
             if event.asdu_type.is_control()
                 || event.asdu_type.category() == DataCategory::System
             {
                 return Err(SlaveError::PointEventUnsupportedType(event.asdu_type));
             }
-            if !station.data_points.contains(event.ioa, event.asdu_type) {
-                return Err(SlaveError::PointEventTargetNotFound {
-                    ioa: event.ioa,
-                    asdu_type: event.asdu_type,
-                });
+            // 类型不必精确存在,能退化到该 IOA 下同类别(优先 NA 变体)的
+            // 已有点位即可;解析失败才视为目标不存在。
+            match station
+                .data_points
+                .resolve_type(event.ioa, event.asdu_type)
+            {
+                Some(target_type) => resolved_types.push(target_type),
+                None => {
+                    return Err(SlaveError::PointEventTargetNotFound {
+                        ioa: event.ioa,
+                        asdu_type: event.asdu_type,
+                    });
+                }
             }
         }
 
         let mutations = self.point_mutation_handles.lock().await;
-        if let Some(event) = events.iter().find(|event| {
-            mutations.contains_key(&(common_address, event.ioa, event.asdu_type))
-        }) {
+        if let Some((event, target_type)) = events.iter().zip(&resolved_types).find(
+            |(event, target_type)| {
+                mutations.contains_key(&(common_address, event.ioa, **target_type))
+            },
+        ) {
             return Err(SlaveError::PointEventMutationConflict {
                 ioa: event.ioa,
-                asdu_type: event.asdu_type,
+                asdu_type: *target_type,
             });
         }
         let schedules = self.point_event_schedule_handles.lock().await;
@@ -1979,28 +2005,46 @@ impl SlaveServer {
         if self.active_client_connection_count().await == 0 {
             return Err(SlaveError::PointEventNoActiveClient);
         }
-        Ok(())
+        Ok(resolved_types)
     }
 
     /// Start one imported event schedule for a station. The returned ID is
     /// written to communication logs and can correlate start/end entries.
+    /// 同时返回解析后的目标点位数(多个声明类型可能退化到同一实际点位)。
     pub async fn start_point_event_schedule(
         &self,
         common_address: u16,
         mut events: Vec<ScheduledPointEvent>,
-    ) -> Result<String, SlaveError> {
+    ) -> Result<(String, usize), SlaveError> {
         events.sort_by_key(|event| event.time_ms);
-        self.validate_point_event_schedule(common_address, &events).await?;
+        let resolved_types = self
+            .validate_point_event_schedule(common_address, &events)
+            .await?;
+
+        // 声明类型用于编码发送(wire_type);校验返回的解析类型用于定位实际
+        // 点位(target_type):声明类型不必精确存在,可退化到同 IOA 下同类别
+        // (优先 NA 变体)的点位。
+        let events: Vec<ResolvedPointEvent> = events
+            .into_iter()
+            .zip(resolved_types)
+            .map(|(event, target_type)| ResolvedPointEvent {
+                time_ms: event.time_ms,
+                ioa: event.ioa,
+                wire_type: event.asdu_type,
+                target_type,
+                value: event.value,
+            })
+            .collect();
 
         // Repeat conflict checks while holding both registries. This closes the
         // gap between validation and task installation for competing starts.
         let mutations = self.point_mutation_handles.lock().await;
         if let Some(event) = events.iter().find(|event| {
-            mutations.contains_key(&(common_address, event.ioa, event.asdu_type))
+            mutations.contains_key(&(common_address, event.ioa, event.target_type))
         }) {
             return Err(SlaveError::PointEventMutationConflict {
                 ioa: event.ioa,
-                asdu_type: event.asdu_type,
+                asdu_type: event.target_type,
             });
         }
         let mut schedules = self.point_event_schedule_handles.lock().await;
@@ -2011,8 +2055,9 @@ impl SlaveServer {
         let id = uuid::Uuid::new_v4().to_string();
         let targets: HashSet<(u32, AsduTypeId)> = events
             .iter()
-            .map(|event| (event.ioa, event.asdu_type))
+            .map(|event| (event.ioa, event.target_type))
             .collect();
+        let target_count = targets.len();
         let event_count = events.len();
         let duration_ms = events.last().map(|event| event.time_ms).unwrap_or(0);
         let stations = Arc::clone(&self.stations);
@@ -2099,7 +2144,7 @@ impl SlaveServer {
             );
         }
         let _ = start_tx.send(());
-        Ok(id)
+        Ok((id, target_count))
     }
 
     /// Return whether a running schedule owns any listed point key.
@@ -4052,7 +4097,7 @@ async fn run_point_event_schedule(
     stations: &SharedStations,
     connections: &Arc<RwLock<SharedConnections>>,
     common_address: u16,
-    events: Vec<ScheduledPointEvent>,
+    events: Vec<ResolvedPointEvent>,
 ) -> PointEventRunResult {
     let started_at = tokio::time::Instant::now();
     let wall_clock_started_at = chrono::Utc::now();
@@ -4092,7 +4137,7 @@ async fn run_point_event_schedule(
             if events[start..end].iter().any(|event| {
                 !station
                     .data_points
-                    .contains(event.ioa, event.asdu_type)
+                    .contains(event.ioa, event.target_type)
             }) {
                 return PointEventRunResult {
                     events_executed,
@@ -4106,22 +4151,25 @@ async fn run_point_event_schedule(
                 let snapshot = {
                     let point = station
                         .data_points
-                        .get_mut(event.ioa, event.asdu_type)
+                        .get_mut(event.ioa, event.target_type)
                         .expect("point existence was checked above");
                     point.value = event.value.clone();
                     point.timestamp = Some(timestamp);
-                    point.clone()
+                    let mut snapshot = point.clone();
+                    // 上送报文用文件声明的类型,不是实际点位的类型。
+                    snapshot.asdu_type = event.wire_type;
+                    snapshot
                 };
                 station
                     .data_points
-                    .mark_changed(event.ioa, event.asdu_type);
+                    .mark_changed(event.ioa, event.target_type);
                 if let Some((_, points)) = groups
                     .iter_mut()
-                    .find(|(asdu_type, _)| *asdu_type == event.asdu_type)
+                    .find(|(asdu_type, _)| *asdu_type == event.wire_type)
                 {
                     points.push(snapshot);
                 } else {
-                    groups.push((event.asdu_type, vec![snapshot]));
+                    groups.push((event.wire_type, vec![snapshot]));
                 }
             }
             groups
@@ -4291,7 +4339,7 @@ pub enum SlaveError {
     PointEventScheduleEmpty,
     #[error("事件回放不支持类型 {0:?}")]
     PointEventUnsupportedType(AsduTypeId),
-    #[error("事件回放目标不存在: IOA={ioa} {asdu_type:?}")]
+    #[error("事件回放目标不存在: IOA={ioa} {asdu_type:?}（该 IOA 需存在同类型或同类别的点位）")]
     PointEventTargetNotFound { ioa: u32, asdu_type: AsduTypeId },
     #[error("点位已有周期变位任务: IOA={ioa} {asdu_type:?}")]
     PointEventMutationConflict { ioa: u32, asdu_type: AsduTypeId },
@@ -5115,6 +5163,137 @@ mod tests {
                 .unwrap()
                 .value,
             DataPointValue::SinglePoint { value: false }
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn point_event_schedule_degrades_type_but_sends_declared_type() {
+        let mut server = SlaveServer::new(SlaveTransportConfig::default());
+        server.state = ServerState::Running;
+        let mut station = Station::new(1, "events");
+        station
+            .add_point(InformationObjectDef {
+                ioa: 100,
+                asdu_type: AsduTypeId::MSpTb1,
+                category: DataCategory::SinglePoint,
+                name: String::new(),
+                comment: String::new(),
+                mapping: None,
+                command_qualifier: None,
+                select_before_operate: None,
+            })
+            .unwrap();
+        server.add_station(station).await.unwrap();
+        let queue = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let peer_addr: SocketAddr = "127.0.0.1:31004".parse().unwrap();
+        server.connections.write().await.insert(peer_addr, ConnectionWrite {
+            simulation_tx: tokio::sync::mpsc::channel(simulation_pacing::QUEUE_CAPACITY).0,
+            queue: Arc::clone(&queue),
+            seq: Arc::new(tokio::sync::Mutex::new(SeqState::default())),
+            started: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            last_sent: HashMap::new(),
+            log_collector: None,
+            reader_handle: None,
+        });
+
+        // 事件声明 M_SP_NA_1,点表同 IOA 只有 M_SP_TB_1:值退化写入实际点位,
+        // 但上送报文仍用文件声明的 M_SP_NA_1。
+        server
+            .start_point_event_schedule(
+                1,
+                vec![ScheduledPointEvent {
+                    time_ms: 100,
+                    ioa: 100,
+                    asdu_type: AsduTypeId::MSpNa1,
+                    value: DataPointValue::SinglePoint { value: true },
+                }],
+            )
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert!(queue.lock().await.is_empty(), "event must not run before 100 ms");
+        tokio::time::advance(std::time::Duration::from_millis(100)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            if !queue.lock().await.is_empty() {
+                break;
+            }
+        }
+
+        let bytes = queue.lock().await.clone();
+        assert!(!bytes.is_empty(), "event frame must be sent");
+        assert_eq!(bytes[6], AsduTypeId::MSpNa1 as u8, "wire type must be the declared type");
+        assert_eq!(bytes[7], 1);
+        assert_eq!(&bytes[12..15], &[100, 0, 0]);
+        assert_eq!(bytes[15] & 1, 1);
+        assert!(matches!(
+            server
+                .stations
+                .read()
+                .await
+                .get(&1)
+                .unwrap()
+                .data_points
+                .get(100, AsduTypeId::MSpTb1)
+                .unwrap()
+                .value,
+            DataPointValue::SinglePoint { value: true }
+        ));
+    }
+
+    #[tokio::test]
+    async fn point_event_schedule_rejects_unresolvable_targets() {
+        let mut server = SlaveServer::new(SlaveTransportConfig::default());
+        server.state = ServerState::Running;
+        let mut station = Station::new(1, "events");
+        station
+            .add_point(InformationObjectDef {
+                ioa: 100,
+                asdu_type: AsduTypeId::MMeNc1,
+                category: DataCategory::FloatMeasured,
+                name: String::new(),
+                comment: String::new(),
+                mapping: None,
+                command_qualifier: None,
+                select_before_operate: None,
+            })
+            .unwrap();
+        server.add_station(station).await.unwrap();
+
+        // IOA 不存在。
+        let missing_ioa = server
+            .validate_point_event_schedule(
+                1,
+                &[ScheduledPointEvent {
+                    time_ms: 0,
+                    ioa: 200,
+                    asdu_type: AsduTypeId::MSpNa1,
+                    value: DataPointValue::SinglePoint { value: true },
+                }],
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            missing_ioa,
+            SlaveError::PointEventTargetNotFound { ioa: 200, .. }
+        ));
+
+        // IOA 存在但只有浮点测量点,单点事件无同类别点位可退化。
+        let wrong_category = server
+            .validate_point_event_schedule(
+                1,
+                &[ScheduledPointEvent {
+                    time_ms: 0,
+                    ioa: 100,
+                    asdu_type: AsduTypeId::MSpNa1,
+                    value: DataPointValue::SinglePoint { value: true },
+                }],
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            wrong_category,
+            SlaveError::PointEventTargetNotFound { ioa: 100, .. }
         ));
     }
 

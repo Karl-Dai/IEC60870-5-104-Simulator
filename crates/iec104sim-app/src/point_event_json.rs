@@ -253,12 +253,20 @@ pub async fn inspect_point_event_schedule(
     let server = servers
         .get(&server_id)
         .ok_or_else(|| format!("server {server_id} not found"))?;
-    server
+    let resolved_types = server
         .server
         .validate_point_event_schedule(common_address, &events)
         .await
         .map_err(|error| error.to_string())?;
-    Ok(preview(&events))
+    let mut result = preview(&events);
+    // 点位数按解析后的实际目标统计:多个声明类型可能退化到同一个点位。
+    result.point_count = events
+        .iter()
+        .zip(&resolved_types)
+        .map(|(event, target_type)| (event.ioa, *target_type))
+        .collect::<HashSet<_>>()
+        .len();
+    Ok(result)
 }
 
 #[tauri::command]
@@ -274,7 +282,8 @@ pub async fn start_point_event_schedule(
     let server = servers
         .get(&server_id)
         .ok_or_else(|| format!("server {server_id} not found"))?;
-    let task_id = server
+    // point_count 用解析后的目标数,与 inspect 的预览口径一致。
+    let (task_id, point_count) = server
         .server
         .start_point_event_schedule(common_address, events)
         .await
@@ -282,7 +291,7 @@ pub async fn start_point_event_schedule(
     Ok(PointEventScheduleStarted {
         task_id,
         event_count: schedule_preview.event_count,
-        point_count: schedule_preview.point_count,
+        point_count,
         duration_ms: schedule_preview.duration_ms,
     })
 }

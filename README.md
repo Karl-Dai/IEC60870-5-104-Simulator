@@ -124,6 +124,8 @@ Choose **Import Event JSON** from the **Points** menu. The server must be runnin
 
 Use booleans or numbers for simple values. Step position uses `{"value":-1,"transient":false}`; integrated totals use `{"value":123,"carry":false,"sequence":0}`. Normalized measurements use the raw wire NVA integer range `-32768..32767`. Files are limited to 20 MiB, 100,000 events, and seven days. The whole file is validated before playback; any error rejects it without changing points. **Download Event JSON Example** generates an editable file from the selected station's existing points.
 
+The event `type` does not have to match the point table exactly: an event is accepted when the IOA holds a point of the same type or the same data category (single point, double point, measurement, etc.; the untimestamped variant is preferred within a category). The value is written to that existing point, while the frame sent to the master still carries the type declared in the file.
+
 ### 📡 Master — `IEC104Master`
 
 - **IEC 104 client** with TCP and TLS support
