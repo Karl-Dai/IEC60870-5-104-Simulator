@@ -217,7 +217,6 @@ async fn master_tls13_only_handshakes_with_tls13_server() {
     let certs = cert_gen::generate();
     let tmp = tempfile::tempdir().unwrap();
     let paths = cert_gen::write_to_dir(&certs, tmp.path());
-    let port = free_port();
     let server_pkcs12 = std::fs::read(&paths.server_pkcs12).unwrap();
     let identity =
         native_tls::Identity::from_pkcs12(&server_pkcs12, cert_gen::PKCS12_PASS).unwrap();
@@ -228,7 +227,9 @@ async fn master_tls13_only_handshakes_with_tls13_server() {
         .unwrap();
     let acceptor = Arc::new(acceptor);
 
-    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    // Keep the OS-assigned port reserved until the server thread takes ownership.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
     let acc_clone = acceptor.clone();
     let server_handle = std::thread::spawn(move || {
         if let Ok((stream, _)) = listener.accept() {
@@ -278,7 +279,6 @@ async fn master_tls12_only_fails_against_tls13_only_server() {
     let certs = cert_gen::generate();
     let tmp = tempfile::tempdir().unwrap();
     let paths = cert_gen::write_to_dir(&certs, tmp.path());
-    let port = free_port();
     let server_pkcs12 = std::fs::read(&paths.server_pkcs12).unwrap();
     let identity =
         native_tls::Identity::from_pkcs12(&server_pkcs12, cert_gen::PKCS12_PASS).unwrap();
@@ -289,7 +289,9 @@ async fn master_tls12_only_fails_against_tls13_only_server() {
         .unwrap();
     let acceptor = Arc::new(acceptor);
 
-    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    // Keep the OS-assigned port reserved until the server thread takes ownership.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
     let acc_clone = acceptor.clone();
     let server_handle = std::thread::spawn(move || {
         if let Ok((stream, _)) = listener.accept() {
