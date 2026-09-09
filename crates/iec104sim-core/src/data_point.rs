@@ -185,7 +185,12 @@ impl DataPointMap {
                 return Some(p);
             }
         }
-        self.points.values().find(|p| p.ioa == ioa && p.asdu_type.category() == category)
+        // 多个同类候选时取类型编号最小者,保证跨进程结果稳定(HashMap
+        // 遍历顺序随机,不能直接 values().find())。
+        self.points
+            .values()
+            .filter(|p| p.ioa == ioa && p.asdu_type.category() == category)
+            .min_by_key(|p| p.asdu_type as u8)
     }
 
     /// Find a point (mutable) at the given IOA whose category matches.
@@ -197,7 +202,11 @@ impl DataPointMap {
                 return self.points.get_mut(&(ioa, t));
             }
         }
-        self.points.values_mut().find(|p| p.ioa == ioa && p.asdu_type.category() == category)
+        // 同 get_by_category:候选多个时按类型编号最小者,保证结果稳定。
+        self.points
+            .values_mut()
+            .filter(|p| p.ioa == ioa && p.asdu_type.category() == category)
+            .min_by_key(|p| p.asdu_type as u8)
     }
 
     pub fn insert(&mut self, mut point: DataPoint) {
@@ -212,6 +221,16 @@ impl DataPointMap {
 
     pub fn contains(&self, ioa: u32, asdu_type: AsduTypeId) -> bool {
         self.points.contains_key(&(ioa, asdu_type))
+    }
+
+    /// 把 (ioa, asdu_type) 解析到实际点位类型：精确匹配优先,否则退化为
+    /// 同 IOA 下同类别(优先 NA 变体,见 `get_by_category`)的已有点位类型。
+    pub fn resolve_type(&self, ioa: u32, asdu_type: AsduTypeId) -> Option<AsduTypeId> {
+        if self.points.contains_key(&(ioa, asdu_type)) {
+            return Some(asdu_type);
+        }
+        self.get_by_category(ioa, asdu_type.category())
+            .map(|point| point.asdu_type)
     }
 
     pub fn len(&self) -> usize {
@@ -415,5 +434,42 @@ mod tests {
         assert_eq!(DataPointValue::DoublePoint { value: 1 }.display(), "OFF");
         assert_eq!(DataPointValue::DoublePoint { value: 2 }.display(), "ON");
         assert_eq!(DataPointValue::DoublePoint { value: 3 }.display(), "3");
+    }
+
+    #[test]
+    fn resolve_type_prefers_exact_then_na_variant() {
+        let mut map = DataPointMap::new();
+        map.insert(DataPoint::new(1, AsduTypeId::MSpTb1));
+
+        // 精确匹配直接返回声明类型。
+        assert_eq!(
+            map.resolve_type(1, AsduTypeId::MSpTb1),
+            Some(AsduTypeId::MSpTb1)
+        );
+        // 同类别退化:声明 NA、只有 TB 时落到 TB。
+        assert_eq!(
+            map.resolve_type(1, AsduTypeId::MSpNa1),
+            Some(AsduTypeId::MSpTb1)
+        );
+
+        // 同类别有多个点位时优先 NA 变体:声明 TA(不存在),命中 NA 而非 TD。
+        map.insert(DataPoint::new(2, AsduTypeId::MMeNa1));
+        map.insert(DataPoint::new(2, AsduTypeId::MMeTd1));
+        assert_eq!(
+            map.resolve_type(2, AsduTypeId::MMeTa1),
+            Some(AsduTypeId::MMeNa1)
+        );
+
+        // 无 NA 变体且候选多个时,按类型编号最小者,保证跨进程结果稳定。
+        map.insert(DataPoint::new(3, AsduTypeId::MSpTa1));
+        map.insert(DataPoint::new(3, AsduTypeId::MSpTb1));
+        assert_eq!(
+            map.resolve_type(3, AsduTypeId::MSpNa1),
+            Some(AsduTypeId::MSpTa1)
+        );
+
+        // IOA 不存在、或该 IOA 没有同类别点位时返回 None。
+        assert_eq!(map.resolve_type(99, AsduTypeId::MSpNa1), None);
+        assert_eq!(map.resolve_type(1, AsduTypeId::MMeNc1), None);
     }
 }
