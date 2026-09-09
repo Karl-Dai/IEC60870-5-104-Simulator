@@ -1,0 +1,72 @@
+/* Global base styles shared by both apps: reset, typography, theme-aware
+   scrollbars and selection, and the keyboard focus ring. Component-specific
+   layout (the .app-layout grid) stays in each App.vue. */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* Tells the browser which UI color scheme to use for native widgets
+   (form controls, scrollbars on some platforms) per active theme. */
+:root { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-inset);
+  color: var(--text-primary);
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Themed scrollbars across the app — overrides macOS "Always show" white tracks. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: var(--c-mantle);
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--c-surface0);
+  border-radius: 5px;
+  border: 2px solid var(--c-mantle);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--c-surface1);
+}
+*::-webkit-scrollbar-corner {
+  background: var(--c-mantle);
+}
+* {
+  scrollbar-color: var(--c-surface0) var(--c-mantle);
+  scrollbar-width: thin;
+}
+
+/* Keyboard focus ring — never hide it. Mouse focus stays clean via :focus-visible. */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+/* Respect users asking for reduced motion: no smooth-scroll or long animations. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

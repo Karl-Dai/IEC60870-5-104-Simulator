@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type { ReceivedDataPointInfo, ControlResult } from '../types'
 import { getControlConfig, asduHasTimestamp } from '../types'
 import QualityIndicator from '@shared/components/QualityIndicator.vue'
+import AppCheckbox from '@shared/components/ui/AppCheckbox.vue'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
 import { formatDataPointValue, normalizeDoublePointCode } from '@shared/utils/dataPointValue'
 import { formatAsduTypeWithId } from '@shared/utils/asduType'
@@ -250,10 +251,7 @@ watch(firstPoint, (p) => {
 
           <!-- Select/Execute mode -->
           <div class="toggle-row">
-            <label class="toggle-label">
-              <input type="checkbox" v-model="cmdSelect" class="toggle-checkbox" />
-              <span>{{ t('valuePanel.sboLabel') }}</span>
-            </label>
+            <AppCheckbox v-model="cmdSelect" :label="t('valuePanel.sboLabel')" />
             <span class="toggle-hint">{{ cmdSelect ? t('valuePanel.sboTwoStep') : t('valuePanel.sboDirect') }}</span>
           </div>
 
@@ -294,19 +292,19 @@ watch(firstPoint, (p) => {
   padding: 8px 12px;
   font-size: 11px;
   text-transform: uppercase;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   letter-spacing: 0.5px;
 }
 
 .detail-section {
-  border-bottom: 1px solid var(--c-surface0);
+  border-bottom: 1px solid var(--border-subtle);
   padding-bottom: 8px;
 }
 
 .section-title {
   padding: 6px 12px;
   font-size: 11px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.3px;
 }
@@ -322,12 +320,12 @@ watch(firstPoint, (p) => {
 }
 
 .detail-label {
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
 .detail-value {
-  color: var(--c-text);
+  color: var(--text-primary);
   font-size: 12px;
   text-align: right;
 }
@@ -336,17 +334,9 @@ watch(firstPoint, (p) => {
   font-family: var(--font-mono);
 }
 
-.text-green {
-  color: var(--c-green);
-}
-
-.text-red {
-  color: var(--c-red);
-}
-
 .detail-divider {
   height: 1px;
-  background: var(--c-surface0);
+  background: var(--border-subtle);
   margin: 6px 12px;
 }
 
@@ -375,17 +365,18 @@ watch(firstPoint, (p) => {
 .ctrl-btn {
   flex: 1;
   padding: 8px 12px;
-  border: 1px solid var(--c-surface1);
-  border-radius: 6px;
-  background: var(--c-surface0);
-  color: var(--c-text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  color: var(--text-primary);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
 }
 
 .ctrl-btn:hover:not(:disabled) {
-  background: var(--c-surface1);
+  background: var(--bg-active);
 }
 
 .ctrl-btn:disabled {
@@ -394,9 +385,9 @@ watch(firstPoint, (p) => {
 }
 
 .ctrl-btn.active {
-  background: var(--c-blue);
-  color: var(--c-base);
-  border-color: var(--c-blue);
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
   font-weight: 600;
 }
 
@@ -406,15 +397,15 @@ watch(firstPoint, (p) => {
 }
 
 .ctrl-btn-primary {
-  background: var(--c-blue);
-  color: var(--c-base);
-  border-color: var(--c-blue);
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
   font-weight: 600;
 }
 
 .ctrl-btn-primary:hover:not(:disabled) {
-  background: var(--c-sapphire);
-  border-color: var(--c-sapphire);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .slider-control {
@@ -431,23 +422,23 @@ watch(firstPoint, (p) => {
 
 .slider-input {
   flex: 1;
-  accent-color: var(--c-blue);
+  accent-color: var(--accent);
 }
 
 .number-sm {
   width: 72px;
   padding: 4px 6px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
   font-size: 12px;
   font-family: var(--font-mono);
 }
 
 .number-sm:focus {
   outline: none;
-  border-color: var(--c-blue);
+  border-color: var(--accent);
 }
 
 .number-control {
@@ -458,16 +449,16 @@ watch(firstPoint, (p) => {
 
 .form-input {
   padding: 5px 8px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
   font-size: 12px;
 }
 
 .form-input:focus {
   outline: none;
-  border-color: var(--c-blue);
+  border-color: var(--accent);
 }
 
 .toggle-row {
@@ -477,27 +468,14 @@ watch(firstPoint, (p) => {
   padding: 2px 0;
 }
 
-.toggle-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--c-text);
-  cursor: pointer;
-}
-
-.toggle-checkbox {
-  accent-color: var(--c-blue);
-}
-
 .toggle-hint {
   font-size: 10px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
 }
 
 .result-indicator {
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
   display: flex;
   align-items: center;
@@ -505,15 +483,15 @@ watch(firstPoint, (p) => {
 }
 
 .result-ok {
-  background: rgba(166, 227, 161, 0.15);
-  border: 1px solid rgba(166, 227, 161, 0.3);
-  color: var(--c-green);
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
+  color: var(--success);
 }
 
 .result-err {
-  background: rgba(243, 139, 168, 0.15);
-  border: 1px solid rgba(243, 139, 168, 0.3);
-  color: var(--c-red);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  color: var(--danger);
 }
 
 .result-steps {
@@ -523,7 +501,7 @@ watch(firstPoint, (p) => {
 }
 
 .step-dot {
-  color: var(--c-green);
+  color: var(--success);
 }
 
 .result-text {
@@ -532,7 +510,7 @@ watch(firstPoint, (p) => {
 
 .no-control-hint {
   padding: 16px 12px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   text-align: center;
   font-size: 12px;
   font-style: italic;

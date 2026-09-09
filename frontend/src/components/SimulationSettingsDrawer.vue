@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
+import AppIcon from '@shared/components/ui/AppIcon.vue'
 import { formatAsduTypeWithId } from '../constants/asduTypes'
 import { formatDataPointValue } from '@shared/utils/dataPointValue'
 import type { DataPointInfo, MutationMode, PointMutationRow } from '../types'
@@ -267,7 +268,7 @@ function modeLabel(value: MutationMode) {
               class="sim-close"
               :aria-label="t('common.close')"
               @click="close"
-            >×</button>
+            ><AppIcon name="x" :size="14" /></button>
           </header>
 
           <div class="sim-drawer-body">
@@ -478,11 +479,13 @@ function modeLabel(value: MutationMode) {
   flex-shrink: 0;
   width: 28px;
   height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--c-overlay0);
   background: transparent;
   border: 0;
   border-radius: 4px;
-  font-size: 21px;
   cursor: pointer;
 }
 

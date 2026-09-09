@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
 import {
   ASDU_TYPE_OPTIONS,
   findAsduTypeOption,
@@ -81,7 +82,7 @@ async function applyMigration() {
         <div class="modal">
           <div class="modal-header">
             <span class="modal-title">{{ t('batchType.title') }}</span>
-            <button class="btn-close" @click="$emit('close')">×</button>
+            <AppButton variant="ghost" icon="x" class="btn-close" :aria-label="t('common.cancel')" @click="$emit('close')" />
           </div>
           <div class="modal-body">
             <p class="selection-hint">
@@ -108,16 +109,17 @@ async function applyMigration() {
             </p>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-secondary" :disabled="isSaving" @click="$emit('close')">
+            <AppButton class="btn-secondary" :disabled="isSaving" @click="$emit('close')">
               {{ t('common.cancel') }}
-            </button>
-            <button
-              class="btn btn-primary"
+            </AppButton>
+            <AppButton
+              variant="primary"
+              class="btn-primary"
               :disabled="isSaving || !targetAsduType || changedCount === 0"
               @click="applyMigration"
             >
               {{ isSaving ? t('pointModal.saving') : t('batchType.apply') }}
-            </button>
+            </AppButton>
           </div>
         </div>
       </div>
@@ -167,11 +169,7 @@ async function applyMigration() {
 .btn-close {
   padding: 0 4px;
   color: var(--c-overlay0);
-  font-size: 20px;
   line-height: 1;
-  cursor: pointer;
-  background: none;
-  border: 0;
 }
 .modal-body { padding: 20px; }
 .selection-hint,
@@ -192,28 +190,13 @@ async function applyMigration() {
 .form-select {
   width: 100%;
   box-sizing: border-box;
-  padding: 8px 12px;
-  color: var(--c-text);
-  background: var(--c-crust);
-  border: 1px solid var(--c-surface1);
-  border-radius: 6px;
+  padding: 6px var(--space-2);
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: var(--text-md);
 }
 .target-preview { color: var(--c-sapphire); }
-.btn {
-  padding: 8px 20px;
-  font-size: 14px;
-  cursor: pointer;
-  border: 0;
-  border-radius: 6px;
-}
-.btn:disabled { cursor: not-allowed; opacity: 0.5; }
-.btn-primary {
-  color: var(--c-base);
-  font-weight: 600;
-  background: var(--c-blue);
-}
-.btn-secondary {
-  color: var(--c-text);
-  background: var(--c-surface1);
-}
 </style>

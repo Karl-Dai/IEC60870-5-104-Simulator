@@ -2,6 +2,7 @@
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
 import type { ClientConnectionInfo } from '../types'
 
 const props = defineProps<{
@@ -104,7 +105,7 @@ onBeforeUnmount(() => {
               <h3>{{ t('connections.title') }}</h3>
               <span>{{ serverLabel }}</span>
             </div>
-            <button class="connections-close" :aria-label="t('common.close')" @click="close">×</button>
+            <AppButton variant="ghost" icon="x" class="connections-close" :aria-label="t('common.close')" @click="close" />
           </header>
 
           <div class="connections-body">
@@ -145,7 +146,7 @@ onBeforeUnmount(() => {
           </div>
 
           <footer class="connections-footer">
-            <button class="connections-done" @click="close">{{ t('common.close') }}</button>
+            <AppButton variant="primary" class="connections-done" @click="close">{{ t('common.close') }}</AppButton>
           </footer>
         </section>
       </div>
@@ -197,13 +198,8 @@ onBeforeUnmount(() => {
 }
 
 .connections-close {
-  border: 0;
-  padding: 0 4px;
+  padding: 2px 4px;
   color: var(--c-overlay1);
-  background: transparent;
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
 }
 
 .connections-body {
@@ -315,15 +311,5 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   padding: 10px 18px 14px;
   border-top: 1px solid var(--c-surface0);
-}
-
-.connections-done {
-  min-width: 74px;
-  padding: 7px 16px;
-  color: var(--c-base);
-  background: var(--c-blue);
-  border: 0;
-  border-radius: 6px;
-  cursor: pointer;
 }
 </style>

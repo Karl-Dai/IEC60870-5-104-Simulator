@@ -2,10 +2,12 @@
 import { ref, watch, nextTick } from 'vue'
 import { useDialogState } from '../composables/useDialog'
 import { useI18n } from '../i18n'
+import AppButton from './ui/AppButton.vue'
+import AppInput from './ui/AppInput.vue'
 
 const { state, dialogConfirm, dialogCancel } = useDialogState()
 const { t } = useI18n()
-const inputRef = ref<HTMLInputElement | null>(null)
+const inputRef = ref<InstanceType<typeof AppInput> | null>(null)
 const inputValue = ref('')
 
 watch(() => state.value.visible, async (visible) => {
@@ -44,26 +46,27 @@ function handleKeydown(e: KeyboardEvent) {
         </div>
         <div class="dialog-body">
           <p class="dialog-message" data-testid="app-dialog-message" tabindex="0">{{ state.message }}</p>
-          <input
+          <AppInput
             v-if="state.mode === 'prompt'"
             ref="inputRef"
             v-model="inputValue"
             class="dialog-input"
-            type="text"
             @keydown.enter="handleConfirm"
             @keydown.escape="dialogCancel"
           />
         </div>
         <div class="dialog-footer">
-          <button
+          <AppButton
             v-if="state.mode !== 'alert'"
+            variant="secondary"
             class="btn btn-secondary"
             @click="dialogCancel"
-          >{{ t('appDialog.cancel') }}</button>
-          <button
+          >{{ t('appDialog.cancel') }}</AppButton>
+          <AppButton
+            variant="primary"
             class="btn btn-primary"
             @click="handleConfirm"
-          >{{ t('appDialog.ok') }}</button>
+          >{{ t('appDialog.ok') }}</AppButton>
         </div>
       </div>
     </div>
@@ -79,19 +82,19 @@ function handleKeydown(e: KeyboardEvent) {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 2000;
+  z-index: var(--z-dialog);
 }
 
 .dialog {
-  background: var(--c-base);
-  border: 1px solid var(--c-surface1);
-  border-radius: 8px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   width: 360px;
   max-width: 90vw;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
 }
 
 .dialog--alert {
@@ -99,25 +102,25 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 .dialog-header {
-  padding: 16px 20px 0;
+  padding: var(--space-4) var(--space-5) 0;
 }
 
 .dialog-title {
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 600;
-  color: var(--c-text);
+  color: var(--text-primary);
 }
 
 .dialog-body {
-  padding: 12px 20px 16px;
+  padding: var(--space-3) var(--space-5) var(--space-4);
   min-height: 0;
 }
 
 .dialog-message {
-  font-size: 13px;
-  color: var(--c-subtext1);
+  font-size: var(--text-md);
+  color: var(--text-secondary);
   line-height: 1.5;
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   max-height: min(60vh, 480px);
   overflow-y: auto;
   overflow-wrap: anywhere;
@@ -125,52 +128,13 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 .dialog-input {
-  width: 100%;
-  padding: 8px 12px;
-  background: var(--c-crust);
-  border: 1px solid var(--c-surface1);
-  border-radius: 6px;
-  color: var(--c-text);
-  font-size: 14px;
-  box-sizing: border-box;
-  margin-top: 4px;
-}
-
-.dialog-input:focus {
-  outline: none;
-  border-color: var(--c-blue);
+  margin-top: var(--space-1);
 }
 
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 0 20px 16px;
-}
-
-.btn {
-  padding: 7px 20px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.btn-primary {
-  background: var(--c-blue);
-  color: var(--c-base);
-}
-
-.btn-primary:hover {
-  background: var(--c-sapphire);
-}
-
-.btn-secondary {
-  background: var(--c-surface1);
-  color: var(--c-text);
-}
-
-.btn-secondary:hover {
-  background: var(--c-surface2);
+  gap: var(--space-2);
+  padding: 0 var(--space-5) var(--space-4);
 }
 </style>

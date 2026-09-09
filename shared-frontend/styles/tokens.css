@@ -1,8 +1,15 @@
-/* Catppuccin Mocha palette + semantic aliases.
+/* Design tokens — three layers:
+     1. Primitive: Catppuccin palettes. Dark = Mocha (:root default), light = Latte
+        ([data-theme="light"]). Both layers share the same --c-* names so the ~990
+        existing var(--c-*) usages in components follow the theme automatically.
+     2. Semantic: purpose aliases (--bg-*, --text-*, --accent …). New code and any
+        restyled component should reference these instead of the raw palette.
+     3. Size/geometry: spacing scale, type scale, radii, shadows, motion, z-index.
+        Theme-independent except shadows.
    Imported once from main.ts so every component can use var(--…). */
 
 :root {
-  /* Base layers (dark → light) */
+  /* ---- Primitive: Catppuccin Mocha (dark, default) ---- */
   --c-crust:    #11111b;
   --c-mantle:   #181825;
   --c-base:     #1e1e2e;
@@ -14,7 +21,6 @@
   --c-subtext1: #bac2de;
   --c-text:     #cdd6f4;
 
-  /* Accents */
   --c-blue:     #89b4fa;
   --c-lavender: #b4befe;
   --c-sapphire: #74c7ec;
@@ -26,6 +32,101 @@
   --c-red:      #f38ba8;
   --c-mauve:    #cba6f7;
 
-  /* Mono stack with broader fallback chain than the original SF Mono / Fira Code. */
+  /* ---- Semantic (dark) ---- */
+  --bg-app:        var(--c-base);
+  --bg-panel:      var(--c-mantle);
+  --bg-raised:     var(--c-surface0);
+  --bg-hover:      var(--c-surface0);
+  --bg-active:     var(--c-surface1);
+  --bg-inset:      var(--c-crust);
+  --border-subtle: var(--c-surface0);
+  --border-strong: var(--c-surface1);
+  --text-primary:   var(--c-text);
+  --text-secondary: var(--c-subtext1);
+  --text-muted:     var(--c-subtext0);
+  --text-disabled:  var(--c-overlay0);
+  --accent:        var(--c-blue);
+  --accent-hover:  var(--c-lavender);
+  /* Readable text/icons placed on top of --accent backgrounds. */
+  --on-accent:     #11111b;
+  --success: var(--c-green);
+  --warning: var(--c-yellow);
+  --danger:  var(--c-red);
+  --info:    var(--c-sapphire);
+
+  /* Shadows are barely visible on dark surfaces; keep them subtle. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="light"] {
+  /* ---- Primitive: Catppuccin Latte (light) ---- */
+  --c-crust:    #dce0e8;
+  --c-mantle:   #e6e9ef;
+  --c-base:     #eff1f5;
+  --c-surface0: #ccd0da;
+  --c-surface1: #bcc0cc;
+  --c-surface2: #acb0be;
+  --c-overlay0: #9ca0b0;
+  --c-subtext0: #6c6f85;
+  --c-subtext1: #5c5f77;
+  --c-text:     #4c4f69;
+
+  --c-blue:     #1e66f5;
+  --c-lavender: #7287fd;
+  --c-sapphire: #209fb5;
+  --c-sky:      #04a5e5;
+  --c-teal:     #179299;
+  --c-green:    #40a02b;
+  --c-yellow:   #df8e1d;
+  --c-peach:    #fe640b;
+  --c-red:      #d20f39;
+  --c-mauve:    #8839ef;
+
+  /* ---- Semantic overrides (only what differs from dark) ---- */
+  --on-accent: #ffffff;
+
+  --shadow-sm: 0 1px 2px rgba(76, 79, 105, 0.12);
+  --shadow-md: 0 4px 12px rgba(76, 79, 105, 0.16);
+  --shadow-lg: 0 8px 28px rgba(76, 79, 105, 0.22);
+}
+
+:root {
+  /* ---- Spacing scale (4px base) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ---- Type scale ---- */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+
+  /* ---- Radii ---- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* ---- Motion ---- */
+  --duration-fast:   120ms;
+  --duration-normal: 200ms;
+  --ease-out: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+
+  /* ---- z-index layers (values match the existing dialog stack: legends and
+     parse dialog sit at 1000, AppDialog at 2000, about/update at 2100) ---- */
+  --z-sticky:   100;
+  --z-dropdown: 1000;
+  --z-dialog:   2000;
+  --z-toast:    2200;
+
+  /* Sans stack with Chinese fallbacks; mono stack for numbers/addresses/logs. */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
   --font-mono: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
 }

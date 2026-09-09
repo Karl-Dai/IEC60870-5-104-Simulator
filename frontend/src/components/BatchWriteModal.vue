@@ -4,6 +4,9 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n, localizeCategoryLabel } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
+import AppInput from '@shared/components/ui/AppInput.vue'
+import AppSelect from '@shared/components/ui/AppSelect.vue'
 import type { DataPointInfo } from '../types'
 import { compressRanges, parseIoaExpression, resolveIoaHits } from './batchAdd/ioaRanges'
 
@@ -36,6 +39,13 @@ const typeOptions = computed(() => {
   return Array.from(seen, ([type, category]) => ({ type, category }))
     .sort((a, b) => a.type.localeCompare(b.type))
 })
+
+const typeSelectOptions = computed(() =>
+  typeOptions.value.map(opt => ({
+    value: opt.type,
+    label: `${localizeCategoryLabel(opt.category)} · ${opt.type}`,
+  })),
+)
 
 // 选定类型下的已存在 IOA，升序去重（喂给 resolveIoaHits）。
 const existingIoas = computed<number[]>(() => {
@@ -133,17 +143,13 @@ function handleKeydown(e: KeyboardEvent) {
         <div class="modal">
           <div class="modal-header">
             <span class="modal-title">{{ t('batchWrite.title') }}</span>
-            <button class="btn-close" @click="$emit('close')">×</button>
+            <AppButton variant="ghost" icon="x" class="btn-close" :aria-label="t('common.cancel')" @click="$emit('close')" />
           </div>
 
           <div class="modal-body">
             <div class="form-group">
               <label class="form-label">{{ t('batchWrite.typeLabel') }}</label>
-              <select v-model="asduType" class="form-select">
-                <option v-for="opt in typeOptions" :key="opt.type" :value="opt.type">
-                  {{ localizeCategoryLabel(opt.category) }} · {{ opt.type }}
-                </option>
-              </select>
+              <AppSelect v-model="asduType" :options="typeSelectOptions" />
             </div>
 
             <div class="form-group">
@@ -179,17 +185,17 @@ function handleKeydown(e: KeyboardEvent) {
 
             <div class="form-group">
               <label class="form-label">{{ t('batchWrite.valueLabel') }}</label>
-              <input v-model="value" type="text" class="form-input" :placeholder="valuePlaceholder(asduType)" />
+              <AppInput v-model="value" class="form-input" monospace :placeholder="valuePlaceholder(asduType)" />
             </div>
           </div>
 
           <div class="modal-footer">
-            <button class="btn btn-secondary" :disabled="isSaving" @click="$emit('close')">
+            <AppButton class="btn-secondary" :disabled="isSaving" @click="$emit('close')">
               {{ t('common.cancel') }}
-            </button>
-            <button class="btn btn-primary" :disabled="!canWrite" @click="handleWrite">
+            </AppButton>
+            <AppButton variant="primary" class="btn-primary" :disabled="!canWrite" @click="handleWrite">
               {{ isSaving ? t('batchWrite.writing') : hitCount > 0 ? t('batchWrite.writeN', { count: hitCount }) : t('batchWrite.write') }}
-            </button>
+            </AppButton>
           </div>
         </div>
       </div>
@@ -238,17 +244,7 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 .btn-close {
-  background: none;
-  border: none;
-  color: var(--c-overlay0);
-  font-size: 20px;
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-}
-
-.btn-close:hover {
-  color: var(--c-text);
+  padding: 2px 4px;
 }
 
 .modal-body {
@@ -269,29 +265,25 @@ function handleKeydown(e: KeyboardEvent) {
   margin-bottom: 6px;
 }
 
-.form-input,
-.form-select {
-  width: 100%;
-  padding: 8px 12px;
-  background: var(--c-crust);
-  border: 1px solid var(--c-surface1);
-  border-radius: 6px;
-  color: var(--c-text);
-  font-size: 14px;
-  box-sizing: border-box;
-}
-
-.form-input:focus,
-.form-select:focus {
-  outline: none;
-  border-color: var(--c-blue);
-}
-
+/* IOA 表达式多行文本仍为原生 textarea,样式对齐 AppInput */
 .ioa-textarea {
+  width: 100%;
+  padding: 6px var(--space-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
   font-family: var(--font-mono);
+  font-size: var(--text-md);
+  box-sizing: border-box;
   resize: vertical;
   min-height: 64px;
   line-height: 1.5;
+}
+
+.ioa-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .summary-card {
@@ -321,7 +313,7 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 .hit-count {
-  color: var(--c-green);
+  color: var(--success);
   font-weight: 600;
 }
 
@@ -345,8 +337,8 @@ function handleKeydown(e: KeyboardEvent) {
 .summary-card__conflict {
   margin-top: 4px;
   padding-top: 6px;
-  border-top: 1px dashed var(--c-red);
-  color: var(--c-red);
+  border-top: 1px dashed var(--danger);
+  color: var(--danger);
   font-size: 12px;
   font-family: var(--font-mono);
 }
@@ -364,42 +356,5 @@ function handleKeydown(e: KeyboardEvent) {
   gap: 8px;
   padding: 16px 20px;
   border-top: 1px solid var(--c-surface0);
-}
-
-.btn {
-  padding: 8px 20px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.btn-primary {
-  background: var(--c-blue);
-  color: var(--c-base);
-  font-weight: 600;
-}
-
-.btn-primary:hover {
-  background: var(--c-sapphire);
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-secondary {
-  background: var(--c-surface1);
-  color: var(--c-text);
-}
-
-.btn-secondary:hover {
-  background: var(--c-surface2);
-}
-
-.btn-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 </style>

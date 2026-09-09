@@ -4,6 +4,9 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
+import AppIcon from '@shared/components/ui/AppIcon.vue'
+import AppInput from '@shared/components/ui/AppInput.vue'
 import { ASDU_TYPE_OPTIONS, findAsduTypeOption, formatAsduTypeWithId } from '../constants/asduTypes'
 import { IOA_MAX } from './batchAdd/ioaRanges'
 import type { DataPointInfo } from '../types'
@@ -264,7 +267,7 @@ async function handleConfirm() {
       <div class="modal">
         <div class="modal-header">
           <span class="modal-title">{{ isEditing ? t('pointModal.editTitle') : t('pointModal.title') }}</span>
-          <button class="btn-close" @click="$emit('close')">×</button>
+          <AppButton variant="ghost" icon="x" class="btn-close" :aria-label="t('common.cancel')" @click="$emit('close')" />
         </div>
 
         <div class="modal-body">
@@ -281,10 +284,10 @@ async function handleConfirm() {
             />
             <div v-if="isEditing" class="form-hint">{{ t('pointModal.ioaEditHint') }}</div>
             <div v-if="sameTypeDupExists" class="form-hint form-hint--error">
-              ✕ {{ t('pointModal.dupIoaSameTypeError', { type: currentTypeLabel }) }}
+              <AppIcon name="x" :size="12" /> {{ t('pointModal.dupIoaSameTypeError', { type: currentTypeLabel }) }}
             </div>
             <div v-else-if="dupIoaTypes" class="form-hint form-hint--warn">
-              ⚠ {{ t('pointModal.dupIoaWarn', { types: dupIoaTypes }) }}
+              <AppIcon name="warning" :size="12" /> {{ t('pointModal.dupIoaWarn', { types: dupIoaTypes }) }}
             </div>
           </div>
 
@@ -299,12 +302,12 @@ async function handleConfirm() {
 
           <div class="form-group">
             <label class="form-label">{{ t('pointModal.nameLabel') }}</label>
-            <input v-model="formName" type="text" class="form-input" :placeholder="t('pointModal.namePlaceholder')" />
+            <AppInput v-model="formName" class="form-input" :placeholder="t('pointModal.namePlaceholder')" />
           </div>
 
           <div class="form-group">
             <label class="form-label">{{ t('pointModal.commentLabel') }}</label>
-            <input v-model="formComment" type="text" class="form-input" :placeholder="t('pointModal.commentPlaceholder')" />
+            <AppInput v-model="formComment" class="form-input" :placeholder="t('pointModal.commentPlaceholder')" />
           </div>
 
           <template v-if="isControlType && !isBitstringType">
@@ -367,10 +370,10 @@ async function handleConfirm() {
         </div>
 
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="$emit('close')" :disabled="isSaving">{{ t('common.cancel') }}</button>
-          <button class="btn btn-primary" @click="handleConfirm" :disabled="isSaving || sameTypeDupExists">
+          <AppButton class="btn-secondary" :disabled="isSaving" @click="$emit('close')">{{ t('common.cancel') }}</AppButton>
+          <AppButton variant="primary" class="btn-primary" :disabled="isSaving || sameTypeDupExists" @click="handleConfirm">
             {{ isSaving ? t('pointModal.saving') : (isEditing ? t('pointModal.save') : t('pointModal.add')) }}
-          </button>
+          </AppButton>
         </div>
       </div>
     </div>
@@ -419,17 +422,7 @@ async function handleConfirm() {
 }
 
 .btn-close {
-  background: none;
-  border: none;
-  color: var(--c-overlay0);
-  font-size: 20px;
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-}
-
-.btn-close:hover {
-  color: var(--c-text);
+  padding: 2px 4px;
 }
 
 .modal-body {
@@ -450,39 +443,48 @@ async function handleConfirm() {
   margin-bottom: 6px;
 }
 
-.form-input,
+/* 数字输入与下拉仍是原生控件,样式对齐 AppInput(AppInput 文本框自带样式) */
+.form-input[type='number'],
 .form-select {
   width: 100%;
-  padding: 8px 12px;
-  background: var(--c-crust);
-  border: 1px solid var(--c-surface1);
-  border-radius: 6px;
-  color: var(--c-text);
-  font-size: 14px;
+  padding: 6px var(--space-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-md);
   box-sizing: border-box;
 }
 
-.form-input:focus,
+.form-input[type='number']:focus,
 .form-select:focus {
   outline: none;
-  border-color: var(--c-blue);
+  border-color: var(--accent);
 }
 
 .form-hint {
   margin-top: 6px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   font-size: 11px;
   line-height: 1.4;
 }
 
+.form-hint--error,
+.form-hint--warn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* 同 CASDU 跨类型重复 IOA 警告(不阻断保存) */
 .form-hint--warn {
-  color: var(--c-peach);
+  color: var(--warning);
 }
 
 /* 同 (IOA, 类型) 重复:阻断保存 */
 .form-hint--error {
-  color: var(--c-red);
+  color: var(--danger);
 }
 
 .radio-group {
@@ -501,7 +503,7 @@ async function handleConfirm() {
 }
 
 .radio-item input[type='radio'] {
-  accent-color: var(--c-blue);
+  accent-color: var(--accent);
   margin: 0;
 }
 
@@ -518,42 +520,5 @@ async function handleConfirm() {
   gap: 8px;
   padding: 16px 20px;
   border-top: 1px solid var(--c-surface0);
-}
-
-.btn {
-  padding: 8px 20px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.btn-primary {
-  background: var(--c-blue);
-  color: var(--c-base);
-  font-weight: 600;
-}
-
-.btn-primary:hover {
-  background: var(--c-sapphire);
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-secondary {
-  background: var(--c-surface1);
-  color: var(--c-text);
-}
-
-.btn-secondary:hover {
-  background: var(--c-surface2);
-}
-
-.btn-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 </style>

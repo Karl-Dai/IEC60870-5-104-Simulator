@@ -7,6 +7,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
+import AppCheckbox from '@shared/components/ui/AppCheckbox.vue'
 import type { DataPointInfo } from '../types'
 
 const { t } = useI18n()
@@ -102,17 +104,16 @@ async function handleApply() {
       <div class="modal">
         <div class="modal-header">
           <span class="modal-title">{{ t('batchControl.title') }}</span>
-          <button class="btn-close" @click="$emit('close')">×</button>
+          <AppButton variant="ghost" icon="x" class="btn-close" :aria-label="t('common.cancel')" @click="$emit('close')" />
         </div>
 
         <div class="modal-body">
           <div class="form-hint selection-hint">{{ t('batchControl.selectionHint', { count: points.length }) }}</div>
 
           <div class="form-group">
-            <label class="check-item">
-              <input v-model="applyQualifier" type="checkbox" />
-              <span>{{ t('batchControl.applyQualifier') }}</span>
-            </label>
+            <AppCheckbox v-model="applyQualifier" class="check-item">
+              {{ t('batchControl.applyQualifier') }}
+            </AppCheckbox>
             <div v-if="applyQualifier" class="radio-group indent">
               <label class="radio-item">
                 <input v-model="qualifierChoice" type="radio" value="any" />
@@ -139,10 +140,9 @@ async function handleApply() {
           </div>
 
           <div class="form-group">
-            <label class="check-item">
-              <input v-model="applySbo" type="checkbox" />
-              <span>{{ t('batchControl.applySbo') }}</span>
-            </label>
+            <AppCheckbox v-model="applySbo" class="check-item">
+              {{ t('batchControl.applySbo') }}
+            </AppCheckbox>
             <div v-if="applySbo" class="radio-group indent">
               <label class="radio-item">
                 <input v-model="sboChoice" type="radio" :value="undefined" />
@@ -161,10 +161,10 @@ async function handleApply() {
         </div>
 
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="$emit('close')" :disabled="isSaving">{{ t('common.cancel') }}</button>
-          <button class="btn btn-primary" @click="handleApply" :disabled="isSaving || (!applyQualifier && !applySbo)">
+          <AppButton class="btn-secondary" :disabled="isSaving" @click="$emit('close')">{{ t('common.cancel') }}</AppButton>
+          <AppButton variant="primary" class="btn-primary" :disabled="isSaving || (!applyQualifier && !applySbo)" @click="handleApply">
             {{ isSaving ? t('pointModal.saving') : t('batchControl.apply') }}
-          </button>
+          </AppButton>
         </div>
       </div>
     </div>
@@ -213,17 +213,7 @@ async function handleApply() {
 }
 
 .btn-close {
-  background: none;
-  border: none;
-  color: var(--c-overlay0);
-  font-size: 20px;
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-}
-
-.btn-close:hover {
-  color: var(--c-text);
+  padding: 2px 4px;
 }
 
 .modal-body {
@@ -237,19 +227,22 @@ async function handleApply() {
   margin-bottom: 16px;
 }
 
-.form-input {
-  padding: 8px 12px;
-  background: var(--c-crust);
-  border: 1px solid var(--c-surface1);
-  border-radius: 6px;
-  color: var(--c-text);
-  font-size: 14px;
+/* 数字输入仍是原生控件,样式对齐 AppInput */
+.form-input[type='number'] {
+  width: 100%;
+  padding: 6px var(--space-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-md);
   box-sizing: border-box;
 }
 
-.form-input:focus {
+.form-input[type='number']:focus {
   outline: none;
-  border-color: var(--c-blue);
+  border-color: var(--accent);
 }
 
 .form-hint {
@@ -263,18 +256,7 @@ async function handleApply() {
 }
 
 .check-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--c-text);
-  cursor: pointer;
   margin-bottom: 8px;
-}
-
-.check-item input[type='checkbox'] {
-  accent-color: var(--c-blue);
-  margin: 0;
 }
 
 .radio-group {
@@ -297,7 +279,7 @@ async function handleApply() {
 }
 
 .radio-item input[type='radio'] {
-  accent-color: var(--c-blue);
+  accent-color: var(--accent);
   margin: 0;
 }
 
@@ -314,42 +296,5 @@ async function handleApply() {
   gap: 8px;
   padding: 16px 20px;
   border-top: 1px solid var(--c-surface0);
-}
-
-.btn {
-  padding: 8px 20px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.btn-primary {
-  background: var(--c-blue);
-  color: var(--c-base);
-  font-weight: 600;
-}
-
-.btn-primary:hover {
-  background: var(--c-sapphire);
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-secondary {
-  background: var(--c-surface1);
-  color: var(--c-text);
-}
-
-.btn-secondary:hover {
-  background: var(--c-surface2);
-}
-
-.btn-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 </style>

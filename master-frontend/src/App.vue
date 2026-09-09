@@ -305,56 +305,7 @@ provide('resetWorkspaceView', resetWorkspaceView)
 </template>
 
 <style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-html, body, #app {
-  height: 100%;
-  width: 100%;
-  overflow: hidden;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-  background: var(--c-crust);
-  color: var(--c-text);
-}
-
-/* Dark scrollbars across the app — overrides macOS "Always show" white tracks */
-*::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-*::-webkit-scrollbar-track {
-  background: var(--c-mantle);
-}
-*::-webkit-scrollbar-thumb {
-  background: var(--c-surface0);
-  border-radius: 5px;
-  border: 2px solid var(--c-mantle);
-}
-*::-webkit-scrollbar-thumb:hover {
-  background: var(--c-surface1);
-}
-*::-webkit-scrollbar-corner {
-  background: var(--c-mantle);
-}
-* {
-  scrollbar-color: var(--c-surface0) var(--c-mantle);
-  scrollbar-width: thin;
-}
-
-/* Keyboard focus ring — never hide it. Mouse focus stays clean via :focus-visible. */
-:focus { outline: none; }
-:focus-visible {
-  outline: 2px solid var(--c-blue);
-  outline-offset: 1px;
-  border-radius: 2px;
-}
-
+/* Reset, body, scrollbars and focus ring live in shared-frontend/styles/base.css. */
 .app-layout {
   display: grid;
   grid-template-columns: var(--tree-w, 240px) 4px 1fr 4px var(--panel-w, 280px);

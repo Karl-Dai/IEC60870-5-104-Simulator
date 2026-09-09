@@ -2,6 +2,8 @@
 import { ref, reactive, computed, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
+import AppInput from '@shared/components/ui/AppInput.vue'
 import { useRemoteParams } from '../composables/useRemoteParams'
 import RemoteParamsForm from './RemoteParamsForm.vue'
 import type { ProtocolTimingConfig, RemoteOperationConfig, ServerInfo } from '../types'
@@ -266,7 +268,7 @@ watch(() => props.visible, (v) => {
               {{ t('runtimeParams.title') }}
               <span v-if="serverLabel" class="modal-subtitle">— {{ serverLabel }}</span>
             </span>
-            <button class="btn-close" :disabled="isSaving" @click="close">×</button>
+            <AppButton variant="ghost" icon="x" class="btn-close" :disabled="isSaving" :aria-label="t('runtimeParams.cancel')" @click="close" />
           </div>
 
           <div class="modal-body">
@@ -278,7 +280,13 @@ watch(() => props.visible, (v) => {
               <div class="rp-conn-grid">
                 <label class="rp-conn-field">
                   <span>{{ t('remoteParams.bindAddress') }}</span>
-                  <input v-model="transport.bindAddress" :disabled="isRunning || isSaving || transportLoading" placeholder="0.0.0.0" />
+                  <AppInput
+                    v-model="transport.bindAddress"
+                    class="rp-conn-input"
+                    monospace
+                    :disabled="isRunning || isSaving || transportLoading"
+                    placeholder="0.0.0.0"
+                  />
                 </label>
                 <label class="rp-conn-field">
                   <span>{{ t('remoteParams.port') }}</span>
@@ -294,16 +302,17 @@ watch(() => props.visible, (v) => {
           </div>
 
           <div class="modal-footer">
-            <button class="btn btn-secondary" @click="close" :disabled="isSaving">
+            <AppButton class="btn-secondary" :disabled="isSaving" @click="close">
               {{ t('runtimeParams.cancel') }}
-            </button>
-            <button
-              class="btn btn-primary"
-              @click="handleSave"
+            </AppButton>
+            <AppButton
+              variant="primary"
+              class="btn-primary"
               :disabled="isSaving || loading || transportLoading || !paramsReady || !transportReady || hasLoadError"
+              @click="handleSave"
             >
               {{ isSaving ? t('runtimeParams.saving') : t('runtimeParams.save') }}
-            </button>
+            </AppButton>
           </div>
         </div>
       </div>
@@ -356,17 +365,7 @@ watch(() => props.visible, (v) => {
 }
 
 .btn-close {
-  background: none;
-  border: none;
-  color: var(--c-overlay0);
-  font-size: 20px;
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-}
-
-.btn-close:hover {
-  color: var(--c-text);
+  padding: 2px 4px;
 }
 
 .modal-body {
@@ -383,31 +382,6 @@ watch(() => props.visible, (v) => {
   padding: 12px 18px;
   border-top: 1px solid var(--c-surface0);
 }
-
-.btn {
-  padding: 7px 18px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.btn-primary {
-  background: var(--c-blue);
-  color: var(--c-base);
-  font-weight: 600;
-}
-
-.btn-primary:hover { background: var(--c-sapphire); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.btn-secondary {
-  background: var(--c-surface1);
-  color: var(--c-text);
-}
-
-.btn-secondary:hover { background: var(--c-surface2); }
-.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .muted { color: var(--c-subtext0); font-size: 12px; }
 
@@ -452,18 +426,19 @@ watch(() => props.visible, (v) => {
   font-size: 11px;
   color: var(--c-subtext0);
 }
+/* 端口数字输入仍是原生控件,样式对齐 AppInput */
 .rp-conn-field input {
   padding: 6px 8px;
-  background: var(--c-mantle);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
   font-size: 12px;
   font-family: var(--font-mono);
 }
 .rp-conn-field input:focus {
   outline: none;
-  border-color: var(--c-blue);
+  border-color: var(--accent);
 }
 .rp-conn-field input:disabled {
   opacity: 0.55;

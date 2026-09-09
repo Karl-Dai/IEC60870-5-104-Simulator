@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
 
 defineProps<{
   visible: boolean
@@ -45,9 +46,9 @@ function handleKeydown(event: KeyboardEvent) {
           </div>
 
           <footer>
-            <button class="csv-mode-cancel" data-testid="csv-mode-cancel" @click="emit('cancel')">
+            <AppButton class="csv-mode-cancel" data-testid="csv-mode-cancel" @click="emit('cancel')">
               {{ t('common.cancel') }}
-            </button>
+            </AppButton>
           </footer>
         </section>
       </div>
@@ -127,30 +128,17 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 .csv-mode-option--replace strong {
-  color: var(--c-red);
+  color: var(--danger);
 }
 
 .csv-mode-option--replace:hover {
-  border-color: var(--c-red);
+  border-color: var(--danger);
 }
 
 .csv-mode-dialog footer {
   display: flex;
   justify-content: flex-end;
   margin-top: 14px;
-}
-
-.csv-mode-cancel {
-  padding: 7px 18px;
-  border: none;
-  border-radius: 6px;
-  background: var(--c-surface1);
-  color: var(--c-text);
-  cursor: pointer;
-}
-
-.csv-mode-cancel:hover {
-  background: var(--c-surface2);
 }
 
 @media (max-width: 520px) {

@@ -6,6 +6,7 @@ import type { showAlert as ShowAlert, showPrompt as ShowPrompt, showConfirm as S
 import { useI18n } from '@shared/i18n'
 import AboutDialog from '@shared/components/AboutDialog.vue'
 import LangSwitch from '@shared/components/LangSwitch.vue'
+import ThemeSwitch from '@shared/components/ThemeSwitch.vue'
 import VersionBadge from '@shared/components/VersionBadge.vue'
 import NewServerModal from './NewServerModal.vue'
 import CsvImportModeModal from './CsvImportModeModal.vue'
@@ -144,6 +145,7 @@ const helpItems = computed(() => [
       <ToolbarMenu id="help" :label="t('toolbar.menuHelp')" :items="helpItems" :open="openMenu === 'help'"
         :disabled="locked" @toggle="toggleMenu('help')" @close="closeMenu" />
       <LangSwitch />
+      <ThemeSwitch />
       <VersionBadge />
     </div>
   </div>
@@ -154,7 +156,15 @@ const helpItems = computed(() => [
 
 <style scoped>
 .slave-toolbar :deep(.toolbar-btn) { padding: 5px 7px; }
-.slave-toolbar .toolbar-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.slave-toolbar .toolbar-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 启动是主操作:绿色文本外再加一层淡色底,在工具栏里更醒目 */
+.slave-toolbar :deep(.toolbar-btn.btn-start:not(:disabled)) {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+.slave-toolbar :deep(.toolbar-btn.btn-start:not(:disabled):hover) {
+  background: color-mix(in srgb, var(--success) 22%, transparent);
+}
 .scope-label { align-self: center; margin-right: 2px; color: var(--c-subtext0); font-size: 11px; white-space: nowrap; }
 @media (max-width: 1050px) {
   .scope-label { display: none; }

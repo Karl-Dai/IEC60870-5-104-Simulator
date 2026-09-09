@@ -320,6 +320,8 @@ export type DictShape = {
     frameS: string
     frameU: string
     lengthSummary: string
+    lengthOk: string
+    lengthBad: string
     noConnection: string
     sent: string
     byteCount: string
@@ -357,6 +359,7 @@ export type DictShape = {
     dpIntermediate: string
     dpIndeterminate: string
   }
+  theme: { toLight: string; toDark: string }
   _test: { interp: string }
 }
 
@@ -739,6 +742,8 @@ const dict: DictShape = {
     frameS: 'S 帧',
     frameU: 'U 帧',
     lengthSummary: '{frameType}，LEN={declared}（期望总长 {expected}/实际 {actual}）{status}',
+    lengthOk: '校验通过',
+    lengthBad: '长度不符',
     noConnection: '未选择连接',
     sent: '已发送：',
     byteCount: '{n} 字节 @ {timestamp}',
@@ -779,6 +784,10 @@ const dict: DictShape = {
     colRaw: '原始字节',
     dpIntermediate: '中间',
     dpIndeterminate: '不确定',
+  },
+  theme: {
+    toLight: '切换到亮色主题',
+    toDark: '切换到暗色主题',
   },
   _test: {
     interp: '订单 #{id} 由 {user} 创建',

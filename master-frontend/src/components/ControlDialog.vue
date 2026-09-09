@@ -3,6 +3,8 @@ import { ref, watch, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { CommandType, ControlResult } from '../types'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
+import AppSelect from '@shared/components/ui/AppSelect.vue'
 
 const { t } = useI18n()
 
@@ -171,6 +173,22 @@ const commandTypes = computed<{ value: CommandType; label: string }[]>(() => [
   { value: 'bitstring', label: t('control.cmdBitstring') },
 ])
 
+// AppSelect 的 model 是 string；这两处包装负责与联合类型 ref 互转。
+const commandTypeValue = computed({
+  get: () => commandType.value,
+  set: (v: string) => { commandType.value = v as CommandType },
+})
+
+const controlModeOptions = computed(() => [
+  { value: 'execute', label: t('control.modeExecute') },
+  { value: 'select', label: t('control.modeSelect') },
+  { value: 'sbo', label: t('control.modeSbo') },
+])
+const controlModeValue = computed({
+  get: () => controlMode.value,
+  set: (v: string) => { controlMode.value = v as typeof controlMode.value },
+})
+
 async function send() {
   if (!props.connectionId) return
   errorMsg.value = ''
@@ -291,9 +309,7 @@ const caSelectValue = computed<number>({
 
           <label class="form-label">
             {{ t('control.commandType') }}
-            <select v-model="commandType" class="form-input">
-              <option v-for="ct in commandTypes" :key="ct.value" :value="ct.value">{{ ct.label }}</option>
-            </select>
+            <AppSelect v-model="commandTypeValue" :options="commandTypes" />
           </label>
 
           <!-- Single point: toggle -->
@@ -346,11 +362,7 @@ const caSelectValue = computed<number>({
           <div class="toggle-row">
             <label class="toggle-label">
               <span>{{ t('control.controlMode') }}</span>
-              <select v-model="controlMode" class="mode-select" :disabled="isBitstring">
-                <option value="execute">{{ t('control.modeExecute') }}</option>
-                <option value="select">{{ t('control.modeSelect') }}</option>
-                <option value="sbo">{{ t('control.modeSbo') }}</option>
-              </select>
+              <AppSelect v-model="controlModeValue" class="mode-select" :options="controlModeOptions" :disabled="isBitstring" />
             </label>
             <span class="toggle-hint">{{ isBitstring ? t('control.bitstringNoSbo') : (controlMode === 'sbo' ? t('control.sboTwoStep') : (controlMode === 'select' ? t('control.modeSelectHint') : t('control.sboDirect'))) }}</span>
           </div>
@@ -389,10 +401,10 @@ const caSelectValue = computed<number>({
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="emit('close')">{{ t('common.close') }}</button>
-          <button class="btn btn-primary" :disabled="sending" @click="send">
+          <AppButton @click="emit('close')">{{ t('common.close') }}</AppButton>
+          <AppButton variant="primary" :disabled="sending" @click="send">
             {{ sending ? t('control.sending') : t('control.send') }}
-          </button>
+          </AppButton>
         </div>
       </div>
     </div>
@@ -412,9 +424,9 @@ const caSelectValue = computed<number>({
 }
 
 .modal-box {
-  background: var(--c-base);
-  border: 1px solid var(--c-surface1);
-  border-radius: 8px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   padding: 20px;
   min-width: 400px;
   max-width: 90vw;
@@ -424,14 +436,14 @@ const caSelectValue = computed<number>({
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
 }
 
 .modal-title {
   flex-shrink: 0;
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 600;
-  color: var(--c-text);
+  color: var(--text-primary);
   margin-bottom: 16px;
 }
 
@@ -457,7 +469,7 @@ const caSelectValue = computed<number>({
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
 }
 
 .form-row {
@@ -478,25 +490,25 @@ const caSelectValue = computed<number>({
 .bitstring-hex {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--c-blue);
+  color: var(--accent);
   padding-left: 2px;
 }
 
 .advanced {
-  border: 1px solid var(--c-surface0);
-  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
 }
 
 .advanced-summary {
   cursor: pointer;
   font-size: 12px;
-  color: var(--c-text);
+  color: var(--text-primary);
   user-select: none;
 }
 
 .advanced-summary:hover {
-  color: var(--c-blue);
+  color: var(--accent);
 }
 
 .advanced-body {
@@ -508,7 +520,7 @@ const caSelectValue = computed<number>({
 
 .hint {
   font-size: 10px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   line-height: 1.4;
 }
 
@@ -525,18 +537,20 @@ const caSelectValue = computed<number>({
   flex: 1;
 }
 
+/* 数字输入与 CA 下拉保持原生（v-model.number + 数字哨兵值），观感对齐 AppInput。 */
 .form-input {
   padding: 6px 10px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
-  font-size: 13px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--text-md);
 }
 
 .form-input:focus {
   outline: none;
-  border-color: var(--c-blue);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .ctrl-buttons {
@@ -547,23 +561,24 @@ const caSelectValue = computed<number>({
 .ctrl-btn {
   flex: 1;
   padding: 8px 12px;
-  border: 1px solid var(--c-surface1);
-  border-radius: 6px;
-  background: var(--c-surface0);
-  color: var(--c-text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  color: var(--text-primary);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
 }
 
 .ctrl-btn:hover {
-  background: var(--c-surface1);
+  background: var(--bg-active);
 }
 
 .ctrl-btn.active {
-  background: var(--c-blue);
-  color: var(--c-base);
-  border-color: var(--c-blue);
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
   font-weight: 600;
 }
 
@@ -584,41 +599,34 @@ const caSelectValue = computed<number>({
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--c-text);
+  color: var(--text-primary);
   cursor: pointer;
 }
 
+/* AppSelect 自带主题化外观；这里只约束内联宽度。 */
 .mode-select {
-  padding: 4px 8px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
-  font-size: 12px;
-}
-.mode-select:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  width: 150px;
+  min-width: 150px;
 }
 
 .toggle-hint {
   font-size: 10px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
 }
 
 .error-msg {
   padding: 8px 10px;
-  background: rgba(243, 139, 168, 0.15);
-  border: 1px solid var(--c-red);
-  border-radius: 4px;
-  color: var(--c-red);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
   font-size: 12px;
   word-break: break-word;
 }
 
 .result-indicator {
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
   display: flex;
   align-items: center;
@@ -626,9 +634,9 @@ const caSelectValue = computed<number>({
 }
 
 .result-ok {
-  background: rgba(166, 227, 161, 0.15);
-  border: 1px solid rgba(166, 227, 161, 0.3);
-  color: var(--c-green);
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
+  color: var(--success);
 }
 
 .result-steps {
@@ -638,42 +646,10 @@ const caSelectValue = computed<number>({
 }
 
 .step-dot {
-  color: var(--c-green);
+  color: var(--success);
 }
 
 .result-text {
   font-family: var(--font-mono);
-}
-
-.btn {
-  padding: 7px 20px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.btn-primary {
-  background: var(--c-blue);
-  color: var(--c-base);
-  font-weight: 600;
-}
-
-.btn-primary:hover {
-  background: var(--c-sapphire);
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.btn-secondary {
-  background: var(--c-surface1);
-  color: var(--c-text);
-}
-
-.btn-secondary:hover {
-  background: var(--c-surface2);
 }
 </style>

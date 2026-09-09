@@ -6,9 +6,11 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert, showConfirm as ShowConfirm } from '@shared/composables/useDialog'
 import AboutDialog from '@shared/components/AboutDialog.vue'
+import AppIcon from '@shared/components/ui/AppIcon.vue'
 import ControlDialog from './ControlDialog.vue'
 import NewConnectionModal from './NewConnectionModal.vue'
 import LangSwitch from '@shared/components/LangSwitch.vue'
+import ThemeSwitch from '@shared/components/ThemeSwitch.vue'
 import VersionBadge from '@shared/components/VersionBadge.vue'
 import { useI18n } from '@shared/i18n'
 
@@ -534,7 +536,7 @@ async function sendBroadcastCounterReadDeactivation() {
     <div class="toolbar-main">
     <div class="toolbar-group">
       <button class="toolbar-btn" @click="openNewConnection">
-        <span class="btn-icon">+</span> {{ t('toolbar.newConnection') }}
+        <span class="btn-icon"><AppIcon name="plus" :size="12" /></span> {{ t('toolbar.newConnection') }}
       </button>
     </div>
 
@@ -565,7 +567,7 @@ async function sendBroadcastCounterReadDeactivation() {
     <div class="toolbar-group">
       <div class="gi-btn-wrap">
         <button class="toolbar-btn" :disabled="!hasConnection() || !isConnected()" @click="sendGI">
-          {{ t('toolbar.sendGI') }}<span v-if="connCAs.length > 1" class="gi-caret">&#9662;</span>
+          {{ t('toolbar.sendGI') }}<span v-if="connCAs.length > 1" class="gi-caret"><AppIcon name="chevron-down" :size="10" /></span>
         </button>
         <Teleport to="body">
           <ul
@@ -586,7 +588,7 @@ async function sendBroadcastCounterReadDeactivation() {
           :title="t('toolbar.deactivateGI')"
           @click="sendGIDeactivation"
         >
-          {{ t('toolbar.deactivateGI') }}<span v-if="connCAs.length > 1" class="gi-caret">&#9662;</span>
+          {{ t('toolbar.deactivateGI') }}<span v-if="connCAs.length > 1" class="gi-caret"><AppIcon name="chevron-down" :size="10" /></span>
         </button>
         <Teleport to="body">
           <ul
@@ -613,7 +615,7 @@ async function sendBroadcastCounterReadDeactivation() {
           class="toolbar-btn split-toggle"
           :disabled="!hasConnection() || !isConnected()"
           @click="toggleBroadcastMenu"
-        >&#9662;</button>
+        ><AppIcon name="chevron-down" :size="12" /></button>
         <Teleport to="body">
           <ul
             v-if="broadcastMenuOpen"
@@ -633,7 +635,7 @@ async function sendBroadcastCounterReadDeactivation() {
       </button>
       <div class="gi-btn-wrap cc-btn-wrap">
         <button class="toolbar-btn" :disabled="!hasConnection() || !isConnected()" @click="sendCounterRead">
-          {{ t('toolbar.counterRead') }}<span v-if="connCAs.length > 1" class="gi-caret">&#9662;</span>
+          {{ t('toolbar.counterRead') }}<span v-if="connCAs.length > 1" class="gi-caret"><AppIcon name="chevron-down" :size="10" /></span>
         </button>
         <Teleport to="body">
           <ul
@@ -654,7 +656,7 @@ async function sendBroadcastCounterReadDeactivation() {
           :title="t('toolbar.deactivateCounterRead')"
           @click="sendCounterReadDeactivation"
         >
-          {{ t('toolbar.deactivateCounterRead') }}<span v-if="connCAs.length > 1" class="gi-caret">&#9662;</span>
+          {{ t('toolbar.deactivateCounterRead') }}<span v-if="connCAs.length > 1" class="gi-caret"><AppIcon name="chevron-down" :size="10" /></span>
         </button>
         <Teleport to="body">
           <ul
@@ -698,6 +700,7 @@ async function sendBroadcastCounterReadDeactivation() {
         {{ updateChecking ? t('toolbar.checkingUpdate') : t('toolbar.checkUpdate') }}
       </button>
       <LangSwitch />
+      <ThemeSwitch />
       <VersionBadge />
       <button class="toolbar-title as-button" @click="showAbout = true" :title="t('toolbar.about')">
         {{ t('toolbar.appTitle') }}
@@ -729,23 +732,26 @@ async function sendBroadcastCounterReadDeactivation() {
    Only master-specific split-button / dropdown styles remain here. */
 
 .gi-btn-wrap { position: relative; display: inline-flex; }
-.gi-caret { margin-left: 2px; font-size: 10px; opacity: 0.7; }
+.gi-caret { margin-left: 2px; display: inline-flex; align-items: center; opacity: 0.7; }
 
 .split-btn { position: relative; display: inline-flex; }
 .split-btn .split-toggle { padding: 0 6px; min-width: 0; }
 .split-menu {
-  position: absolute; top: 100%; left: 0; z-index: 50;
+  position: absolute; top: 100%; left: 0; z-index: var(--z-dropdown);
   list-style: none; margin: 0; padding: 4px 0;
-  background: var(--bg-elevated, var(--c-base, #fff));
-  border: 1px solid var(--c-surface0, #ccc);
-  border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
   min-width: 160px;
 }
 /* Teleported to <body>; positioned from the trigger's viewport rect. */
 .split-menu.floating {
   position: fixed;
 }
-.split-menu li { padding: 6px 12px; cursor: pointer; white-space: nowrap; font-size: 12px; }
-.split-menu li:hover { background: var(--c-surface0, #f0f0f0); }
+.split-menu li {
+  padding: 6px 12px; cursor: pointer; white-space: nowrap;
+  font-size: var(--text-sm); color: var(--text-primary);
+}
+.split-menu li:hover { background: var(--bg-hover); }
 
 </style>

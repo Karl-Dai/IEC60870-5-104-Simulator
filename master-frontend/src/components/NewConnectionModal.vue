@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { inject, ref, watch, type Ref } from 'vue'
+import { inject, ref, computed, watch, type Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert, showConfirm as ShowConfirm } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
+import AppButton from '@shared/components/ui/AppButton.vue'
+import AppCheckbox from '@shared/components/ui/AppCheckbox.vue'
+import AppInput from '@shared/components/ui/AppInput.vue'
+import AppSelect from '@shared/components/ui/AppSelect.vue'
 import FilePathInput from '@shared/components/FilePathInput.vue'
 import { correctTimingEdit, formatCorrections, isTimingField, type TimingCorrection } from '@shared/timing'
 import type { ConnectionInfo } from '../types'
@@ -361,6 +365,17 @@ function protoLabel(f: ProtoField): string {
   return f.unit === 'sec' ? `${base} (${t('newConn.unitSeconds')})` : base
 }
 
+// AppSelect 的 model 是 string；这里负责与联合类型字段互转。
+const tlsVersionOptions = computed(() => [
+  { value: 'auto', label: t('newConn.tlsAuto') },
+  { value: 'tls12_only', label: t('newConn.tls12') },
+  { value: 'tls13_only', label: t('newConn.tls13') },
+])
+const tlsVersionValue = computed({
+  get: () => form.value.tls_version,
+  set: (v: string) => { form.value.tls_version = v as NewConnForm['tls_version'] },
+})
+
 // Edit-aware C3 auto-correction. Fires on blur/change (not per keystroke) so
 // intermediate values aren't clobbered. Surfaces what was adjusted inline.
 const recentCorrections = ref<TimingCorrection[]>([])
@@ -388,7 +403,7 @@ defineExpose({ openEditConnection, openNew })
         <fieldset class="modal-body" :disabled="saving">
           <label class="form-label">
             {{ t('newConn.targetAddress') }}
-            <input v-model="form.target_address" class="form-input" type="text" placeholder="127.0.0.1" />
+            <AppInput v-model="form.target_address" placeholder="127.0.0.1" />
           </label>
           <label class="form-label">
             {{ t('newConn.port') }}
@@ -396,20 +411,18 @@ defineExpose({ openEditConnection, openNew })
           </label>
           <label class="form-label">
             {{ t('newConn.commonAddress') }}
-            <input
+            <AppInput
               v-model="form.common_addresses_text"
-              class="form-input"
-              type="text"
               placeholder="1, 2, 3"
             />
             <span class="form-hint">{{ t('newConn.commonAddressHint') }}</span>
           </label>
           <label class="form-label">
             {{ t('newConn.broadcastAddress') }}
-            <input
+            <AppInput
               v-model="form.broadcast_address_hex"
-              class="form-input hex-input"
-              type="text"
+              class="hex-input"
+              monospace
               maxlength="4"
               placeholder="FFFF"
             />
@@ -438,18 +451,13 @@ defineExpose({ openEditConnection, openNew })
           </details>
 
           <div class="proxy-section">
-            <label class="form-label form-checkbox">
-              <input type="checkbox" v-model="form.use_socks5" />
-              <span>{{ t('newConn.enableSocks5') }}</span>
-            </label>
+            <AppCheckbox v-model="form.use_socks5" :label="t('newConn.enableSocks5')" />
 
             <div v-if="form.use_socks5" class="proxy-fields">
               <label class="form-label">
                 {{ t('newConn.socks5ProxyAddress') }}
-                <input
+                <AppInput
                   v-model="form.socks5_proxy_address"
-                  class="form-input"
-                  type="text"
                   placeholder="127.0.0.1"
                 />
               </label>
@@ -465,44 +473,31 @@ defineExpose({ openEditConnection, openNew })
               </label>
               <label class="form-label">
                 {{ t('newConn.socks5Username') }}
-                <input
+                <AppInput
                   v-model="form.socks5_username"
-                  class="form-input"
-                  type="text"
                   autocomplete="off"
                 />
               </label>
               <label class="form-label">
                 {{ t('newConn.socks5Password') }}
-                <input
+                <AppInput
                   v-model="form.socks5_password"
-                  class="form-input"
                   type="password"
                   autocomplete="new-password"
                 />
                 <span class="form-hint">{{ t('newConn.socks5CredentialsHint') }}</span>
               </label>
-              <label class="form-label form-checkbox">
-                <input type="checkbox" v-model="form.socks5_remote_dns" />
-                <span>{{ t('newConn.socks5RemoteDns') }}</span>
-              </label>
+              <AppCheckbox v-model="form.socks5_remote_dns" :label="t('newConn.socks5RemoteDns')" />
               <span class="form-hint">{{ t('newConn.socks5RemoteDnsHint') }}</span>
             </div>
           </div>
 
-          <label class="form-label form-checkbox tls-toggle">
-            <input type="checkbox" v-model="form.use_tls" />
-            <span>{{ t('newConn.enableTls') }}</span>
-          </label>
+          <AppCheckbox v-model="form.use_tls" class="tls-toggle" :label="t('newConn.enableTls')" />
 
           <template v-if="form.use_tls">
             <label class="form-label">
               {{ t('newConn.tlsVersion') }}
-              <select v-model="form.tls_version" class="form-input">
-                <option value="auto">{{ t('newConn.tlsAuto') }}</option>
-                <option value="tls12_only">{{ t('newConn.tls12') }}</option>
-                <option value="tls13_only">{{ t('newConn.tls13') }}</option>
-              </select>
+              <AppSelect v-model="tlsVersionValue" :options="tlsVersionOptions" />
               <span v-if="form.tls_version === 'tls13_only' && isWindows" class="tls13-warn">
                 {{ t('newConn.tls13WinWarn') }}
               </span>
@@ -525,15 +520,13 @@ defineExpose({ openEditConnection, openNew })
               placeholder="/path/to/client.key"
               kind="private-key"
             />
-            <label class="form-label form-checkbox">
-              <input type="checkbox" v-model="form.accept_invalid_certs" />
-              <span>{{ t('newConn.acceptInvalidCerts') }}</span>
-            </label>
+            <AppCheckbox v-model="form.accept_invalid_certs" :label="t('newConn.acceptInvalidCerts')" />
           </template>
         </fieldset>
         <div class="modal-footer">
-          <button class="btn btn-secondary" :disabled="saving" @click="close">{{ t('common.cancel') }}</button>
-          <button class="btn btn-primary" :disabled="saving" @click="createConnection">{{ submitButtonLabel() }}</button>
+          <AppButton :disabled="saving" @click="close">{{ t('common.cancel') }}</AppButton>
+          <!-- .btn-primary 类保留给 newConnectionSocks5.spec 的按钮选择器。 -->
+          <AppButton variant="primary" class="btn-primary" :disabled="saving" @click="createConnection">{{ submitButtonLabel() }}</AppButton>
         </div>
       </div>
     </div>
@@ -552,20 +545,20 @@ defineExpose({ openEditConnection, openNew })
   z-index: 1000;
 }
 .modal-box {
-  background: var(--c-base);
-  border: 1px solid var(--c-surface1);
-  border-radius: 8px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   padding: 20px;
   min-width: 340px;
   max-height: 86vh;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
 }
 .modal-title {
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 600;
-  color: var(--c-text);
+  color: var(--text-primary);
   margin-bottom: 16px;
   flex: 0 0 auto;
 }
@@ -592,23 +585,25 @@ defineExpose({ openEditConnection, openNew })
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
 }
+/* 数字输入保持原生（v-model.number），观感对齐 AppInput。 */
 .form-input {
   padding: 6px 10px;
-  background: var(--c-surface0);
-  border: 1px solid var(--c-surface1);
-  border-radius: 4px;
-  color: var(--c-text);
-  font-size: 13px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--text-md);
 }
 .form-input:focus {
   outline: none;
-  border-color: var(--c-blue);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .form-hint {
   font-size: 11px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
   margin-top: 2px;
 }
 .tls13-warn {
@@ -616,17 +611,18 @@ defineExpose({ openEditConnection, openNew })
   padding: 6px 8px;
   font-size: 11px;
   line-height: 1.45;
-  color: var(--c-yellow, var(--c-text));
-  background: color-mix(in srgb, var(--c-yellow, var(--c-surface1)) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--c-yellow, var(--c-surface1)) 35%, transparent);
-  border-radius: 4px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+  border-radius: var(--radius-sm);
 }
+/* AppCheckbox 根元素是 label，类名透传后 border-top 生效。 */
 .tls-toggle {
   padding-top: 4px;
-  border-top: 1px solid var(--c-surface0);
+  border-top: 1px solid var(--border-subtle);
 }
 .proxy-section {
-  border-top: 1px solid var(--c-surface0);
+  border-top: 1px solid var(--border-subtle);
   padding-top: 8px;
 }
 .proxy-fields {
@@ -637,18 +633,18 @@ defineExpose({ openEditConnection, openNew })
   padding-left: 24px;
 }
 .proto-section {
-  border-top: 1px solid var(--c-surface0);
+  border-top: 1px solid var(--border-subtle);
   padding-top: 8px;
   margin-top: 4px;
 }
 .proto-summary {
   font-size: 12px;
-  color: var(--c-text);
+  color: var(--text-primary);
   cursor: pointer;
   padding: 2px 0;
   user-select: none;
 }
-.proto-summary:hover { color: var(--c-blue); }
+.proto-summary:hover { color: var(--accent); }
 .proto-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -659,10 +655,10 @@ defineExpose({ openEditConnection, openNew })
   margin-top: 8px;
   padding: 6px 8px;
   font-size: 11px;
-  color: var(--c-yellow, var(--c-text));
-  background: color-mix(in srgb, var(--c-yellow, var(--c-surface1)) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--c-yellow, var(--c-surface1)) 35%, transparent);
-  border-radius: 4px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+  border-radius: var(--radius-sm);
 }
 .proto-grid .form-label {
   flex-direction: column;
@@ -670,7 +666,7 @@ defineExpose({ openEditConnection, openNew })
 }
 .proto-grid .form-label > span {
   font-size: 11px;
-  color: var(--c-overlay0);
+  color: var(--text-muted);
 }
 .proto-grid .form-input {
   padding: 4px 8px;
@@ -687,35 +683,4 @@ defineExpose({ openEditConnection, openNew })
   -moz-appearance: textfield;
   appearance: textfield;
 }
-.form-checkbox {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  color: var(--c-text);
-  font-size: 13px;
-}
-.form-checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--c-blue);
-  cursor: pointer;
-}
-.btn {
-  padding: 7px 20px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-}
-.btn-primary {
-  background: var(--c-blue);
-  color: var(--c-base);
-}
-.btn-primary:hover { background: var(--c-sapphire); }
-.btn-secondary {
-  background: var(--c-surface1);
-  color: var(--c-text);
-}
-.btn-secondary:hover { background: var(--c-surface2); }
 </style>
