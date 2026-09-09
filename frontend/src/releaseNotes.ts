@@ -5,6 +5,7 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.18 新增 / Added: slave: 支持导入 JSON 定时改变点位 (#88)',
   "v1.15.17 新增：全部启动、全部停止，显示进度并汇总失败原因；支持输入完整路径加载配置",
   "v1.15.17 改进：工具栏按功能分组，保留一键启停，支持键盘导航和 800 像素窗口",
   "v1.15.17 修复：弹窗期间统一锁定冲突操作，切换服务器或站不会改变本次操作目标",
@@ -96,13 +97,9 @@ export const RELEASE_NOTES: string[] = [
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
   "zh-CN": [
-    "v1.15.17 新增：全部启动、全部停止，显示进度并汇总失败原因；支持输入完整路径加载配置",
-    "v1.15.17 改进：工具栏按功能分组，保留一键启停，支持键盘导航和 800 像素窗口",
-    "v1.15.17 修复：弹窗期间统一锁定冲突操作，切换服务器或站不会改变本次操作目标",
+    "v1.15.18 新增：支持导入 JSON，按定时规则改变从站点位值"
   ],
   "en-US": [
-    "v1.15.17 Added: start and stop all servers with progress and failure details, and load configuration by pasted path",
-    "v1.15.17 Changed: grouped toolbar menus with direct bulk controls, keyboard navigation, and support for 800-pixel windows",
-    "v1.15.17 Fixed: coordinate dialog workflows and preserve operation targets when selection changes",
-  ],
+    "v1.15.18 Added: import JSON to change slave point values on a schedule"
+  ]
 } as const
