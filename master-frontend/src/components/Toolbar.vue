@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { inject, ref, watch, onMounted, onBeforeUnmount, type Ref } from 'vue'
+import { computed, inject, ref, watch, onMounted, onBeforeUnmount, type Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { save, open } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { dialogKey } from '@shared/composables/useDialog'
 import type { showAlert as ShowAlert, showConfirm as ShowConfirm } from '@shared/composables/useDialog'
 import AboutDialog from '@shared/components/AboutDialog.vue'
-import AppIcon from '@shared/components/ui/AppIcon.vue'
+import ToolbarMenu from '@shared/components/ToolbarMenu.vue'
+import type { ToolbarMenuItem } from '@shared/components/toolbarMenu'
 import ControlDialog from './ControlDialog.vue'
 import NewConnectionModal from './NewConnectionModal.vue'
 import LangSwitch from '@shared/components/LangSwitch.vue'
@@ -52,55 +53,7 @@ async function manualCheckUpdate() {
   }
 }
 
-const broadcastMenuOpen = ref(false)
 const broadcastAddrLabel = ref('FFFF')
-
-// 总召唤改为"选 CA"交互:多 CA 连接点按钮弹出菜单(全部 CA / 各 CA),
-// 单 CA 连接直接发。connCAs 缓存当前连接的 CA 列表,用于按钮 ▾ 提示。
-const giMenuOpen = ref(false)
-const giCAs = ref<number[]>([])
-const giMenuConnectionId = ref<string | null>(null)
-// 计量召唤(C_CI)沿用与总召相同的"选 CA"交互:多 CA 弹菜单,单 CA 直发。
-const ccMenuOpen = ref(false)
-const ccCAs = ref<number[]>([])
-const ccMenuConnectionId = ref<string | null>(null)
-// 停止激活(COT=8)去激活也支持"选 CA":多 CA 弹菜单,单 CA 直发。
-const giDeactMenuOpen = ref(false)
-const giDeactCAs = ref<number[]>([])
-const giDeactMenuConnectionId = ref<string | null>(null)
-const ccDeactMenuOpen = ref(false)
-const ccDeactCAs = ref<number[]>([])
-const ccDeactMenuConnectionId = ref<string | null>(null)
-const connCAs = ref<number[]>([])
-
-// Dropdown menus are teleported to <body> so the toolbar's horizontal-scroll
-// container can't clip them. That means fixed-positioning them from the
-// trigger's viewport rect, captured the moment the menu opens.
-const giMenuPos = ref({ top: 0, left: 0 })
-const ccMenuPos = ref({ top: 0, left: 0 })
-const giDeactMenuPos = ref({ top: 0, left: 0 })
-const ccDeactMenuPos = ref({ top: 0, left: 0 })
-const broadcastMenuPos = ref({ top: 0, left: 0 })
-function anchorPos(el: HTMLElement) {
-  const r = el.getBoundingClientRect()
-  return { top: r.bottom + 2, left: r.left }
-}
-function toggleBroadcastMenu(e: MouseEvent) {
-  const wrap = (e.currentTarget as HTMLElement).closest('.split-btn') as HTMLElement | null
-  broadcastMenuPos.value = anchorPos(wrap ?? (e.currentTarget as HTMLElement))
-  broadcastMenuOpen.value = !broadcastMenuOpen.value
-}
-
-async function loadConnCAs() {
-  const connectionId = selectedConnectionId.value
-  if (!connectionId) { connCAs.value = []; return }
-  try {
-    const cas = await getConnCAs(connectionId)
-    if (cas !== null && selectedConnectionId.value === connectionId) connCAs.value = cas
-  } catch {
-    if (selectedConnectionId.value === connectionId) connCAs.value = []
-  }
-}
 
 async function loadBroadcastAddr() {
   const connectionId = selectedConnectionId.value
@@ -118,31 +71,6 @@ async function loadBroadcastAddr() {
     if (selectedConnectionId.value === connectionId) broadcastAddrLabel.value = 'FFFF'
   }
 }
-
-watch(selectedConnectionId, () => {
-  broadcastMenuOpen.value = false
-  giMenuOpen.value = false
-  giMenuConnectionId.value = null
-  giDeactMenuOpen.value = false
-  giDeactMenuConnectionId.value = null
-  ccMenuOpen.value = false
-  ccMenuConnectionId.value = null
-  ccDeactMenuOpen.value = false
-  ccDeactMenuConnectionId.value = null
-  void loadBroadcastAddr()
-  void loadConnCAs()
-}, { immediate: true })
-
-function closeBroadcastMenu(e: MouseEvent) {
-  const el = e.target as HTMLElement
-  if (!el.closest('.split-btn')) broadcastMenuOpen.value = false
-  if (!el.closest('.gi-btn-wrap')) giMenuOpen.value = false
-  if (!el.closest('.cc-btn-wrap')) ccMenuOpen.value = false
-  if (!el.closest('.gi-deact-wrap')) giDeactMenuOpen.value = false
-  if (!el.closest('.cc-deact-wrap')) ccDeactMenuOpen.value = false
-}
-onMounted(() => document.addEventListener('click', closeBroadcastMenu))
-onBeforeUnmount(() => document.removeEventListener('click', closeBroadcastMenu))
 
 const showAbout = ref(false)
 
@@ -267,32 +195,8 @@ async function deleteMaster() {
   }
 }
 
-// 点"总召唤":单 CA 连接直接发;多 CA 连接弹出菜单让用户选具体 CA 或全部。
-async function sendGI(e: MouseEvent) {
-  // Capture the anchor synchronously — `currentTarget` is nulled after the await.
-  const anchor = anchorPos(e.currentTarget as HTMLElement)
-  const connectionId = selectedConnectionId.value
-  if (!connectionId) return
-  try {
-    const cas = await getConnCAs(connectionId)
-    if (cas === null || selectedConnectionId.value !== connectionId) return
-    giCAs.value = cas
-    if (cas.length <= 1) {
-      await doGI(cas[0] ?? null, connectionId)
-    } else {
-      giMenuConnectionId.value = connectionId
-      giMenuPos.value = anchor
-      giMenuOpen.value = !giMenuOpen.value
-    }
-  } catch (e) {
-    if (selectedConnectionId.value === connectionId) await showAlert(String(e))
-  }
-}
-
 // 发送总召唤。ca 为具体公共地址;ca === null 表示对所有 CA 并发(菜单"全部 CA")。
 async function doGI(ca: number | null, connectionId: string | null) {
-  giMenuOpen.value = false
-  giMenuConnectionId.value = null
   if (!connectionId || selectedConnectionId.value !== connectionId) return
   try {
     if (ca === null) {
@@ -310,31 +214,8 @@ async function doGI(ca: number | null, connectionId: string | null) {
   }
 }
 
-// 停止激活(COT=8)总召唤:单 CA 直发,多 CA 弹菜单选具体 CA 或全部。
-async function sendGIDeactivation(e: MouseEvent) {
-  const anchor = anchorPos(e.currentTarget as HTMLElement)
-  const connectionId = selectedConnectionId.value
-  if (!connectionId) return
-  try {
-    const cas = await getConnCAs(connectionId)
-    if (cas === null || selectedConnectionId.value !== connectionId) return
-    giDeactCAs.value = cas
-    if (cas.length <= 1) {
-      await doGIDeactivation(cas[0] ?? null, connectionId)
-    } else {
-      giDeactMenuConnectionId.value = connectionId
-      giDeactMenuPos.value = anchor
-      giDeactMenuOpen.value = !giDeactMenuOpen.value
-    }
-  } catch (err) {
-    if (selectedConnectionId.value === connectionId) await showAlert(String(err))
-  }
-}
-
 // 发送停止激活(COT=8)总召唤。ca === null 表示对所有 CA 并发取消进行中的 GI。
 async function doGIDeactivation(ca: number | null, connectionId: string | null) {
-  giDeactMenuOpen.value = false
-  giDeactMenuConnectionId.value = null
   if (!connectionId || selectedConnectionId.value !== connectionId) return
   try {
     if (ca === null) {
@@ -359,32 +240,8 @@ async function sendClockSync() {
   }
 }
 
-// 点"计量召唤":单 CA 连接直接发;多 CA 连接弹出菜单让用户选具体 CA 或全部。
-async function sendCounterRead(e: MouseEvent) {
-  // Capture the anchor synchronously — `currentTarget` is nulled after the await.
-  const anchor = anchorPos(e.currentTarget as HTMLElement)
-  const connectionId = selectedConnectionId.value
-  if (!connectionId) return
-  try {
-    const cas = await getConnCAs(connectionId)
-    if (cas === null || selectedConnectionId.value !== connectionId) return
-    ccCAs.value = cas
-    if (cas.length <= 1) {
-      await doCounterRead(cas[0] ?? null, connectionId)
-    } else {
-      ccMenuConnectionId.value = connectionId
-      ccMenuPos.value = anchor
-      ccMenuOpen.value = !ccMenuOpen.value
-    }
-  } catch (e) {
-    if (selectedConnectionId.value === connectionId) await showAlert(String(e))
-  }
-}
-
 // 发送计量召唤。ca 为具体公共地址;ca === null 表示对所有 CA 并发(菜单"全部 CA")。
 async function doCounterRead(ca: number | null, connectionId: string | null) {
-  ccMenuOpen.value = false
-  ccMenuConnectionId.value = null
   if (!connectionId || selectedConnectionId.value !== connectionId) return
   try {
     if (ca === null) {
@@ -402,31 +259,8 @@ async function doCounterRead(ca: number | null, connectionId: string | null) {
   }
 }
 
-// 停止激活(COT=8)计数量召唤:单 CA 直发,多 CA 弹菜单选具体 CA 或全部。
-async function sendCounterReadDeactivation(e: MouseEvent) {
-  const anchor = anchorPos(e.currentTarget as HTMLElement)
-  const connectionId = selectedConnectionId.value
-  if (!connectionId) return
-  try {
-    const cas = await getConnCAs(connectionId)
-    if (cas === null || selectedConnectionId.value !== connectionId) return
-    ccDeactCAs.value = cas
-    if (cas.length <= 1) {
-      await doCounterReadDeactivation(cas[0] ?? null, connectionId)
-    } else {
-      ccDeactMenuConnectionId.value = connectionId
-      ccDeactMenuPos.value = anchor
-      ccDeactMenuOpen.value = !ccDeactMenuOpen.value
-    }
-  } catch (err) {
-    if (selectedConnectionId.value === connectionId) await showAlert(String(err))
-  }
-}
-
 // 发送停止激活(COT=8)计数量召唤。ca === null 表示对所有 CA 并发取消进行中的累计量扫描。
 async function doCounterReadDeactivation(ca: number | null, connectionId: string | null) {
-  ccDeactMenuOpen.value = false
-  ccDeactMenuConnectionId.value = null
   if (!connectionId || selectedConnectionId.value !== connectionId) return
   try {
     if (ca === null) {
@@ -485,8 +319,6 @@ async function sendBroadcastGI() {
     refreshData()
   } catch (e) {
     if (selectedConnectionId.value === connectionId) await showAlert(String(e))
-  } finally {
-    broadcastMenuOpen.value = false
   }
 }
 
@@ -499,8 +331,6 @@ async function sendBroadcastCounterRead() {
     refreshData()
   } catch (e) {
     if (selectedConnectionId.value === connectionId) await showAlert(String(e))
-  } finally {
-    broadcastMenuOpen.value = false
   }
 }
 
@@ -512,8 +342,6 @@ async function sendBroadcastGIDeactivation() {
     if (selectedConnectionId.value !== connectionId) return
   } catch (e) {
     if (selectedConnectionId.value === connectionId) await showAlert(String(e))
-  } finally {
-    broadcastMenuOpen.value = false
   }
 }
 
@@ -525,186 +353,142 @@ async function sendBroadcastCounterReadDeactivation() {
     if (selectedConnectionId.value !== connectionId) return
   } catch (e) {
     if (selectedConnectionId.value === connectionId) await showAlert(String(e))
-  } finally {
-    broadcastMenuOpen.value = false
   }
 }
+
+type CACommand = 'gi' | 'stop-gi' | 'counter' | 'stop-counter'
+const caActions = { gi: doGI, 'stop-gi': doGIDeactivation, counter: doCounterRead, 'stop-counter': doCounterReadDeactivation }
+const caLabels = { gi: 'toolbar.sendGI', 'stop-gi': 'toolbar.deactivateGI', counter: 'toolbar.counterRead', 'stop-counter': 'toolbar.deactivateCounterRead' } as const
+const openMenu = ref<string | null>(null)
+const loadingCAs = ref(false)
+const caSelection = ref<{ menu: string; command: CACommand; connectionId: string; cas: number[] } | null>(null)
+let lookupVersion = 0
+function closeMenu() {
+  lookupVersion++
+  openMenu.value = null
+  caSelection.value = null
+  loadingCAs.value = false
+}
+function toggleMenu(id: string) {
+  const wasOpen = openMenu.value === id
+  closeMenu()
+  if (!wasOpen) openMenu.value = id
+}
+function backToCommands() {
+  lookupVersion++
+  caSelection.value = null
+  loadingCAs.value = false
+}
+async function requestCAs(command: CACommand, menu = 'commands') {
+  const connectionId = selectedConnectionId.value
+  if (menu === 'quick-gi' && openMenu.value === menu) { closeMenu(); return }
+  if (!connectionId || !isConnected() || loadingCAs.value) return
+  openMenu.value = menu
+  caSelection.value = null
+  loadingCAs.value = true
+  const version = ++lookupVersion
+  try {
+    const cas = await getConnCAs(connectionId)
+    if (version !== lookupVersion || cas === null || selectedConnectionId.value !== connectionId || !isConnected()) return
+    if (cas.length <= 1) {
+      closeMenu()
+      await caActions[command](cas[0] ?? null, connectionId)
+    } else {
+      caSelection.value = { menu, command, connectionId, cas }
+    }
+  } catch (error) {
+    if (version === lookupVersion) { closeMenu(); await showAlert(String(error)) }
+  } finally {
+    if (version === lookupVersion) loadingCAs.value = false
+  }
+}
+const caItems = computed<ToolbarMenuItem[]>(() => {
+  const selection = caSelection.value
+  if (!selection) return []
+  return [null, ...selection.cas].map(ca => ({
+    id: ca === null ? 'ca-all' : `ca-${ca}`,
+    label: ca === null ? t('toolbar.giAllCAs') : `CA ${ca}`,
+    action: () => caActions[selection.command](ca, selection.connectionId),
+  }))
+})
+const unavailable = computed(() => !hasConnection() || !isConnected())
+const menus = computed(() => [
+  { id: 'config', label: t('toolbar.menuConfig'), items: [
+    { id: 'open-config', label: t('toolbar.openConfig'), action: openConfig },
+    { id: 'save-config', label: t('toolbar.saveConfig'), action: saveConfig },
+  ] },
+  { id: 'connection', label: t('toolbar.menuConnection'), items: [
+    { id: 'new-connection', label: t('toolbar.newConnection'), action: openNewConnection },
+    { id: 'edit-connection', label: t('toolbar.editConnection'), disabled: !hasConnection(), action: editSelectedConnection },
+    { id: 'delete-connection', label: t('toolbar.delete'), disabled: !hasConnection(), danger: true, separator: true, action: deleteMaster },
+  ] },
+  { id: 'commands', label: t('toolbar.menuCommands'), items: [
+    ...(['gi', 'stop-gi', 'counter', 'stop-counter'] as CACommand[]).map(command => ({
+      id: command, label: t(caLabels[command]), disabled: unavailable.value, keepOpen: true,
+      separator: command === 'counter', action: () => requestCAs(command),
+    })),
+    { id: 'clock-sync', label: t('toolbar.clockSync'), disabled: unavailable.value, separator: true, action: sendClockSync },
+    { id: 'custom-control', label: t('toolbar.customControl'), disabled: unavailable.value, action: openCustomControl },
+  ] },
+  { id: 'broadcast', label: t('toolbar.broadcast'), items: [
+    { id: 'broadcast-gi', label: t('toolbar.broadcastGi'), disabled: unavailable.value, action: sendBroadcastGI },
+    { id: 'broadcast-counter', label: t('toolbar.broadcastCounterRead'), disabled: unavailable.value, action: sendBroadcastCounterRead },
+    { id: 'broadcast-stop-gi', label: t('toolbar.broadcastGiDeactivation'), disabled: unavailable.value, separator: true, action: sendBroadcastGIDeactivation },
+    { id: 'broadcast-stop-counter', label: t('toolbar.broadcastCounterReadDeactivation'), disabled: unavailable.value, action: sendBroadcastCounterReadDeactivation },
+  ] },
+  { id: 'tools', label: t('toolbar.menuTools'), items: [
+    { id: 'parse-frame', label: t('toolbar.parseFrame'), action: () => openParseFrame() },
+  ] },
+])
+const helpItems = computed(() => [
+  { id: 'check-update', label: updateChecking.value ? t('toolbar.checkingUpdate') : t('toolbar.checkUpdate'), disabled: updateChecking.value, busy: updateChecking.value, action: manualCheckUpdate },
+  { id: 'about', label: t('toolbar.about'), action: () => { showAbout.value = true } },
+])
+function menuHeading(id: string) {
+  if (openMenu.value === id && loadingCAs.value) return t('common.loading')
+  if (caSelection.value?.menu === id) return t(caLabels[caSelection.value.command])
+  if (id === 'broadcast') return `${t('toolbar.broadcastAddressLabel')}: 0x${broadcastAddrLabel.value}`
+  return undefined
+}
+// Resizing can hide the GI shortcut; never leave its popup without a visible anchor.
+onMounted(() => window.addEventListener('resize', closeMenu))
+onBeforeUnmount(() => window.removeEventListener('resize', closeMenu))
+watch([selectedConnectionId, selectedConnectionState], () => {
+  closeMenu()
+  void loadBroadcastAddr()
+}, { immediate: true })
+
 </script>
 
 <template>
-  <div class="toolbar">
+  <div class="toolbar master-toolbar">
     <div class="toolbar-main">
-    <div class="toolbar-group">
-      <button class="toolbar-btn" @click="openNewConnection">
-        <span class="btn-icon"><AppIcon name="plus" :size="12" /></span> {{ t('toolbar.newConnection') }}
-      </button>
-    </div>
-
-    <div class="toolbar-divider"></div>
-
-    <div class="toolbar-group">
-      <button class="toolbar-btn btn-start" :disabled="!hasConnection() || isConnected()" @click="connectMaster">
-        {{ t('toolbar.connect') }}
-      </button>
-      <button class="toolbar-btn btn-stop" :disabled="!hasConnection() || !isConnected()" @click="disconnectMaster">
-        {{ t('toolbar.disconnect') }}
-      </button>
-      <button
-        class="toolbar-btn btn-edit"
-        :disabled="!hasConnection()"
-        :title="t('toolbar.editConnection')"
-        @click="editSelectedConnection"
-      >
-        {{ t('toolbar.editConnection') }}
-      </button>
-      <button class="toolbar-btn btn-close" :disabled="!hasConnection()" @click="deleteMaster">
-        {{ t('toolbar.delete') }}
-      </button>
-    </div>
-
-    <div class="toolbar-divider"></div>
-
-    <div class="toolbar-group">
-      <div class="gi-btn-wrap">
-        <button class="toolbar-btn" :disabled="!hasConnection() || !isConnected()" @click="sendGI">
-          {{ t('toolbar.sendGI') }}<span v-if="connCAs.length > 1" class="gi-caret"><AppIcon name="chevron-down" :size="10" /></span>
+      <ToolbarMenu v-for="menu in menus" :key="menu.id" :id="menu.id" :label="menu.label"
+        :items="caSelection?.menu === menu.id ? caItems : menu.items" :open="openMenu === menu.id"
+        :heading="menuHeading(menu.id)" :loading="openMenu === menu.id && loadingCAs"
+        :back-label="caSelection?.menu === menu.id ? t('toolbar.menuCommands') : undefined"
+        @toggle="toggleMenu(menu.id)" @close="closeMenu" @back="backToCommands" />
+      <div class="toolbar-divider" aria-hidden="true"></div>
+      <div class="toolbar-group" role="group" :aria-label="t('toolbar.menuConnection')">
+        <button type="button" class="toolbar-btn btn-start" data-testid="connect"
+          :disabled="!hasConnection() || isConnected() || selectedConnectionState === 'Connecting'" @click="connectMaster">
+          {{ t('toolbar.connect') }}
         </button>
-        <Teleport to="body">
-          <ul
-            v-if="giMenuOpen"
-            class="split-menu floating"
-            :style="{ top: giMenuPos.top + 'px', left: giMenuPos.left + 'px' }"
-            @click.stop
-          >
-            <li @click="doGI(null, giMenuConnectionId)">{{ t('toolbar.giAllCAs') }}</li>
-            <li v-for="ca in giCAs" :key="ca" @click="doGI(ca, giMenuConnectionId)">CA {{ ca }}</li>
-          </ul>
-        </Teleport>
+        <button type="button" class="toolbar-btn btn-stop" data-testid="disconnect"
+          :disabled="unavailable" @click="disconnectMaster">{{ t('toolbar.disconnect') }}</button>
       </div>
-      <div class="gi-btn-wrap gi-deact-wrap">
-        <button
-          class="toolbar-btn"
-          :disabled="!hasConnection() || !isConnected()"
-          :title="t('toolbar.deactivateGI')"
-          @click="sendGIDeactivation"
-        >
-          {{ t('toolbar.deactivateGI') }}<span v-if="connCAs.length > 1" class="gi-caret"><AppIcon name="chevron-down" :size="10" /></span>
-        </button>
-        <Teleport to="body">
-          <ul
-            v-if="giDeactMenuOpen"
-            class="split-menu floating"
-            :style="{ top: giDeactMenuPos.top + 'px', left: giDeactMenuPos.left + 'px' }"
-            @click.stop
-          >
-            <li @click="doGIDeactivation(null, giDeactMenuConnectionId)">{{ t('toolbar.giAllCAs') }}</li>
-            <li v-for="ca in giDeactCAs" :key="ca" @click="doGIDeactivation(ca, giDeactMenuConnectionId)">CA {{ ca }}</li>
-          </ul>
-        </Teleport>
+      <div class="gi-shortcut">
+        <ToolbarMenu id="quick-gi" :label="t('toolbar.sendGI')" :items="caItems" :disabled="unavailable"
+          :open="openMenu === 'quick-gi'" :loading="openMenu === 'quick-gi' && loadingCAs"
+          :heading="menuHeading('quick-gi')" @toggle="requestCAs('gi', 'quick-gi')" @close="closeMenu" />
       </div>
-      <div class="split-btn" :class="{ disabled: !hasConnection() || !isConnected() }">
-        <button
-          class="toolbar-btn"
-          :disabled="!hasConnection() || !isConnected()"
-          :title="`${t('toolbar.broadcastAddressLabel')}: 0x${broadcastAddrLabel}`"
-          @click="sendBroadcastGI"
-        >
-          {{ t('toolbar.broadcast') }}
-        </button>
-        <button
-          class="toolbar-btn split-toggle"
-          :disabled="!hasConnection() || !isConnected()"
-          @click="toggleBroadcastMenu"
-        ><AppIcon name="chevron-down" :size="12" /></button>
-        <Teleport to="body">
-          <ul
-            v-if="broadcastMenuOpen"
-            class="split-menu floating"
-            :style="{ top: broadcastMenuPos.top + 'px', left: broadcastMenuPos.left + 'px' }"
-            @click.stop
-          >
-            <li @click="sendBroadcastGI">{{ t('toolbar.broadcastGi') }}</li>
-            <li @click="sendBroadcastCounterRead">{{ t('toolbar.broadcastCounterRead') }}</li>
-            <li @click="sendBroadcastGIDeactivation">{{ t('toolbar.broadcastGiDeactivation') }}</li>
-            <li @click="sendBroadcastCounterReadDeactivation">{{ t('toolbar.broadcastCounterReadDeactivation') }}</li>
-          </ul>
-        </Teleport>
-      </div>
-      <button class="toolbar-btn" :disabled="!hasConnection() || !isConnected()" @click="sendClockSync">
-        {{ t('toolbar.clockSync') }}
-      </button>
-      <div class="gi-btn-wrap cc-btn-wrap">
-        <button class="toolbar-btn" :disabled="!hasConnection() || !isConnected()" @click="sendCounterRead">
-          {{ t('toolbar.counterRead') }}<span v-if="connCAs.length > 1" class="gi-caret"><AppIcon name="chevron-down" :size="10" /></span>
-        </button>
-        <Teleport to="body">
-          <ul
-            v-if="ccMenuOpen"
-            class="split-menu floating"
-            :style="{ top: ccMenuPos.top + 'px', left: ccMenuPos.left + 'px' }"
-            @click.stop
-          >
-            <li @click="doCounterRead(null, ccMenuConnectionId)">{{ t('toolbar.giAllCAs') }}</li>
-            <li v-for="ca in ccCAs" :key="ca" @click="doCounterRead(ca, ccMenuConnectionId)">CA {{ ca }}</li>
-          </ul>
-        </Teleport>
-      </div>
-      <div class="gi-btn-wrap cc-btn-wrap cc-deact-wrap">
-        <button
-          class="toolbar-btn"
-          :disabled="!hasConnection() || !isConnected()"
-          :title="t('toolbar.deactivateCounterRead')"
-          @click="sendCounterReadDeactivation"
-        >
-          {{ t('toolbar.deactivateCounterRead') }}<span v-if="connCAs.length > 1" class="gi-caret"><AppIcon name="chevron-down" :size="10" /></span>
-        </button>
-        <Teleport to="body">
-          <ul
-            v-if="ccDeactMenuOpen"
-            class="split-menu floating"
-            :style="{ top: ccDeactMenuPos.top + 'px', left: ccDeactMenuPos.left + 'px' }"
-            @click.stop
-          >
-            <li @click="doCounterReadDeactivation(null, ccDeactMenuConnectionId)">{{ t('toolbar.giAllCAs') }}</li>
-            <li v-for="ca in ccDeactCAs" :key="ca" @click="doCounterReadDeactivation(ca, ccDeactMenuConnectionId)">CA {{ ca }}</li>
-          </ul>
-        </Teleport>
-      </div>
-      <button class="toolbar-btn" :disabled="!hasConnection() || !isConnected()" @click="openCustomControl">
-        {{ t('toolbar.customControl') }}
-      </button>
-    </div>
-
-    <div class="toolbar-divider"></div>
-
-    <div class="toolbar-group">
-      <button class="toolbar-btn" @click="openParseFrame()">
-        {{ t('toolbar.parseFrame') }}
-      </button>
-    </div>
-
-    <div class="toolbar-divider"></div>
-
-    <div class="toolbar-group">
-      <button class="toolbar-btn" @click="saveConfig">
-        {{ t('toolbar.saveConfig') }}
-      </button>
-      <button class="toolbar-btn" data-testid="open-config" @click="openConfig">
-        {{ t('toolbar.openConfig') }}
-      </button>
-    </div>
-
     </div>
     <div class="toolbar-aside">
-      <button class="toolbar-btn" :disabled="updateChecking" @click="manualCheckUpdate">
-        {{ updateChecking ? t('toolbar.checkingUpdate') : t('toolbar.checkUpdate') }}
-      </button>
+      <ToolbarMenu id="help" :label="t('toolbar.menuHelp')" :items="helpItems" :open="openMenu === 'help'"
+        @toggle="toggleMenu('help')" @close="closeMenu" />
       <LangSwitch />
       <ThemeSwitch />
       <VersionBadge />
-      <button class="toolbar-title as-button" @click="showAbout = true" :title="t('toolbar.about')">
-        {{ t('toolbar.appTitle') }}
-      </button>
     </div>
   </div>
 
@@ -727,31 +511,12 @@ async function sendBroadcastCounterReadDeactivation() {
 </template>
 
 <style scoped>
-/* Common toolbar chrome (.toolbar, .toolbar-btn, .toolbar-divider, .toolbar-title …)
-   lives in @shared/styles/toolbar.css so master and slave stay identical.
-   Only master-specific split-button / dropdown styles remain here. */
-
-.gi-btn-wrap { position: relative; display: inline-flex; }
-.gi-caret { margin-left: 2px; display: inline-flex; align-items: center; opacity: 0.7; }
-
-.split-btn { position: relative; display: inline-flex; }
-.split-btn .split-toggle { padding: 0 6px; min-width: 0; }
-.split-menu {
-  position: absolute; top: 100%; left: 0; z-index: var(--z-dropdown);
-  list-style: none; margin: 0; padding: 4px 0;
-  background: var(--bg-raised);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
-  min-width: 160px;
-}
-/* Teleported to <body>; positioned from the trigger's viewport rect. */
-.split-menu.floating {
-  position: fixed;
-}
-.split-menu li {
-  padding: 6px 12px; cursor: pointer; white-space: nowrap;
-  font-size: var(--text-sm); color: var(--text-primary);
-}
-.split-menu li:hover { background: var(--bg-hover); }
-
+.master-toolbar { min-height: 42px; height: auto; padding-block: 5px; gap: 8px; flex-wrap: wrap; }
+.master-toolbar .toolbar-main { overflow: visible; flex-wrap: wrap; row-gap: 4px; }
+.master-toolbar :deep(.toolbar-btn) { padding: 5px 7px; }
+.master-toolbar :deep(.toolbar-btn:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.master-toolbar .btn-start:not(:disabled) { background: color-mix(in srgb, var(--success) 14%, transparent); }
+.master-toolbar .toolbar-aside { margin-left: auto; }
+.gi-shortcut { flex: none; }
+@media (max-width: 1050px) { .gi-shortcut { display: none; } }
 </style>

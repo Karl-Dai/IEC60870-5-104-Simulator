@@ -147,6 +147,16 @@ export async function invoke<T>(command: string, args?: InvokeArgs): Promise<T> 
       return [] as T
     case 'check_for_update':
       return null as T
+    // Protocol actions are recorded above; UI-only mode never opens a socket.
+    case 'send_interrogation':
+    case 'send_interrogation_deactivation':
+    case 'send_counter_read':
+    case 'send_counter_read_deactivation':
+    case 'send_clock_sync':
+    case 'send_broadcast_gi':
+    case 'send_broadcast_counter_read':
+    case 'send_broadcast_gi_deactivation':
+    case 'send_broadcast_counter_read_deactivation':
     case 'set_logging_enabled':
     case 'clear_communication_logs':
     case 'save_logs_csv':

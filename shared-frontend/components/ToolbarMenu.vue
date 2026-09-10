@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import type { ToolbarMenuItem } from './toolbarMenu'
+
 const props = defineProps<{
   id: string
   label: string
   open: boolean
   disabled?: boolean
-  items: Array<{ id: string; label: string; title?: string; disabled?: boolean; busy?: boolean; action: () => unknown }>
+  items: ToolbarMenuItem[]
+  heading?: string
+  backLabel?: string
+  loading?: boolean
 }>()
-const emit = defineEmits<{ toggle: []; close: [] }>()
+const emit = defineEmits<{ toggle: []; close: []; back: [] }>()
 const trigger = ref<HTMLButtonElement | null>(null)
 const menu = ref<HTMLDivElement | null>(null)
 const position = ref({ left: '8px', top: '42px' })
@@ -31,6 +36,7 @@ function close(restoreFocus = false) {
 }
 let focusLast = false
 function openFromKeyboard(event: KeyboardEvent) {
+  if (event.key === 'Escape' && props.open) { event.preventDefault(); close(true); return }
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
   event.preventDefault()
   focusLast = event.key === 'ArrowUp'
@@ -42,6 +48,7 @@ function openFromKeyboard(event: KeyboardEvent) {
   }
 }
 function menuKeydown(event: KeyboardEvent) {
+  if (event.key === 'ArrowLeft' && props.backLabel) { event.preventDefault(); emit('back'); return }
   if (event.key === 'Escape') { event.preventDefault(); close(true); return }
   if (event.key === 'Tab') { close(true); return }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
@@ -54,8 +61,8 @@ function menuKeydown(event: KeyboardEvent) {
   items[index]?.focus()
 }
 function choose(item: typeof props.items[number]) {
-  if (item.disabled || props.disabled) return
-  close(true)
+  if (item.disabled || props.disabled || props.loading) return
+  if (!item.keepOpen) close(true)
   void item.action()
 }
 function outside(event: Event) {
@@ -71,6 +78,12 @@ watch(() => props.open, async open => {
     items[focusLast ? items.length - 1 : 0]?.focus()
     focusLast = false
   }
+})
+watch(() => [props.heading, props.loading], async () => {
+  if (!props.open) return
+  await nextTick()
+  positionMenu()
+  enabledItems()[0]?.focus()
 })
 watch(() => props.disabled, disabled => { if (disabled && props.open) close() })
 onMounted(() => {
@@ -95,10 +108,14 @@ onBeforeUnmount(() => {
   </button>
   <Teleport to="body">
     <div v-show="open" ref="menu" class="toolbar-menu" :id="`${id}-menu`" role="menu"
-      :aria-labelledby="`${id}-trigger`" :style="position" @keydown="menuKeydown">
+      :aria-labelledby="`${id}-trigger`" :aria-busy="loading" :style="position" @keydown="menuKeydown">
+      <button v-if="backLabel" type="button" role="menuitem" tabindex="-1" class="menu-back" :aria-label="backLabel" @click="emit('back')">
+        <span aria-hidden="true">←</span> {{ backLabel }}
+      </button>
+      <div v-if="heading" class="menu-heading" role="presentation">{{ heading }}</div>
       <button v-for="item in items" :key="item.id" type="button" role="menuitem" tabindex="-1"
-        :data-testid="item.id" :disabled="disabled || item.disabled" :title="item.title"
-        :aria-busy="item.busy" @click="choose(item)">{{ item.label }}</button>
+        :data-testid="item.id" :class="{ danger: item.danger, separated: item.separator }" :disabled="disabled || loading || item.disabled" :title="item.title"
+        :aria-busy="item.busy" @click="choose(item)">{{ item.label }}<span v-if="item.keepOpen" class="submenu-caret" aria-hidden="true">›</span></button>
     </div>
   </Teleport>
 </template>
@@ -114,10 +131,15 @@ onBeforeUnmount(() => {
   background: var(--c-base); color: var(--c-text); box-shadow: 0 6px 18px rgb(0 0 0 / 28%);
 }
 .toolbar-menu button {
-  display: block; width: 100%; text-align: left; background: transparent; color: inherit;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; text-align: left; background: transparent; color: inherit;
   border: 0; border-radius: 3px; padding: 8px 12px; font: inherit; font-size: 12px; cursor: pointer;
 }
 .toolbar-menu button:hover:not(:disabled), .toolbar-menu button:focus-visible { background: var(--c-surface0); }
 .toolbar-menu button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .toolbar-menu button:disabled { opacity: .4; cursor: default; }
+.menu-heading { padding: 7px 12px; color: var(--text-muted); font-size: 11px; }
+.toolbar-menu button.danger:not(:disabled) { color: var(--c-red); }
+.toolbar-menu button.separated { border-top: 1px solid var(--border-subtle); border-radius: 0; margin-top: 4px; padding-top: 10px; }
+.toolbar-menu .menu-back { justify-content: flex-start; gap: 8px; }
+.submenu-caret { color: var(--text-muted); }
 </style>

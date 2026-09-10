@@ -14,6 +14,12 @@ export type DictShape = {
     privateKeyFiles: string
   }
   toolbar: {
+    menuConfig: string
+    menuConnection: string
+    menuCommands: string
+    menuTools: string
+    menuHelp: string
+
     newConnection: string
     connect: string
     disconnect: string
@@ -379,6 +385,12 @@ const dict: DictShape = {
     privateKeyFiles: '私钥文件',
   },
   toolbar: {
+    menuConfig: '配置',
+    menuConnection: '连接',
+    menuCommands: '召唤',
+    menuTools: '工具',
+    menuHelp: '帮助',
+
     newConnection: '新建连接',
     connect: '连接',
     disconnect: '断开',

@@ -16,6 +16,12 @@ const dict: DictShape = {
     privateKeyFiles: 'Private key files',
   },
   toolbar: {
+    menuConfig: 'File',
+    menuConnection: 'Connection',
+    menuCommands: 'Commands',
+    menuTools: 'Tools',
+    menuHelp: 'Help',
+
     newConnection: 'New Connection',
     connect: 'Connect',
     disconnect: 'Disconnect',

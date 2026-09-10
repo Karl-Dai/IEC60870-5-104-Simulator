@@ -62,8 +62,8 @@ watch(logHeight, value => {
 })
 
 const gridRows = computed(() => {
-  if (!logExpanded.value) return '42px 1fr 0 32px'
-  return `42px 1fr 4px ${logHeight.value}px`
+  if (!logExpanded.value) return 'auto 1fr 0 32px'
+  return `auto 1fr 4px ${logHeight.value}px`
 })
 
 // Provide shared state to children
@@ -309,7 +309,7 @@ provide('resetWorkspaceView', resetWorkspaceView)
 .app-layout {
   display: grid;
   grid-template-columns: var(--tree-w, 240px) 4px 1fr 4px var(--panel-w, 280px);
-  grid-template-rows: 42px 1fr 0 32px;
+  grid-template-rows: auto 1fr 0 32px;
   grid-template-areas:
     "toolbar toolbar toolbar toolbar toolbar"
     "tree    sp-l    content sp-r    panel"

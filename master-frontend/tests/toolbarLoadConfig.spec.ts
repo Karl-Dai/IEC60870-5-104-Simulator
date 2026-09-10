@@ -2,7 +2,7 @@
 // previous selection and component caches must be discarded only after the
 // backend accepts the file, and before the new tree/data are refreshed.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, DOMWrapper } from '@vue/test-utils'
 import { defineComponent, nextTick, ref } from 'vue'
 import { dialogKey } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
@@ -41,6 +41,7 @@ function mountToolbar(
   selectedConnectionState = ref('Disconnected'),
 ) {
   return mount(Toolbar, {
+    attachTo: document.body,
     global: {
       provide: {
         selectedConnectionId,
@@ -84,7 +85,8 @@ describe('Toolbar full-workspace config loading', () => {
     openMock.mockResolvedValue('/tmp/master.json')
     const wrapper = mountToolbar()
 
-    await wrapper.find('[data-testid="open-config"]').trigger('click')
+    await wrapper.find('[data-testid="menu-config"]').trigger('click')
+    await new DOMWrapper(document.querySelector('[data-testid="open-config"]')!).trigger('click')
     await flushPromises()
 
     expect(invokeMock).toHaveBeenCalledWith('load_config', { path: '/tmp/master.json' })
@@ -103,7 +105,8 @@ describe('Toolbar full-workspace config loading', () => {
     openMock.mockResolvedValue(null)
     const wrapper = mountToolbar()
 
-    await wrapper.find('[data-testid="open-config"]').trigger('click')
+    await wrapper.find('[data-testid="menu-config"]').trigger('click')
+    await new DOMWrapper(document.querySelector('[data-testid="open-config"]')!).trigger('click')
     await flushPromises()
 
     expect(invokeMock).not.toHaveBeenCalledWith('load_config', expect.anything())
@@ -118,7 +121,8 @@ describe('Toolbar full-workspace config loading', () => {
     invokeMock.mockRejectedValueOnce(new Error('wrong app'))
     const wrapper = mountToolbar()
 
-    await wrapper.find('[data-testid="open-config"]').trigger('click')
+    await wrapper.find('[data-testid="menu-config"]').trigger('click')
+    await new DOMWrapper(document.querySelector('[data-testid="open-config"]')!).trigger('click')
     await flushPromises()
 
     expect(resetWorkspaceView).not.toHaveBeenCalled()
@@ -135,7 +139,8 @@ describe('Toolbar connection actions across workspace replacement', () => {
     const wrapper = mountToolbar(selectedConnectionId, ref('Connected'))
     await nextTick()
 
-    const editButton = wrapper.find('.btn-edit')
+    await wrapper.find('[data-testid="menu-connection"]').trigger('click')
+    const editButton = new DOMWrapper(document.querySelector('[data-testid="edit-connection"]')!)
     expect(editButton.exists()).toBe(true)
     expect(editButton.attributes('disabled')).toBeUndefined()
     await editButton.trigger('click')
@@ -210,7 +215,7 @@ describe('Toolbar connection actions across workspace replacement', () => {
       return pendingLookup
     })
 
-    await wrapper.find('.gi-btn-wrap > .toolbar-btn').trigger('click')
+    await wrapper.find('[data-testid="menu-quick-gi"]').trigger('click')
     selectedConnectionId.value = null
     selectedConnectionState.value = 'Disconnected'
     await nextTick()
@@ -225,4 +230,148 @@ describe('Toolbar connection actions across workspace replacement', () => {
     expect(showAlert).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+})
+
+const menuItem = (id: string) => new DOMWrapper(document.querySelector(`[data-testid="${id}"]`)!)
+function connectedToolbar(cas = [1, 7]) {
+  const id = ref<string | null>('selected')
+  const state = ref('Connected')
+  invokeMock.mockImplementation((command: string) => command === 'list_connections'
+    ? Promise.resolve([{ id: 'selected', common_addresses: cas, broadcast_address: 0xFF00 }])
+    : Promise.resolve())
+  return { wrapper: mountToolbar(id, state), id, state }
+}
+
+describe('Master grouped command menus', () => {
+  it('keeps one menu open, supports keyboard navigation, and restores focus', async () => {
+    const { wrapper } = connectedToolbar()
+    await flushPromises()
+    await menuItem('menu-config').trigger('keydown', { key: 'ArrowDown' })
+    await flushPromises()
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('open-config')
+    await menuItem('open-config').trigger('keydown', { key: 'End' })
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('save-config')
+    await menuItem('save-config').trigger('keydown', { key: 'Escape' })
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('menu-config')
+    expect(menuItem('open-config').isVisible()).toBe(false)
+    await menuItem('menu-connection').trigger('click')
+    await menuItem('menu-broadcast').trigger('click')
+    await flushPromises()
+    expect(menuItem('new-connection').isVisible()).toBe(false)
+    expect(menuItem('broadcast-gi').isVisible()).toBe(true)
+    expect(document.querySelector('#broadcast-menu')?.textContent).toContain('0xFF00')
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    await flushPromises()
+    expect(menuItem('broadcast-gi').isVisible()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['gi', 'send_interrogation'],
+    ['stop-gi', 'send_interrogation_deactivation'],
+    ['counter', 'send_counter_read'],
+    ['stop-counter', 'send_counter_read_deactivation'],
+  ])('selects a specific CA for %s without sending to another CA', async (item, command) => {
+    const { wrapper } = connectedToolbar()
+    await flushPromises()
+    await menuItem('menu-commands').trigger('click')
+    await menuItem(item).trigger('click')
+    await flushPromises()
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === command)).toEqual([])
+    expect(menuItem('ca-7').isVisible()).toBe(true)
+    await menuItem('ca-7').trigger('click')
+    await flushPromises()
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === command)).toEqual([
+      [command, { id: 'selected', commonAddress: 7 }],
+    ])
+    expect(document.querySelector('#commands-trigger')?.getAttribute('aria-expanded')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('keeps single-CA GI direct and fans out only when All CAs is chosen', async () => {
+    const single = connectedToolbar([4])
+    await flushPromises()
+    await menuItem('menu-quick-gi').trigger('click')
+    await flushPromises()
+    expect(invokeMock).toHaveBeenCalledWith('send_interrogation', { id: 'selected', commonAddress: 4 })
+    single.wrapper.unmount()
+    const { wrapper } = connectedToolbar()
+    await flushPromises()
+    invokeMock.mockClear()
+    await menuItem('menu-commands').trigger('click')
+    await menuItem('counter').trigger('click')
+    await flushPromises()
+    await menuItem('ca-all').trigger('click')
+    await flushPromises()
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === 'send_counter_read')).toEqual([
+      ['send_counter_read', { id: 'selected', commonAddress: 1 }],
+      ['send_counter_read', { id: 'selected', commonAddress: 7 }],
+    ])
+    wrapper.unmount()
+  })
+
+  it('returns from the CA chooser and invalidates a pending lookup when a menu closes', async () => {
+    const { wrapper } = connectedToolbar()
+    await flushPromises()
+    await menuItem('menu-commands').trigger('click')
+    await menuItem('gi').trigger('click')
+    await flushPromises()
+    await menuItem('ca-7').trigger('keydown', { key: 'ArrowLeft' })
+    await flushPromises()
+    expect(menuItem('gi').isVisible()).toBe(true)
+    let resolve!: (value: unknown) => void
+    invokeMock.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+    await menuItem('gi').trigger('click')
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    await flushPromises()
+    resolve([{ id: 'selected', common_addresses: [1, 7] }])
+    await flushPromises()
+    expect(document.querySelector('#commands-trigger')?.getAttribute('aria-expanded')).toBe('false')
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'send_interrogation')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('closes CA choices on disconnect and disables only connection-dependent commands', async () => {
+    const { wrapper, state } = connectedToolbar()
+    await flushPromises()
+    await menuItem('menu-commands').trigger('click')
+    await menuItem('gi').trigger('click')
+    await flushPromises()
+    state.value = 'Disconnected'
+    await flushPromises()
+    expect(document.querySelector('#commands-trigger')?.getAttribute('aria-expanded')).toBe('false')
+    await menuItem('menu-commands').trigger('click')
+    expect(menuItem('gi').attributes('disabled')).toBeDefined()
+    await menuItem('menu-tools').trigger('click')
+    expect(menuItem('parse-frame').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['broadcast-gi', 'send_broadcast_gi'],
+    ['broadcast-counter', 'send_broadcast_counter_read'],
+    ['broadcast-stop-gi', 'send_broadcast_gi_deactivation'],
+    ['broadcast-stop-counter', 'send_broadcast_counter_read_deactivation'],
+  ])('routes %s through the existing broadcast command', async (item, command) => {
+    const { wrapper } = connectedToolbar()
+    await flushPromises()
+    await menuItem('menu-broadcast').trigger('click')
+    await menuItem(item).trigger('click')
+    await flushPromises()
+    expect(invokeMock).toHaveBeenCalledWith(command, { id: 'selected' })
+    wrapper.unmount()
+  })
+})
+
+
+it('closes a quick CA popup when a resize can hide its trigger', async () => {
+  const { wrapper } = connectedToolbar()
+  await flushPromises()
+  await menuItem('menu-quick-gi').trigger('click')
+  await flushPromises()
+  expect(menuItem('ca-7').isVisible()).toBe(true)
+  window.dispatchEvent(new Event('resize'))
+  await flushPromises()
+  expect(document.querySelector('#quick-gi-trigger')?.getAttribute('aria-expanded')).toBe('false')
+  wrapper.unmount()
 })
