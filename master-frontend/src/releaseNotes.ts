@@ -5,6 +5,7 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  "v1.15.20 改进：工具栏按配置、连接、召唤、广播、工具和帮助分组；800 像素窗口无需横向滚动，保留常用连接快捷入口；多 CA 菜单支持键盘操作，切换连接或缩放窗口时自动关闭失效菜单",
   "v1.15.19 改进：新增明暗主题切换与统一界面样式；统一连接树、数据表、日志面板与弹窗控件",
   'v1.15.18 新增 / Added: slave: 支持导入 JSON 定时改变点位 (#88)',
   "v1.15.17 版本同步：本次更新集中于从站工具栏、批量启停和配置加载，主站无功能变更",
@@ -96,11 +97,13 @@ export const RELEASE_NOTES: string[] = [
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
   "zh-CN": [
-    "v1.15.19 改进：新增明暗主题切换与统一界面样式",
-    "统一连接树、数据表、日志面板与弹窗控件"
+    "v1.15.20 改进：工具栏按配置、连接、召唤、广播、工具和帮助分组",
+    "800 像素窗口无需横向滚动，保留常用连接快捷入口",
+    "多 CA 菜单支持键盘操作，切换连接或缩放窗口时自动关闭失效菜单"
   ],
   "en-US": [
-    "v1.15.19 Improved: light and dark themes with consistent UI styling",
-    "Consistent controls across connection trees, data tables, logs, and dialogs"
+    "v1.15.20 Improved: grouped File, Connection, Commands, Broadcast, Tools, and Help menus",
+    "No horizontal toolbar scrolling at 800 pixels; common connection actions remain accessible",
+    "Keyboard-accessible CA selection with stale menus dismissed on connection changes and resizing"
   ]
 } as const

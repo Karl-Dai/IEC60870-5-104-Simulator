@@ -2,6 +2,25 @@
 
 本项目的所有重要变更记录在此文件。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.15.20] - 2026-09-10
+
+### Highlights / 亮点
+
+- 主站工具栏按配置、连接、召唤、广播、工具和帮助分组，常用连接与断开操作保持直接可用 / Group master toolbar actions into File, Connection, Commands, Broadcast, Tools, and Help menus while keeping Connect and Disconnect directly available.
+- 800 像素中英文窗口无需横向滚动；宽窗口保留总召唤快捷入口，窄窗口可从召唤菜单使用 / Eliminate horizontal toolbar scrolling in 800-pixel Chinese and English windows; keep a General Interrogation shortcut on wide windows and the menu action at all widths.
+- 多 CA 选择在同一个菜单内完成，支持键盘导航；切换连接、断开或缩小窗口时关闭失效菜单 / Select Common Addresses within the same menu with keyboard navigation, and dismiss stale menus when switching connections, disconnecting, or resizing.
+
+### Changed 改进
+
+- 配置打开/保存、连接新建/编辑/删除、召唤及停止、广播、时钟同步、自定义控制、报文解析和帮助操作保留原有命令路径；单 CA 直发、多 CA 选择和全部 CA 发送行为保持一致 / Preserve existing command routes for configuration, connection management, interrogation/deactivation, broadcast, clock synchronization, custom control, frame parsing, and help. Keep direct single-CA execution and explicit per-CA or all-CA selection.
+- 主从站复用菜单组件，支持方向键、Home/End、Esc、Tab、返回上一级及视口边缘定位；主站顶部高度自适应布局 / Share the menu component across both apps with arrow keys, Home/End, Escape, Tab, back navigation, and viewport-aware positioning; adapt the master header height to its content.
+- 从站同步发布版本及共享菜单组件，本次未改变从站协议功能 / Update the slave version and shared menu component without changing slave protocol behavior.
+
+### Tests 测试
+
+- 新增 13 项主站菜单回归测试，覆盖命令目标、CA 选择、广播、取消异步查询、断开及窗口缩放；主站 108 项、从站 305 项测试通过 / Add 13 master menu regression cases covering command targets, CA selection, broadcast, cancelled lookups, disconnects, and resizing; all 108 master and 305 slave tests pass.
+- 使用无头浏览器验证中英文、明暗主题、800/1280 像素布局、键盘操作和模拟 IPC 命令路由；本地原生主站启动成功 / Verify bilingual light/dark layouts at 800 and 1280 pixels, keyboard navigation, and mocked IPC routing in a headless browser; confirm local native master startup.
+
 ## [1.15.19] - 2026-09-09
 
 ### Highlights / 亮点
