@@ -215,7 +215,8 @@ describe('Toolbar connection actions across workspace replacement', () => {
       return pendingLookup
     })
 
-    await wrapper.find('[data-testid="menu-quick-gi"]').trigger('click')
+    await wrapper.find('[data-testid="menu-commands"]').trigger('click')
+    await menuItem('gi').trigger('click')
     selectedConnectionId.value = null
     selectedConnectionState.value = 'Disconnected'
     await nextTick()
@@ -288,10 +289,17 @@ describe('Master grouped command menus', () => {
     wrapper.unmount()
   })
 
-  it('keeps single-CA GI direct and fans out only when All CAs is chosen', async () => {
+  it('requires an explicit CA choice for single-CA GI and fans out only when All CAs is chosen', async () => {
     const single = connectedToolbar([4])
     await flushPromises()
-    await menuItem('menu-quick-gi').trigger('click')
+    expect(menuItem('menu-quick-gi').exists()).toBe(false)
+    await menuItem('menu-commands').trigger('click')
+    await menuItem('gi').trigger('click')
+    await flushPromises()
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === 'send_interrogation')).toEqual([])
+    expect(menuItem('ca-all').exists()).toBe(false)
+    expect(menuItem('ca-4').isVisible()).toBe(true)
+    await menuItem('ca-4').trigger('click')
     await flushPromises()
     expect(invokeMock).toHaveBeenCalledWith('send_interrogation', { id: 'selected', commonAddress: 4 })
     single.wrapper.unmount()
@@ -307,6 +315,38 @@ describe('Master grouped command menus', () => {
       ['send_counter_read', { id: 'selected', commonAddress: 1 }],
       ['send_counter_read', { id: 'selected', commonAddress: 7 }],
     ])
+    wrapper.unmount()
+  })
+
+  it('prevents the same command from being triggered again while its send is pending', async () => {
+    let resolveSend!: () => void
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'list_connections') {
+        return Promise.resolve([{ id: 'selected', common_addresses: [4], broadcast_address: 0xFF00 }])
+      }
+      if (command === 'send_interrogation') return new Promise<void>(resolve => { resolveSend = resolve })
+      return Promise.resolve()
+    })
+    const wrapper = mountToolbar(ref('selected'), ref('Connected'))
+    await flushPromises()
+
+    await menuItem('menu-commands').trigger('click')
+    await menuItem('gi').trigger('click')
+    await flushPromises()
+    await menuItem('ca-4').trigger('click')
+    await flushPromises()
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === 'send_interrogation')).toHaveLength(1)
+
+    await menuItem('menu-commands').trigger('click')
+    expect(menuItem('gi').attributes('disabled')).toBeDefined()
+    expect(menuItem('gi').attributes('aria-busy')).toBe('true')
+    await menuItem('gi').trigger('click')
+    await flushPromises()
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === 'send_interrogation')).toHaveLength(1)
+
+    resolveSend()
+    await flushPromises()
+    expect(menuItem('gi').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -361,17 +401,4 @@ describe('Master grouped command menus', () => {
     expect(invokeMock).toHaveBeenCalledWith(command, { id: 'selected' })
     wrapper.unmount()
   })
-})
-
-
-it('closes a quick CA popup when a resize can hide its trigger', async () => {
-  const { wrapper } = connectedToolbar()
-  await flushPromises()
-  await menuItem('menu-quick-gi').trigger('click')
-  await flushPromises()
-  expect(menuItem('ca-7').isVisible()).toBe(true)
-  window.dispatchEvent(new Event('resize'))
-  await flushPromises()
-  expect(document.querySelector('#quick-gi-trigger')?.getAttribute('aria-expanded')).toBe('false')
-  wrapper.unmount()
 })

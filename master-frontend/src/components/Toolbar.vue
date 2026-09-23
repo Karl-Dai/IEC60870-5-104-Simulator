@@ -361,7 +361,8 @@ const caActions = { gi: doGI, 'stop-gi': doGIDeactivation, counter: doCounterRea
 const caLabels = { gi: 'toolbar.sendGI', 'stop-gi': 'toolbar.deactivateGI', counter: 'toolbar.counterRead', 'stop-counter': 'toolbar.deactivateCounterRead' } as const
 const openMenu = ref<string | null>(null)
 const loadingCAs = ref(false)
-const caSelection = ref<{ menu: string; command: CACommand; connectionId: string; cas: number[] } | null>(null)
+const sendingCommands = ref<CACommand[]>([])
+const caSelection = ref<{ command: CACommand; connectionId: string; cas: number[] } | null>(null)
 let lookupVersion = 0
 function closeMenu() {
   lookupVersion++
@@ -379,23 +380,17 @@ function backToCommands() {
   caSelection.value = null
   loadingCAs.value = false
 }
-async function requestCAs(command: CACommand, menu = 'commands') {
+async function requestCAs(command: CACommand) {
   const connectionId = selectedConnectionId.value
-  if (menu === 'quick-gi' && openMenu.value === menu) { closeMenu(); return }
-  if (!connectionId || !isConnected() || loadingCAs.value) return
-  openMenu.value = menu
+  if (!connectionId || !isConnected() || loadingCAs.value || sendingCommands.value.includes(command)) return
+  openMenu.value = 'commands'
   caSelection.value = null
   loadingCAs.value = true
   const version = ++lookupVersion
   try {
     const cas = await getConnCAs(connectionId)
     if (version !== lookupVersion || cas === null || selectedConnectionId.value !== connectionId || !isConnected()) return
-    if (cas.length <= 1) {
-      closeMenu()
-      await caActions[command](cas[0] ?? null, connectionId)
-    } else {
-      caSelection.value = { menu, command, connectionId, cas }
-    }
+    caSelection.value = { command, connectionId, cas }
   } catch (error) {
     if (version === lookupVersion) { closeMenu(); await showAlert(String(error)) }
   } finally {
@@ -405,10 +400,21 @@ async function requestCAs(command: CACommand, menu = 'commands') {
 const caItems = computed<ToolbarMenuItem[]>(() => {
   const selection = caSelection.value
   if (!selection) return []
-  return [null, ...selection.cas].map(ca => ({
+  const choices = selection.cas.length > 1 ? [null, ...selection.cas] : selection.cas
+  return choices.map(ca => ({
     id: ca === null ? 'ca-all' : `ca-${ca}`,
     label: ca === null ? t('toolbar.giAllCAs') : `CA ${ca}`,
-    action: () => caActions[selection.command](ca, selection.connectionId),
+    disabled: sendingCommands.value.includes(selection.command),
+    busy: sendingCommands.value.includes(selection.command),
+    action: async () => {
+      if (sendingCommands.value.includes(selection.command)) return
+      sendingCommands.value = [...sendingCommands.value, selection.command]
+      try {
+        await caActions[selection.command](ca, selection.connectionId)
+      } finally {
+        sendingCommands.value = sendingCommands.value.filter(command => command !== selection.command)
+      }
+    },
   }))
 })
 const unavailable = computed(() => !hasConnection() || !isConnected())
@@ -424,7 +430,8 @@ const menus = computed(() => [
   ] },
   { id: 'commands', label: t('toolbar.menuCommands'), items: [
     ...(['gi', 'stop-gi', 'counter', 'stop-counter'] as CACommand[]).map(command => ({
-      id: command, label: t(caLabels[command]), disabled: unavailable.value, keepOpen: true,
+      id: command, label: t(caLabels[command]), disabled: unavailable.value || sendingCommands.value.includes(command),
+      busy: sendingCommands.value.includes(command), keepOpen: true,
       separator: command === 'counter', action: () => requestCAs(command),
     })),
     { id: 'clock-sync', label: t('toolbar.clockSync'), disabled: unavailable.value, separator: true, action: sendClockSync },
@@ -446,11 +453,10 @@ const helpItems = computed(() => [
 ])
 function menuHeading(id: string) {
   if (openMenu.value === id && loadingCAs.value) return t('common.loading')
-  if (caSelection.value?.menu === id) return t(caLabels[caSelection.value.command])
+  if (id === 'commands' && caSelection.value) return t(caLabels[caSelection.value.command])
   if (id === 'broadcast') return `${t('toolbar.broadcastAddressLabel')}: 0x${broadcastAddrLabel.value}`
   return undefined
 }
-// Resizing can hide the GI shortcut; never leave its popup without a visible anchor.
 onMounted(() => window.addEventListener('resize', closeMenu))
 onBeforeUnmount(() => window.removeEventListener('resize', closeMenu))
 watch([selectedConnectionId, selectedConnectionState], () => {
@@ -464,9 +470,9 @@ watch([selectedConnectionId, selectedConnectionState], () => {
   <div class="toolbar master-toolbar">
     <div class="toolbar-main">
       <ToolbarMenu v-for="menu in menus" :key="menu.id" :id="menu.id" :label="menu.label"
-        :items="caSelection?.menu === menu.id ? caItems : menu.items" :open="openMenu === menu.id"
+        :items="caSelection && menu.id === 'commands' ? caItems : menu.items" :open="openMenu === menu.id"
         :heading="menuHeading(menu.id)" :loading="openMenu === menu.id && loadingCAs"
-        :back-label="caSelection?.menu === menu.id ? t('toolbar.menuCommands') : undefined"
+        :back-label="caSelection && menu.id === 'commands' ? t('toolbar.menuCommands') : undefined"
         @toggle="toggleMenu(menu.id)" @close="closeMenu" @back="backToCommands" />
       <div class="toolbar-divider" aria-hidden="true"></div>
       <div class="toolbar-group" role="group" :aria-label="t('toolbar.menuConnection')">
@@ -476,11 +482,6 @@ watch([selectedConnectionId, selectedConnectionState], () => {
         </button>
         <button type="button" class="toolbar-btn btn-stop" data-testid="disconnect"
           :disabled="unavailable" @click="disconnectMaster">{{ t('toolbar.disconnect') }}</button>
-      </div>
-      <div class="gi-shortcut">
-        <ToolbarMenu id="quick-gi" :label="t('toolbar.sendGI')" :items="caItems" :disabled="unavailable"
-          :open="openMenu === 'quick-gi'" :loading="openMenu === 'quick-gi' && loadingCAs"
-          :heading="menuHeading('quick-gi')" @toggle="requestCAs('gi', 'quick-gi')" @close="closeMenu" />
       </div>
     </div>
     <div class="toolbar-aside">
@@ -517,6 +518,4 @@ watch([selectedConnectionId, selectedConnectionState], () => {
 .master-toolbar :deep(.toolbar-btn:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .master-toolbar .btn-start:not(:disabled) { background: color-mix(in srgb, var(--success) 14%, transparent); }
 .master-toolbar .toolbar-aside { margin-left: auto; }
-.gi-shortcut { flex: none; }
-@media (max-width: 1050px) { .gi-shortcut { display: none; } }
 </style>
