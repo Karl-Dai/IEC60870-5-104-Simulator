@@ -5,6 +5,8 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.21 修复 / Fixed: master: unify interrogation entry; ci: restore release scripts lockfile dependencies',
+  'v1.15.21 改进 / Changed: Merge pull request #91 from Karl-Dai/fix/release-scripts-lockfile',
   "v1.15.20 版本同步：共享菜单组件更新，主站菜单栏完成重构；从站协议功能保持不变",
   "v1.15.19 改进：新增明暗主题切换与统一界面样式；支持批量删除服务器和站点；事件回放导入支持匹配同 IOA、同类别的已有点位",
   'v1.15.18 新增 / Added: slave: 支持导入 JSON 定时改变点位 (#88)',
