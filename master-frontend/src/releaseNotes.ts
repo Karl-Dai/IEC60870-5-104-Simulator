@@ -5,6 +5,7 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  'v1.15.22 文档 / Documentation: align bilingual README with current builds and capabilities (#93)',
   'v1.15.21 修复 / Fixed: master: unify interrogation entry; ci: restore release scripts lockfile dependencies',
   'v1.15.21 改进 / Changed: Merge pull request #91 from Karl-Dai/fix/release-scripts-lockfile',
   "v1.15.20 改进：工具栏按配置、连接、召唤、广播、工具和帮助分组；800 像素窗口无需横向滚动，保留常用连接快捷入口；多 CA 菜单支持键盘操作，切换连接或缩放窗口时自动关闭失效菜单",
