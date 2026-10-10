@@ -67,6 +67,10 @@ jobs:
         run: npm ci
         working-directory: ${{ matrix.app }}
 
+      - name: Test release workflow guards
+        shell: bash
+        run: node --test scripts/release-on-merge.node-test.mjs
+
       - name: Unit tests
         run: npm test
         working-directory: ${{ matrix.app }}

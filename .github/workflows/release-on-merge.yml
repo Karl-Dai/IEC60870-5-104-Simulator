@@ -52,6 +52,17 @@ jobs:
             echo "release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Tags and draft releases can remain after a failed build. Only a
+          # published release makes this candidate a no-op. Let API errors fail
+          # the job rather than treating an unknown publication state as absent.
+          published="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"$tag\" and .draft == false) | .tag_name")"
+          if [ -n "$published" ]; then
+            echo "$tag is already published; nothing to publish."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "release=true" >> "$GITHUB_OUTPUT"
           echo "branch=$release_branch" >> "$GITHUB_OUTPUT"
 
