@@ -18,6 +18,7 @@ interface AppVm {
   handleConnectionSelect: (id: string, state: string) => void
   handleCategorySelect: (connId: string, category: string, ca: number | null) => void
   handlePointSelect: (points: unknown[]) => void
+  handleConnectionDeleted: (id: string) => void
   resetWorkspaceView: () => void
 }
 
@@ -63,5 +64,21 @@ describe('App.handleConnectionSelect 分类筛选稳定 (4.5)', () => {
     // no selection/cache from the first load is eligible for reuse.
     vm.resetWorkspaceView()
     expect(vm.workspaceEpoch).toBe(initialEpoch + 2)
+  })
+
+  it('删除当前连接后清空所有选择，删除其他连接保留当前视图', () => {
+    vm.handleCategorySelect('conn-A', 'single_point', 1)
+    vm.handleConnectionSelect('conn-A', 'Connected')
+    vm.handlePointSelect([{ ioa: 1 }])
+    vm.handleConnectionDeleted('conn-B')
+    expect(vm.selectedConnectionId).toBe('conn-A')
+    expect(vm.selectedPoints).toEqual([{ ioa: 1 }])
+
+    vm.handleConnectionDeleted('conn-A')
+    expect(vm.selectedConnectionId).toBeNull()
+    expect(vm.selectedConnectionState).toBe('Disconnected')
+    expect(vm.selectedCategory).toBeNull()
+    expect(vm.selectedCA).toBeNull()
+    expect(vm.selectedPoints).toEqual([])
   })
 })

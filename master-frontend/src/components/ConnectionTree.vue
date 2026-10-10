@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { ref, inject, watch, onMounted, onUnmounted, type Ref } from 'vue'
+import { computed, ref, inject, watch, onMounted, onUnmounted, type Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { ConnectionInfo, ChangedCategoriesMap, CategoryCountsMap } from '../types'
 import { useI18n } from '@shared/i18n'
+import { dialogKey, showAlert, showConfirm } from '@shared/composables/useDialog'
+import AppButton from '@shared/components/ui/AppButton.vue'
 
 const { t } = useI18n()
+const dialogs = inject(dialogKey, { showAlert, showConfirm })
 
 const emit = defineEmits<{
   (e: 'connection-select', id: string, state: string): void
+  (e: 'connection-deleted', id: string): void
   // ca === null means "all CAs combined" (matches the connection-level
   // category click); otherwise it's the specific CA the user picked.
   (e: 'category-select', connectionId: string, category: string, ca: number | null): void
@@ -89,6 +93,42 @@ interface TreeConnection {
 }
 
 const connections = ref<TreeConnection[]>([])
+const batchMode = ref(false)
+const deleteBusy = ref(false)
+const deleting = ref(false)
+const deleteProgress = ref({ completed: 0, total: 0 })
+const checkedIds = ref(new Set<string>())
+const batchTargets = computed(() => connections.value.filter(conn => checkedIds.value.has(conn.info.id)))
+const allChecked = computed(() => connections.value.length > 0 && batchTargets.value.length === connections.value.length)
+const someChecked = computed(() => batchTargets.value.length > 0 && !allChecked.value)
+const hasExpanded = computed(() => connections.value.some(conn => conn.expanded))
+const hasCollapsed = computed(() => connections.value.some(conn => !conn.expanded || conn.info.common_addresses.some(ca => !conn.caExpanded[ca])))
+
+function toggleChecked(id: string) {
+  if (deleteBusy.value) return
+  if (checkedIds.value.has(id)) checkedIds.value.delete(id)
+  else checkedIds.value.add(id)
+}
+
+function toggleAll() {
+  if (deleteBusy.value) return
+  checkedIds.value = allChecked.value ? new Set() : new Set(connections.value.map(conn => conn.info.id))
+}
+
+function toggleBatchMode() {
+  if (deleteBusy.value) return
+  batchMode.value = !batchMode.value
+  checkedIds.value.clear()
+  hideContextMenu()
+}
+
+function setAllExpanded(expanded: boolean) {
+  for (const conn of connections.value) {
+    conn.expanded = expanded
+    for (const ca of conn.info.common_addresses) conn.caExpanded[ca] = expanded
+  }
+  hideContextMenu()
+}
 // Selected node id is one of:
 //   "<connId>"                     — the connection node itself
 //   "<connId>:ca:<ca>"             — a specific CA group node
@@ -145,6 +185,7 @@ async function loadTree() {
       })
     }
     connections.value = newTree
+    checkedIds.value = new Set([...checkedIds.value].filter(id => activeIds.has(id)))
 
     const staleCounts = [...sharedCategoryCounts.value.keys()].filter(k => !activeIds.has(k))
     if (staleCounts.length > 0) {
@@ -167,6 +208,7 @@ watch(treeRefreshKey, loadTree)
 onMounted(loadTree)
 
 function selectConnection(conn: TreeConnection) {
+  if (batchMode.value) { toggleChecked(conn.info.id); return }
   selectedNodeId.value = conn.info.id
   emit('connection-select', conn.info.id, conn.info.state)
 }
@@ -189,6 +231,7 @@ function toggleCAExpand(conn: TreeConnection, ca: number) {
 
 function showContextMenu(e: MouseEvent, connId: string) {
   e.preventDefault()
+  if (batchMode.value || deleteBusy.value) return
   contextMenu.value = { visible: true, x: e.clientX, y: e.clientY, connId }
 }
 
@@ -197,11 +240,66 @@ function hideContextMenu() {
 }
 
 async function ctxDeleteConnection() {
-  try {
-    await invoke('delete_connection', { id: contextMenu.value.connId })
-    refreshTree()
-  } catch (_e) { /* ignore */ }
+  const conn = connections.value.find(conn => conn.info.id === contextMenu.value.connId)
   hideContextMenu()
+  if (conn) await deleteConnections([conn], false)
+}
+
+async function deleteBatch() {
+  await deleteConnections(batchTargets.value, true)
+}
+
+async function deleteConnections(targets: TreeConnection[], batch: boolean) {
+  if (deleteBusy.value || targets.length === 0) return
+  // Snapshot the targets before confirmation or a tree refresh can change them.
+  const snapshot = targets.map(conn => ({ id: conn.info.id, label: `${conn.info.target_address}:${conn.info.port}` }))
+  deleteBusy.value = true
+  hideContextMenu()
+  try {
+    const message = batch
+      ? t('tree.confirmBatchDelete', { n: snapshot.length }) + '\n\n' + snapshot.map(conn => conn.label).join('\n')
+      : t('tree.confirmDeleteConnection', { connection: snapshot[0].label })
+    if (!(await dialogs.showConfirm(message)) || disposed) return
+    deleting.value = true
+    deleteProgress.value = { completed: 0, total: snapshot.length }
+    const failures: string[] = []
+    let deleted = 0
+    for (const target of snapshot) {
+      // Loading a different workspace unmounts the tree; stop using old IDs.
+      if (disposed) return
+      try {
+        await invoke('delete_connection', { id: target.id })
+        if (disposed) return
+        deleted++
+        loadGeneration++
+        connections.value = connections.value.filter(conn => conn.info.id !== target.id)
+        checkedIds.value.delete(target.id)
+        if (selectedNodeId.value === target.id || selectedNodeId.value?.startsWith(`${target.id}:`)) {
+          selectedNodeId.value = null
+        }
+        emit('connection-deleted', target.id)
+      } catch (error) {
+        failures.push(`${target.label}: ${String(error)}`)
+      } finally {
+        deleteProgress.value.completed++
+      }
+    }
+    if (disposed) return
+    await loadTree()
+    if (disposed) return
+    refreshTree()
+    deleting.value = false
+    if (batch || failures.length) {
+      await dialogs.showAlert(t('tree.batchDeleteResult', { deleted, failed: failures.length }) + (failures.length ? '\n\n' + failures.join('\n') : ''))
+    }
+    if (!disposed && batch && !failures.length) {
+      batchMode.value = false
+      checkedIds.value.clear()
+    }
+  } finally {
+    deleting.value = false
+    deleteBusy.value = false
+  }
 }
 
 function ctxEditConnection() {
@@ -220,7 +318,24 @@ function stateClass(state: string): string {
 
 <template>
   <div class="tree-container" @click="hideContextMenu">
-    <div class="tree-header">{{ t('tree.title') }}</div>
+    <div class="tree-header">
+      <div class="tree-header-title">
+        <span>{{ t('tree.title') }}</span>
+        <AppButton v-if="connections.length || batchMode" size="sm" variant="ghost" :disabled="deleteBusy" :aria-pressed="batchMode" @click="toggleBatchMode">
+          {{ batchMode ? t('tree.batchCancel') : t('tree.batchManage') }}
+        </AppButton>
+      </div>
+      <div class="tree-actions">
+        <AppButton size="sm" variant="ghost" :disabled="!hasExpanded" @click="setAllExpanded(false)">{{ t('tree.collapseAll') }}</AppButton>
+        <AppButton size="sm" variant="ghost" :disabled="!hasCollapsed" @click="setAllExpanded(true)">{{ t('tree.expandAll') }}</AppButton>
+      </div>
+      <div v-if="batchMode" class="batch-actions">
+        <label><input type="checkbox" :checked="allChecked" :indeterminate="someChecked" :disabled="deleteBusy || !connections.length" @change="toggleAll" />{{ t('tree.selectAll') }}</label>
+        <AppButton size="sm" variant="ghost" class="batch-delete" :aria-busy="deleting" :disabled="deleteBusy || !batchTargets.length" @click="deleteBatch">
+          {{ deleting ? t('tree.batchDeleting', deleteProgress) : t('tree.deleteSelected', { n: batchTargets.length }) }}
+        </AppButton>
+      </div>
+    </div>
 
     <div v-if="connections.length === 0" class="tree-empty">
       {{ t('tree.noConnections') }}
@@ -229,20 +344,22 @@ function stateClass(state: string): string {
     <div v-for="conn in connections" :key="conn.info.id" class="tree-node-group">
       <!-- Connection node -->
       <div
-        :class="['tree-node', { selected: selectedNodeId === conn.info.id }]"
+        :class="['tree-node', { selected: batchMode ? checkedIds.has(conn.info.id) : selectedNodeId === conn.info.id }]"
         @click="selectConnection(conn)"
         @contextmenu="showContextMenu($event, conn.info.id)"
       >
-        <span class="node-expand" @click.stop="toggleExpand(conn)">
+        <button v-if="!batchMode" type="button" class="node-expand" :aria-label="t(conn.expanded ? 'tree.collapseConnection' : 'tree.expandConnection', { connection: `${conn.info.target_address}:${conn.info.port}` })" :aria-expanded="conn.expanded" @click.stop="toggleExpand(conn)">
           {{ conn.expanded ? '▼' : '▶' }}
-        </span>
+        </button>
+        <input v-if="batchMode" type="checkbox" :aria-label="`${conn.info.target_address}:${conn.info.port}`" :checked="checkedIds.has(conn.info.id)" :disabled="deleteBusy" @click.stop @change="toggleChecked(conn.info.id)" />
         <span :class="['node-status', stateClass(conn.info.state)]"></span>
-        <span class="node-label">{{ conn.info.target_address }}:{{ conn.info.port }}</span>
+        <span class="node-label" :title="`${conn.info.target_address}:${conn.info.port}`">{{ conn.info.target_address }}:{{ conn.info.port }}</span>
         <span v-if="conn.info.use_tls || conn.info.use_socks5" class="node-features">
           <button
             v-if="conn.info.use_tls"
             type="button"
             class="feature-badge tls"
+            :disabled="batchMode || deleteBusy"
             :title="t('tree.editConnection')"
             @click.stop="openEditConnection?.(conn.info.id)"
           >TLS</button>
@@ -250,6 +367,7 @@ function stateClass(state: string): string {
             v-if="conn.info.use_socks5"
             type="button"
             class="feature-badge socks"
+            :disabled="batchMode || deleteBusy"
             :title="t('tree.editConnection')"
             @click.stop="openEditConnection?.(conn.info.id)"
           >S5</button>
@@ -258,7 +376,7 @@ function stateClass(state: string): string {
       </div>
 
       <!-- Children -->
-      <div v-if="conn.expanded" class="tree-children">
+      <div v-if="conn.expanded && !batchMode" class="tree-children">
 
         <!-- Multi-CA: connection -> CA -> category -->
         <template v-if="isMultiCA(conn)">
@@ -313,8 +431,8 @@ function stateClass(state: string): string {
     </div>
 
     <div v-if="contextMenu.visible" class="context-menu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }">
-      <div class="ctx-item" @click="ctxEditConnection">{{ t('tree.editConnection') }}</div>
-      <div class="ctx-item danger" @click="ctxDeleteConnection">{{ t('tree.deleteConnection') }}</div>
+      <button type="button" class="ctx-item" @click="ctxEditConnection">{{ t('tree.editConnection') }}</button>
+      <button type="button" class="ctx-item danger" @click="ctxDeleteConnection">{{ t('tree.deleteConnection') }}</button>
     </div>
   </div>
 </template>
@@ -329,10 +447,25 @@ function stateClass(state: string): string {
 .tree-header {
   padding: 8px 12px;
   font-size: 11px;
-  text-transform: uppercase;
   color: var(--text-muted);
-  letter-spacing: 0.5px;
 }
+
+.tree-header-title, .tree-actions, .batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.tree-header-title { justify-content: space-between; }
+.tree-actions, .batch-actions { margin-top: 6px; }
+.batch-actions { justify-content: space-between; }
+.batch-actions label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-primary); }
+.batch-actions .batch-delete { color: var(--danger); }
+.tree-header button:focus-visible, .node-expand:focus-visible, input[type="checkbox"]:focus-visible, .ctx-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+input[type="checkbox"] { accent-color: var(--accent); flex-shrink: 0; }
 
 .tree-empty {
   padding: 24px 12px;
@@ -396,6 +529,7 @@ function stateClass(state: string): string {
   text-align: center;
   color: var(--text-muted);
 }
+button.node-expand { background: transparent; border: 0; padding: 3px 0; flex-shrink: 0; cursor: pointer; }
 
 .node-status {
   width: 8px;
@@ -455,6 +589,7 @@ function stateClass(state: string): string {
   border-color: currentColor;
   outline: none;
 }
+.feature-badge:disabled { opacity: 0.45; cursor: default; }
 
 .node-typeid {
   margin-left: auto;
@@ -490,6 +625,13 @@ function stateClass(state: string): string {
 }
 
 .ctx-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font-family: inherit;
   padding: 6px 14px;
   cursor: pointer;
   font-size: 12px;

@@ -104,6 +104,18 @@ export type DictShape = {
     noConnections: string
     deleteConnection: string
     editConnection: string
+    batchManage: string
+    batchCancel: string
+    selectAll: string
+    deleteSelected: string
+    batchDeleting: string
+    confirmBatchDelete: string
+    confirmDeleteConnection: string
+    batchDeleteResult: string
+    collapseAll: string
+    expandAll: string
+    collapseConnection: string
+    expandConnection: string
   }
   category: {
     single_point: string
@@ -475,6 +487,18 @@ const dict: DictShape = {
     noConnections: '暂无连接',
     deleteConnection: '删除连接',
     editConnection: '编辑连接',
+    batchManage: '批量管理',
+    batchCancel: '完成',
+    selectAll: '全选',
+    deleteSelected: '删除已选 ({n})',
+    batchDeleting: '删除中 {completed}/{total}',
+    confirmBatchDelete: '确定删除选中的 {n} 个连接？已连接的会断开，接收数据和通信日志将被清除。此操作无法撤销。',
+    confirmDeleteConnection: '确定删除连接 {connection}？已连接的会断开，接收数据和通信日志将被清除。此操作无法撤销。',
+    batchDeleteResult: '已删除 {deleted} 个连接，失败 {failed} 个。',
+    collapseAll: '全部收起',
+    expandAll: '全部展开',
+    collapseConnection: '收起连接 {connection}',
+    expandConnection: '展开连接 {connection}',
   },
   category: {
     single_point: '单点 (SP)',

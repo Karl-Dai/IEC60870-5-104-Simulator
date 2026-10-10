@@ -202,6 +202,15 @@ function handlePointSelect(points: ReceivedDataPointInfo[]) {
   selectedPoints.value = points
 }
 
+function handleConnectionDeleted(id: string) {
+  if (selectedConnectionId.value !== id) return
+  selectedConnectionId.value = null
+  selectedConnectionState.value = 'Disconnected'
+  selectedCA.value = null
+  selectedCategory.value = null
+  selectedPoints.value = []
+}
+
 function toggleLog() {
   logExpanded.value = !logExpanded.value
 }
@@ -250,6 +259,7 @@ provide('resetWorkspaceView', resetWorkspaceView)
         :key="workspaceEpoch"
         @connection-select="handleConnectionSelect"
         @category-select="handleCategorySelect"
+        @connection-deleted="handleConnectionDeleted"
       />
     </aside>
     <Splitter
