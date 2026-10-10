@@ -5,6 +5,9 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  "v1.15.22 新增：连接列表支持勾选、全选与批量删除",
+  "新增「全部收起 / 全部展开」，刷新后保留展开状态",
+  "删除前确认目标，显示进度和结果；失败可重试，删除当前连接后清空详情选择",
   'v1.15.21 修复 / Fixed: master: unify interrogation entry; ci: restore release scripts lockfile dependencies',
   'v1.15.21 改进 / Changed: Merge pull request #91 from Karl-Dai/fix/release-scripts-lockfile',
   "v1.15.20 改进：工具栏按配置、连接、召唤、广播、工具和帮助分组；800 像素窗口无需横向滚动，保留常用连接快捷入口；多 CA 菜单支持键盘操作，切换连接或缩放窗口时自动关闭失效菜单",
@@ -99,13 +102,13 @@ export const RELEASE_NOTES: string[] = [
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
   "zh-CN": [
-    "v1.15.20 改进：工具栏按配置、连接、召唤、广播、工具和帮助分组",
-    "800 像素窗口无需横向滚动，保留常用连接快捷入口",
-    "多 CA 菜单支持键盘操作，切换连接或缩放窗口时自动关闭失效菜单"
+    "v1.15.22 新增：连接列表支持勾选、全选与批量删除",
+    "新增「全部收起 / 全部展开」，刷新后保留展开状态",
+    "删除前确认目标，显示进度和结果；失败可重试，删除当前连接后清空详情选择"
   ],
   "en-US": [
-    "v1.15.20 Improved: grouped File, Connection, Commands, Broadcast, Tools, and Help menus",
-    "No horizontal toolbar scrolling at 800 pixels; common connection actions remain accessible",
-    "Keyboard-accessible CA selection with stale menus dismissed on connection changes and resizing"
+    "v1.15.22 Added: select individual or all connections for bulk deletion",
+    "Collapse or expand all connections and CA groups; preserve expansion state across refreshes",
+    "Confirm deletion targets, show progress and results, retry failures, and clear the deleted connection selection"
   ]
 } as const

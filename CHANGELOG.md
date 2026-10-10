@@ -2,6 +2,31 @@
 
 本项目的所有重要变更记录在此文件。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [1.15.22] - 2026-10-10
+
+### Highlights / 亮点
+
+- 主站连接列表支持批量管理：勾选或全选连接后统一删除，无需逐条打开右键菜单 / Manage master connections in bulk: select individual connections or all connections and delete them together.
+- 连接列表顶部新增「全部收起 / 全部展开」，同时处理多 CA 子节点，刷新后保留展开状态 / Collapse or expand all connections and Common Address groups from the list header, preserving expansion state across refreshes.
+- 删除操作提供目标确认、进度与结果汇总；失败连接保留供重试，删除当前连接后清空数据详情选择 / Confirm deletion targets, show progress and results, retain failed connections for retry, and clear the active data selection when its connection is deleted.
+
+### Added 新增
+
+- 批量模式支持全选、部分选择提示与完成退出；中英文入口和明暗主题适配最窄 180 像素侧栏 / Bulk management includes select-all, mixed selection state, and an exit action, with bilingual controls supporting light/dark themes and the minimum 180-pixel sidebar.
+
+### Fixed 修复
+
+- 单个连接删除也需确认，失败时显示错误；删除期间锁定选择并防止重复提交，切换工作区后停止旧批次 / Single-connection deletion now requires confirmation and reports errors. Lock selection and prevent duplicate submissions during deletion, and stop the old batch after switching workspaces.
+
+### Documentation 文档
+
+- 中英文 README 与当前平台安装包、启动方式及功能范围保持一致 (#93) / Align bilingual READMEs with current platform packages, launch instructions, and supported capabilities (#93).
+
+### Tests 测试
+
+- 新增 12 项回归测试，覆盖取消确认、部分失败、进度锁定、确认期间新增连接、工作区切换与删除选择清理；主站 120 项测试通过 / Add 12 regression cases covering cancellation, partial failures, progress locking, connections added during confirmation, workspace changes, and selection cleanup; all 120 master frontend tests pass.
+- 无头浏览器实测模拟连接的收起、批量选择及删除请求；检查中英文、明暗主题和 800 像素窗口布局 / Verify collapse, bulk selection, and deletion requests with mocked connections in a headless browser, including bilingual light/dark layouts in an 800-pixel window.
+
 ## [1.15.21] - 2026-10-05
 
 ### Fixed 修复

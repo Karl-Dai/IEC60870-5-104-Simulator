@@ -5,6 +5,8 @@ export const SIMLAB_URL = 'https://simlab.carldai.cloud'
 
 // Keep in sync with CHANGELOG.md — see `release` skill.
 export const RELEASE_NOTES: string[] = [
+  "v1.15.22 版本同步：主站新增批量删除连接与全部收起 / 展开",
+  "中英文 README 与当前安装包及功能范围保持一致；从站协议功能保持不变",
   'v1.15.21 修复 / Fixed: master: unify interrogation entry; ci: restore release scripts lockfile dependencies',
   'v1.15.21 改进 / Changed: Merge pull request #91 from Karl-Dai/fix/release-scripts-lockfile',
   "v1.15.20 版本同步：共享菜单组件更新，主站菜单栏完成重构；从站协议功能保持不变",
@@ -101,11 +103,11 @@ export const RELEASE_NOTES: string[] = [
 // About dialog shows a concise, localized summary of the current release.
 export const ABOUT_RELEASE_NOTES = {
   "zh-CN": [
-    "v1.15.20 版本同步：共享菜单组件更新，主站菜单栏完成重构",
-    "从站协议功能保持不变"
+    "v1.15.22 版本同步：主站新增批量删除连接与全部收起 / 展开",
+    "中英文 README 与当前安装包及功能范围保持一致；从站协议功能保持不变"
   ],
   "en-US": [
-    "v1.15.20 Release alignment: shared menu component updated alongside the master toolbar refactor",
-    "Slave protocol behavior remains unchanged"
+    "v1.15.22 Release alignment: master bulk connection deletion and collapse/expand controls",
+    "Bilingual READMEs match current packages and capabilities; slave protocol behavior remains unchanged"
   ]
 } as const
