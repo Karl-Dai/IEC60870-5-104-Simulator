@@ -1,11 +1,6 @@
 name: Nightly release preparation
 
 on:
-  schedule:
-    # Avoid the start-of-hour congestion window while still running near
-    # midnight in China. GitHub evaluates this with the explicit IANA zone.
-    - cron: '7 0 * * *'
-      timezone: 'Asia/Shanghai'
   workflow_dispatch:
 
 permissions:
