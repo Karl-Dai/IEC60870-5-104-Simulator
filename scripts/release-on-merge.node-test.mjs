@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { test } from 'node:test'
 
-const workflow = readFileSync(new URL('../.github/workflows/release-on-merge.yml', import.meta.url), 'utf8')
+const workflow = readFileSync(new URL('../.github/workflows/release-on-merge.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n')
 const names = ['Identify the merged release PR', 'Validate release metadata', 'Create release tag', 'Start multi-platform release build']
 const steps = names.map((name) => {
   const section = workflow.split(`      - name: ${name}\n`)[1]?.split('\n      - name: ')[0]
@@ -32,7 +32,10 @@ gh() {
       # Model the API's published-only filter, including older candidates.
       case "$STATE" in published|older-published) echo v1.15.21 ;; esac ;;
     'release view') echo "$LATEST" ;;
-    'run list') printf '%s' "$EXISTING_RUN" ;;
+    'run list')
+      if [ "\${@: -1}" = '.[] | select(.headSha == "'"$EXISTING_RUN_SHA"'") | [.status, (.conclusion // "")] | @tsv' ]; then
+        printf '%s' "$EXISTING_RUN"
+      fi ;;
     'workflow run') : ;;
     *) return 9 ;;
   esac
@@ -50,7 +53,7 @@ git() {
   echo "git $*" >> "$CALLS"
   case "$1" in
     rev-parse) [ "$TAG_EXISTS" = true ] ;;
-    merge-base) [ "$TAG_ANCESTOR" = true ] ;;
+    merge-base) [ "$TAG_ANCESTOR" = true ] && { [ -z "$TAG_ANCESTOR_SHA" ] || [ "$4" = "$TAG_ANCESTOR_SHA" ]; } ;;
     fetch|config|tag|push) : ;;
     *) return 9 ;;
   esac
@@ -59,16 +62,17 @@ git() {
 
 function run(overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'release-guard-'))
-  const calls = join(dir, 'calls')
-  const output = join(dir, 'output')
+  const calls = join(dir, 'calls').replaceAll('\\', '/')
+  const output = join(dir, 'output').replaceAll('\\', '/')
   writeFileSync(calls, '')
   writeFileSync(output, '')
   const env = {
     ...process.env, CALLS: calls, GITHUB_OUTPUT: output,
-    GITHUB_REPOSITORY: 'test/repo', GITHUB_SHA: 'tested-sha',
+    GITHUB_REPOSITORY: 'test/repo', GITHUB_SHA: 'tested-sha', TESTED_SHA: 'tested-sha',
     HAS_PR: 'true', STATE: 'absent', API_ERROR: 'false',
     CURRENT: '1.15.21', LATEST: 'v1.15.20', EXPECTED: '1.15.21',
     METADATA_VALID: 'true', TAG_EXISTS: 'false', TAG_ANCESTOR: 'true',
+    TAG_ANCESTOR_SHA: '', EXISTING_RUN_SHA: 'tested-sha',
     EXISTING_RUN: '', ...overrides,
   }
   let status = 0
@@ -82,7 +86,7 @@ function run(overrides = {}) {
         env.RELEASE_BRANCH = outputs.branch
         env.TAG = outputs.tag
       }
-      const result = spawnSync('bash', ['-c', mocks + '\n' + step.script], { env, encoding: 'utf8' })
+      const result = spawnSync('bash', ['-c', mocks.replaceAll('\r\n', '\n') + '\n' + step.script], { env, encoding: 'utf8' })
       assert.ifError(result.error)
       status = result.status
       logs += result.stdout + result.stderr
@@ -145,6 +149,33 @@ for (const existing of ['queued\t', 'in_progress\t', 'completed\tsuccess']) {
   test(`${existing.trim()} build is not dispatched twice`, () => {
     const result = run({ TAG_EXISTS: 'true', EXISTING_RUN: existing })
     assert.equal(result.status, 0, result.logs)
+    assert.doesNotMatch(result.calls, /gh workflow run/)
+  })
+}
+
+test('release job binds TESTED_SHA to the triggering Test commit', () => {
+  assert.match(workflow, /    env:\n      TESTED_SHA: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/)
+})
+
+test('tag ancestry uses the triggering Test commit after main advances', () => {
+  const result = run({ GITHUB_SHA: 'newer-main-sha', TAG_EXISTS: 'true' })
+  assert.equal(result.status, 0, result.logs)
+  assert.match(result.calls, /git merge-base --is-ancestor v1.15.21 tested-sha/)
+})
+
+test('tag only in newer untested main history is rejected', () => {
+  const result = run({
+    GITHUB_SHA: 'newer-main-sha', TAG_EXISTS: 'true', TAG_ANCESTOR_SHA: 'newer-main-sha',
+  })
+  assert.notEqual(result.status, 0, result.logs)
+  assert.doesNotMatch(result.calls, /git push|gh workflow run/)
+})
+
+for (const existing of ['queued\t', 'in_progress\t', 'completed\tsuccess']) {
+  test(`advancing main does not redispatch ${existing.trim()} tested build`, () => {
+    const result = run({ GITHUB_SHA: 'newer-main-sha', TAG_EXISTS: 'false', EXISTING_RUN: existing })
+    assert.equal(result.status, 0, result.logs)
+    assert.match(result.calls, /select\(\.headSha == "tested-sha"\)/)
     assert.doesNotMatch(result.calls, /gh workflow run/)
   })
 }
