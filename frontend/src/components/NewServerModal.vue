@@ -253,7 +253,8 @@ async function submit() {
 .submit-error p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .modal-btn:disabled { cursor: wait; }
 .modal-field { margin-bottom: 14px; }
-.modal-field label {
+/* Keep field-heading styles from overriding AppCheckbox's flex alignment. */
+.modal-field > label:not(.checkbox-label) {
   display: block;
   font-size: 12px;
   color: var(--c-subtext0);
