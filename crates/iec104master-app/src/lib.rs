@@ -1,6 +1,8 @@
 mod commands;
 pub mod reconnect;
 mod state;
+#[path = "../../shared/tls_file_dialog.rs"]
+mod tls_file_dialog;
 pub mod update;
 
 use state::AppState;
@@ -17,6 +19,7 @@ pub fn run() {
         .manage(AppState::new())
         .manage(update::UpdateState::default())
         .invoke_handler(tauri::generate_handler![
+            tls_file_dialog::choose_tls_file,
             // Connection commands
             commands::create_connection,
             commands::connect_master,

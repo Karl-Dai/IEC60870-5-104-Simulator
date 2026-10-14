@@ -5,12 +5,9 @@ import { dialogKey } from '@shared/composables/useDialog'
 import { useI18n } from '@shared/i18n'
 import NewConnectionModal from '../src/components/NewConnectionModal.vue'
 
-const { invokeMock, openMock } = vi.hoisted(() => ({ invokeMock: vi.fn(), openMock: vi.fn() }))
+const { invokeMock, chooseFileMock } = vi.hoisted(() => ({ invokeMock: vi.fn(), chooseFileMock: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
-}))
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  open: (...args: unknown[]) => openMock(...args),
 }))
 
 type ModalVm = {
@@ -81,7 +78,7 @@ function editableConnection(state = 'Disconnected') {
 describe('NewConnectionModal SOCKS5', () => {
   beforeEach(() => {
     invokeMock.mockReset()
-    openMock.mockReset()
+    chooseFileMock.mockReset()
     localStorage.clear()
     useI18n().setLocale('zh-CN')
   })
@@ -304,8 +301,10 @@ describe('NewConnectionModal SOCKS5', () => {
   })
 
   it('selects TLS certificate and key files and submits their paths', async () => {
-    invokeMock.mockResolvedValue({ timing_corrections: [] })
-    openMock
+    invokeMock.mockImplementation((command: string) => command === 'choose_tls_file'
+      ? chooseFileMock()
+      : Promise.resolve({ timing_corrections: [] }))
+    chooseFileMock
       .mockResolvedValueOnce('/tmp/ca.crt')
       .mockResolvedValueOnce('/tmp/client.pem')
       .mockResolvedValueOnce('/tmp/client.key')
@@ -322,12 +321,9 @@ describe('NewConnectionModal SOCKS5', () => {
     expect((findFilePathInput(wrapper, 'CA 证书路径').element as HTMLInputElement).value).toBe('/tmp/ca.crt')
     expect((findFilePathInput(wrapper, '客户端证书路径').element as HTMLInputElement).value).toBe('/tmp/client.pem')
     expect((findFilePathInput(wrapper, '客户端密钥路径').element as HTMLInputElement).value).toBe('/tmp/client.key')
-    expect(openMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      filters: [{ name: '证书文件', extensions: ['crt', 'cer', 'pem'] }],
-    }))
-    expect(openMock).toHaveBeenNthCalledWith(3, expect.objectContaining({
-      filters: [{ name: '私钥文件', extensions: ['key', 'pem'] }],
-    }))
+    const pickerCalls = invokeMock.mock.calls.filter(([command]) => command === 'choose_tls_file')
+    expect(pickerCalls[0][1]).toEqual(expect.objectContaining({ kind: 'certificate', filterName: '证书文件' }))
+    expect(pickerCalls[2][1]).toEqual(expect.objectContaining({ kind: 'private-key', filterName: '私钥文件' }))
 
     await wrapper.find('.btn-primary').trigger('click')
     await flushPromises()

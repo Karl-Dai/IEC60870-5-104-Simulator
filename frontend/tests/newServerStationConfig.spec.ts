@@ -5,16 +5,12 @@ import { useI18n } from '@shared/i18n'
 import NewServerModal from '../src/components/NewServerModal.vue'
 
 const invokeMock = vi.fn()
-const openMock = vi.fn()
+const chooseFileMock = vi.fn()
 const alertMock = vi.fn(() => Promise.resolve())
 const refreshTreeMock = vi.fn()
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
-}))
-
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  open: (...args: unknown[]) => openMock(...args),
 }))
 
 function mountModal() {
@@ -34,12 +30,13 @@ describe('NewServerModal station configuration', () => {
   beforeEach(() => {
     invokeMock.mockReset()
     invokeMock.mockImplementation((command: string) => {
+      if (command === 'choose_tls_file') return chooseFileMock()
       if (command === 'list_bind_address_suggestions') return Promise.resolve(['0.0.0.0'])
       if (command === 'create_and_start_server') return Promise.resolve({ id: 'server_1' })
       return Promise.resolve(undefined)
     })
     alertMock.mockClear()
-    openMock.mockReset()
+    chooseFileMock.mockReset()
     refreshTreeMock.mockClear()
     useI18n().setLocale('en-US')
   })
@@ -76,7 +73,7 @@ describe('NewServerModal station configuration', () => {
   })
 
   it('selects TLS certificate and key files and submits their paths', async () => {
-    openMock
+    chooseFileMock
       .mockResolvedValueOnce('/tmp/server.crt')
       .mockResolvedValueOnce('/tmp/server.key')
       .mockResolvedValueOnce('/tmp/ca.pem')
@@ -98,12 +95,9 @@ describe('NewServerModal station configuration', () => {
       '/tmp/server.key',
       '/tmp/ca.pem',
     ])
-    expect(openMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      filters: [{ name: 'Certificate files', extensions: ['crt', 'cer', 'pem'] }],
-    }))
-    expect(openMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      filters: [{ name: 'Private key files', extensions: ['key', 'pem'] }],
-    }))
+    const pickerCalls = invokeMock.mock.calls.filter(([command]) => command === 'choose_tls_file')
+    expect(pickerCalls[0][1]).toEqual(expect.objectContaining({ kind: 'certificate', filterName: 'Certificate files' }))
+    expect(pickerCalls[1][1]).toEqual(expect.objectContaining({ kind: 'private-key', filterName: 'Private key files' }))
 
     await wrapper.find('.modal-btn.confirm').trigger('click')
     await flushPromises()

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, useId } from 'vue'
-import { open } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from '../i18n'
 
 type FileKind = 'certificate' | 'private-key'
@@ -19,15 +19,15 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const inputId = useId()
 
-const filter = computed(() => props.kind === 'private-key'
-  ? { name: t('common.privateKeyFiles'), extensions: ['key', 'pem'] }
-  : { name: t('common.certificateFiles'), extensions: ['crt', 'cer', 'pem'] })
+const filterName = computed(() => props.kind === 'private-key'
+  ? t('common.privateKeyFiles')
+  : t('common.certificateFiles'))
 
 async function chooseFile() {
-  const selected = await open({
-    multiple: false,
-    directory: false,
-    filters: [filter.value],
+  const selected = await invoke<string | null>('choose_tls_file', {
+    kind: props.kind,
+    title: props.label,
+    filterName: filterName.value,
   })
   if (typeof selected === 'string') emit('update:modelValue', selected)
 }
