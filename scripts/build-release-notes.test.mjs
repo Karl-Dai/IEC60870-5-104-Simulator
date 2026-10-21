@@ -25,7 +25,7 @@ describe('buildBody', () => {
     expect(buildBody('v1.2.3', md)).not.toContain('1.2.2')
     expect(buildBody('v1.2.3', md)).not.toContain('old')
   })
-  it('includes the per-OS download table for both apps', () => {
+  it('links every platform and app directly to its versioned release asset', () => {
     const body = buildBody('v1.2.3', md)
     expect(body).toContain('IEC104Slave_1.2.3_aarch64.dmg')
     expect(body).toContain('IEC104Master_1.2.3_aarch64.dmg')
@@ -36,6 +36,14 @@ describe('buildBody', () => {
     expect(body).toContain('IEC104Master_1.2.3_arm64-portable.exe')
     expect(body).toContain('IEC104Master_1.2.3_amd64.AppImage')
     expect(body).toContain('IEC104Slave-1.2.3-1.x86_64.rpm')
+    const links = [...body.matchAll(/\[⬇️ 下载 \/ Download\]\(([^\s]+) "([^"]+)"\)/g)]
+    expect(links).toHaveLength(22)
+    expect(new Set(links.map(([, url]) => url)).size).toBe(22)
+    for (const [, url, filename] of links) {
+      expect(url).toBe(`https://github.com/Karl-Dai/IEC60870-5-104-Simulator/releases/download/v1.2.3/${filename}`)
+    }
+    expect(body).toContain('按平台点击 ⬇️ 即可下载安装包')
+    expect(body).not.toContain('下方资产里按平台选择')
   })
   it('warns when the version section is missing', () => {
     expect(buildBody('v9.9.9', md)).toContain('CHANGELOG.md 缺少 `9.9.9`')

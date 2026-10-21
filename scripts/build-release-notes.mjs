@@ -72,12 +72,16 @@ export function buildBody(tag, changelog) {
   lines.push('')
   lines.push('## 下载 / Downloads')
   lines.push('')
-  lines.push('下方资产里按平台选择 / Pick the asset for your platform below:')
+  lines.push('按平台点击 ⬇️ 即可下载安装包 / Click ⬇️ for your platform to download the installer:')
   lines.push('')
   lines.push(`| 平台 / Platform | ${APPS[0].role} | ${APPS[1].role} |`)
   lines.push('|---|---|---|')
   for (const p of PLATFORMS) {
-    const cells = APPS.map((a) => `\`${p.file(a.prefix, version)}\``).join(' | ')
+    const cells = APPS.map((a) => {
+      const filename = p.file(a.prefix, version)
+      const url = `${REPO_URL}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(filename)}`
+      return `[⬇️ 下载 / Download](${url} "${filename}")`
+    }).join(' | ')
     lines.push(`| ${p.label} | ${cells} |`)
   }
   lines.push('')
