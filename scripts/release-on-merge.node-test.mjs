@@ -33,9 +33,15 @@ gh() {
       case "$STATE" in published|older-published) echo v1.15.21 ;; esac ;;
     'release view') echo "$LATEST" ;;
     'run list')
+      [ "$RUN_LOOKUP_ERROR" = false ] || return 1
+      if [ "$7" = --commit ]; then
+        printf '%s' "$PUBLISHED_RUN"
+        return 0
+      fi
       if [ "\${@: -1}" = '.[] | select(.headSha == "'"$EXISTING_RUN_SHA"'") | [.status, (.conclusion // "")] | @tsv' ]; then
         printf '%s' "$EXISTING_RUN"
       fi ;;
+    'run rerun') [ "$RERUN_ERROR" = false ] ;;
     'workflow run') : ;;
     *) return 9 ;;
   esac
@@ -53,6 +59,7 @@ git() {
   echo "git $*" >> "$CALLS"
   case "$1" in
     rev-parse) [ "$TAG_EXISTS" = true ] ;;
+    rev-list) [ "$TAG_EXISTS" = true ] && echo tag-sha ;;
     merge-base) [ "$TAG_ANCESTOR" = true ] && { [ -z "$TAG_ANCESTOR_SHA" ] || [ "$4" = "$TAG_ANCESTOR_SHA" ]; } ;;
     fetch|config|tag|push) : ;;
     *) return 9 ;;
@@ -73,6 +80,7 @@ function run(overrides = {}) {
     CURRENT: '1.15.21', LATEST: 'v1.15.20', EXPECTED: '1.15.21',
     METADATA_VALID: 'true', TAG_EXISTS: 'false', TAG_ANCESTOR: 'true',
     TAG_ANCESTOR_SHA: '', EXISTING_RUN_SHA: 'tested-sha',
+    PUBLISHED_RUN: '123\tcompleted\tsuccess', RUN_LOOKUP_ERROR: 'false', RERUN_ERROR: 'false',
     EXISTING_RUN: '', ...overrides,
   }
   let status = 0
@@ -100,10 +108,45 @@ function run(overrides = {}) {
 
 for (const state of ['published', 'older-published']) {
   test(`${state} release skips validation, tags and dispatch`, () => {
-    const result = run({ STATE: state, LATEST: state === 'older-published' ? 'v1.15.22' : 'v1.15.21', EXPECTED: '1.15.22' })
+    const result = run({ STATE: state, TAG_EXISTS: 'true', LATEST: state === 'older-published' ? 'v1.15.22' : 'v1.15.21', EXPECTED: '1.15.22' })
     assert.equal(result.status, 0, result.logs)
     assert.match(result.output, /release=false/)
-    assert.doesNotMatch(result.calls, /node .* (verify|next)|gh release view|git |gh workflow run/)
+    assert.doesNotMatch(result.calls, /node .* (verify|next)|gh release view|git (tag|push)|gh workflow run|gh run rerun/)
+  })
+}
+
+for (const status of ['queued', 'in_progress', 'waiting', 'pending', 'requested']) {
+  test(`published release with ${status} run is not retried`, () => {
+    const result = run({ STATE: 'published', TAG_EXISTS: 'true', PUBLISHED_RUN: `123\t${status}\t` })
+    assert.equal(result.status, 0, result.logs)
+    assert.match(result.output, /release=false/)
+    assert.doesNotMatch(result.calls, /gh run rerun|gh workflow run|git (tag|push)/)
+  })
+}
+
+for (const conclusion of ['cancelled', 'timed_out']) {
+  test(`published release with ${conclusion} run retries unsuccessful jobs`, () => {
+    const result = run({ STATE: 'published', TAG_EXISTS: 'true', PUBLISHED_RUN: `123\tcompleted\t${conclusion}` })
+    assert.equal(result.status, 0, result.logs)
+    assert.match(result.calls, /gh run rerun 123 --failed/)
+    assert.doesNotMatch(result.calls, /gh workflow run|git (tag|push)/)
+  })
+}
+
+for (const [label, overrides] of [
+  ['missing run', { PUBLISHED_RUN: '' }],
+  ['run lookup failure', { RUN_LOOKUP_ERROR: 'true' }],
+  ['rerun failure', { PUBLISHED_RUN: '123\tcompleted\tfailure', RERUN_ERROR: 'true' }],
+  ['unrecognized conclusion', { PUBLISHED_RUN: '123\tcompleted\tskipped' }],
+  ['missing tag', { TAG_EXISTS: 'false' }],
+  ['tag outside tested history', { TAG_ANCESTOR: 'false' }],
+]) {
+  test(`published release ${label} fails visibly`, () => {
+    const result = run({ STATE: 'published', TAG_EXISTS: 'true', ...overrides })
+    assert.notEqual(result.status, 0, result.logs)
+    assert.doesNotMatch(result.output, /release=false/)
+    assert.doesNotMatch(result.calls, /gh workflow run|git (tag|push)/)
+    if (label !== 'rerun failure') assert.doesNotMatch(result.calls, /gh run rerun/)
   })
 }
 
@@ -177,5 +220,21 @@ for (const existing of ['queued\t', 'in_progress\t', 'completed\tsuccess']) {
     assert.equal(result.status, 0, result.logs)
     assert.match(result.calls, /select\(\.headSha == "tested-sha"\)/)
     assert.doesNotMatch(result.calls, /gh workflow run/)
+  })
+}
+
+for (const state of ['published', 'older-published']) {
+  test(`${state} release retries failed jobs on its original tag commit`, () => {
+    const result = run({
+      STATE: state, TAG_EXISTS: 'true', PUBLISHED_RUN: '123\tcompleted\tfailure',
+      GITHUB_SHA: 'newer-main-sha', TESTED_SHA: 'newer-tested-sha',
+      LATEST: state === 'older-published' ? 'v1.15.22' : 'v1.15.21', EXPECTED: '1.15.22',
+    })
+    assert.equal(result.status, 0, result.logs)
+    assert.match(result.calls, /gh run rerun 123 --failed/)
+    assert.match(result.calls, /gh run list --workflow release.yml --branch v1.15.21 --commit tag-sha --limit 1/)
+    assert.match(result.calls, /git merge-base --is-ancestor v1.15.21 newer-tested-sha/)
+    assert.doesNotMatch(result.calls, /node .* (verify|next)|gh release view|git (tag|push)|gh workflow run/)
+    assert.match(result.output, /release=false/)
   })
 }
