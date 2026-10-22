@@ -14,6 +14,8 @@ const PLATFORM_PATTERNS = [
   { key: 'darwin-x86_64',  re: /_x64\.app\.tar\.gz$/ },
   { key: 'windows-x86_64', re: /_x64-setup\.exe$/ },
   { key: 'windows-aarch64', re: /_arm64-setup\.exe$/ },
+  { key: 'windows-x86_64-portable', re: /_x64-portable\.exe$/ },
+  { key: 'windows-aarch64-portable', re: /_arm64-portable\.exe$/ },
   { key: 'linux-x86_64',   re: /_amd64\.AppImage$/ },
 ]
 
@@ -54,6 +56,14 @@ export function groupAssetsByRole(assets) {
     }
   }
   return groups
+}
+
+export function requirePortableAssets(platforms) {
+  for (const arch of ['x86_64', 'aarch64']) {
+    if (platforms[`windows-${arch}`] && !platforms[`windows-${arch}-portable`]) {
+      throw new Error(`missing signed portable updater for windows-${arch}`)
+    }
+  }
 }
 
 export function extractChangelogSection(md, version) {
@@ -109,6 +119,7 @@ async function main() {
   const pubDate = release.published_at
 
   for (const role of ['slave', 'master']) {
+    requirePortableAssets(grouped[role])
     const platforms = {}
     for (const [key, val] of Object.entries(grouped[role])) {
       if (!val.sigUrl) {

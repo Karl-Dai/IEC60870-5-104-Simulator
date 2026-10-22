@@ -1,6 +1,9 @@
 mod commands;
 pub mod reconnect;
 mod state;
+#[cfg(any(windows, test))]
+#[path = "../../shared/portable_update.rs"]
+mod portable_update;
 #[path = "../../shared/tls_file_dialog.rs"]
 mod tls_file_dialog;
 pub mod update;
@@ -10,6 +13,8 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    portable_update::handle_startup();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
