@@ -204,7 +204,7 @@ jobs:
 
           ## Release behavior
 
-          After this PR is merged and normal CI succeeds, the release-on-merge workflow will validate the version metadata, create tag \`v$NEXT_VERSION\`, and explicitly dispatch the multi-platform Release workflow.
+          After this PR is merged, create tag \`v$NEXT_VERSION\` and push to trigger the Release workflow, or run the Release workflow dispatch.
 
           ## Automated checks
 
