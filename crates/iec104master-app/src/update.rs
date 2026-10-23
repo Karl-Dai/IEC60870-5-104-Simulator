@@ -81,8 +81,22 @@ fn install_id(app: &AppHandle) -> String {
     id
 }
 
+#[cfg(windows)]
+fn portable_target() -> Option<String> {
+    crate::portable_update::target_for_bundle(
+        tauri::utils::platform::bundle_type().is_some(),
+        std::env::consts::ARCH,
+    )
+}
+
 fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
-    app.updater_builder()
+    let builder = app.updater_builder();
+    #[cfg(windows)]
+    let builder = match portable_target() {
+        Some(target) => builder.target(target),
+        None => builder,
+    };
+    builder
         .header("X-Install-Id", install_id(app))
         .map_err(|e| e.to_string())?
         .build()
@@ -168,6 +182,35 @@ pub async fn check_for_update(
     Ok(Some(meta))
 }
 
+// Returns true when a helper will replace and relaunch the portable executable.
+fn install_package(ready: &PreparedUpdate) -> Result<bool, String> {
+    #[cfg(windows)]
+    if let Some(target) = portable_target() {
+        if ready.update.target != target {
+            return Err("portable updater target changed after download".into());
+        }
+        crate::portable_update::validate_download(&target, ready.update.download_url.path())?;
+        crate::portable_update::start(&ready.bytes)?;
+        return Ok(true);
+    }
+    ready
+        .update
+        .install(&ready.bytes)
+        .map_err(|e| e.to_string())?;
+    Ok(false)
+}
+
+fn finish_install(app: AppHandle, portable: bool) -> Result<(), String> {
+    if portable {
+        // Restarting here would keep the old file locked or open the old version.
+        // The acknowledged helper waits for this process, replaces it and starts it.
+        app.exit(0);
+        Ok(())
+    } else {
+        app.restart()
+    }
+}
+
 /// Installs the already downloaded package. No network request is made here.
 #[tauri::command]
 pub async fn install_update(app: AppHandle, state: State<'_, UpdateState>) -> Result<(), String> {
@@ -176,14 +219,11 @@ pub async fn install_update(app: AppHandle, state: State<'_, UpdateState>) -> Re
         .as_ref()
         .ok_or_else(|| "update package is not ready".to_string())?;
 
-    update
-        .update
-        .install(&update.bytes)
-        .map_err(|e| e.to_string())?;
+    let portable = install_package(update)?;
     remove_value(&app, KEY_SKIPPED_VERSION);
     remove_value(&app, KEY_INSTALL_ON_NEXT_LAUNCH);
     drop(prepared);
-    app.restart()
+    finish_install(app, portable)
 }
 
 /// Ignores this exact version during future automatic checks. A manual check
@@ -252,15 +292,12 @@ pub async fn install_pending_update(app: AppHandle) -> Result<(), String> {
     let ready = prepared
         .as_ref()
         .expect("prepared update was just inserted");
-    ready
-        .update
-        .install(&ready.bytes)
-        .map_err(|e| e.to_string())?;
+    let portable = install_package(ready)?;
 
     remove_value(&app, KEY_SKIPPED_VERSION);
     remove_value(&app, KEY_INSTALL_ON_NEXT_LAUNCH);
     drop(prepared);
-    app.restart()
+    finish_install(app, portable)
 }
 
 pub fn should_check(

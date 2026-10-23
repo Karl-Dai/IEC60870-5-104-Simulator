@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { groupAssetsByRole, extractChangelogSection, buildManifest, MANIFEST_VARIANTS } from './gen-update-manifest.mjs'
+import { groupAssetsByRole, extractChangelogSection, buildManifest, MANIFEST_VARIANTS, requirePortableAssets } from './gen-update-manifest.mjs'
 
 // Filenames mirror what Tauri 2 + tauri-action upload to GitHub Releases.
 // macOS .app.tar.gz has no version in the filename; Linux uses .AppImage
@@ -11,6 +11,10 @@ const sample = [
   { name: 'IEC104Slave_1.0.14_x64-setup.exe.sig', browser_download_url: 'u2s' },
   { name: 'IEC104Slave_1.0.14_arm64-setup.exe', browser_download_url: 'u2a' },
   { name: 'IEC104Slave_1.0.14_arm64-setup.exe.sig', browser_download_url: 'u2as' },
+  { name: 'IEC104Slave_1.0.14_x64-portable.exe', browser_download_url: 'portable-x64' },
+  { name: 'IEC104Slave_1.0.14_x64-portable.exe.sig', browser_download_url: 'portable-x64-sig' },
+  { name: 'IEC104Master_1.0.14_arm64-portable.exe', browser_download_url: 'portable-arm64' },
+  { name: 'IEC104Master_1.0.14_arm64-portable.exe.sig', browser_download_url: 'portable-arm64-sig' },
   { name: 'IEC104Master_1.0.14_amd64.AppImage', browser_download_url: 'u3' },
   { name: 'IEC104Master_1.0.14_amd64.AppImage.sig', browser_download_url: 'u3s' },
   // installers that should NOT match (.dmg, .msi, .deb, .rpm) — included to
@@ -22,6 +26,18 @@ const sample = [
 ]
 
 describe('groupAssetsByRole', () => {
+  it('refuses a release that has a Windows installer but no matching portable update', () => {
+    expect(() => requirePortableAssets({ 'windows-x86_64': {} })).toThrow('missing signed portable updater')
+    expect(() => requirePortableAssets({ 'windows-aarch64': {}, 'windows-x86_64-portable': {} })).toThrow()
+    expect(() => requirePortableAssets({ 'windows-x86_64': {}, 'windows-x86_64-portable': {} })).not.toThrow()
+  })
+  it('keeps signed portable executables separate from Windows installers', () => {
+    const { slave, master } = groupAssetsByRole(sample)
+    expect(slave['windows-x86_64-portable']).toEqual({ url: 'portable-x64', sigUrl: 'portable-x64-sig' })
+    expect(master['windows-aarch64-portable']).toEqual({ url: 'portable-arm64', sigUrl: 'portable-arm64-sig' })
+    expect(slave['windows-x86_64'].url).toBe('u2')
+    expect(slave['windows-aarch64'].url).toBe('u2a')
+  })
   it('separates slave and master assets', () => {
     const { slave, master } = groupAssetsByRole(sample)
     expect(slave['darwin-aarch64'].url).toBe('u1')

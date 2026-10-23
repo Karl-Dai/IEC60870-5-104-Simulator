@@ -203,7 +203,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
           VERSION="${RELEASE_TAG#v}"
           ARCH="${{ matrix.win_arch }}"
           # cargo 产物名是 crate name (iec104sim-app.exe), 不是 Tauri productName。
@@ -214,15 +217,17 @@ jobs:
             SRC="target/release/iec104sim-app.exe"
           fi
           if [ ! -f "$SRC" ]; then
-            echo "::warning::cargo binary $SRC not found — skipping portable upload"
-            exit 0
+            echo "::error::cargo binary $SRC not found for portable update"
+            exit 1
           fi
           DEST="IEC104Slave_${VERSION}_${ARCH}-portable.exe"
           cp "$SRC" "$DEST"
+          node scripts/verify-portable-exe.mjs "$DEST"
+          node frontend/node_modules/@tauri-apps/cli/tauri.js signer sign "$DEST"
           # `gh release upload --clobber` races against parallel matrix jobs
           # (404 "delete-a-release-asset"); retry before failing the build.
           for attempt in 1 2 3 4 5; do
-            if gh release upload "$RELEASE_TAG" "$DEST" --clobber; then exit 0; fi
+            if gh release upload "$RELEASE_TAG" "$DEST" "$DEST.sig" --clobber; then exit 0; fi
             echo "::warning::release upload attempt $attempt failed, retrying in 10s"
             sleep 10
           done
@@ -384,7 +389,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
           VERSION="${RELEASE_TAG#v}"
           ARCH="${{ matrix.win_arch }}"
           # cargo 产物名是 crate name (iec104master-app.exe), 不是 Tauri productName。
@@ -394,15 +402,17 @@ jobs:
             SRC="target/release/iec104master-app.exe"
           fi
           if [ ! -f "$SRC" ]; then
-            echo "::warning::cargo binary $SRC not found — skipping portable upload"
-            exit 0
+            echo "::error::cargo binary $SRC not found for portable update"
+            exit 1
           fi
           DEST="IEC104Master_${VERSION}_${ARCH}-portable.exe"
           cp "$SRC" "$DEST"
+          node scripts/verify-portable-exe.mjs "$DEST"
+          node master-frontend/node_modules/@tauri-apps/cli/tauri.js signer sign "$DEST"
           # `gh release upload --clobber` races against parallel matrix jobs
           # (404 "delete-a-release-asset"); retry before failing the build.
           for attempt in 1 2 3 4 5; do
-            if gh release upload "$RELEASE_TAG" "$DEST" --clobber; then exit 0; fi
+            if gh release upload "$RELEASE_TAG" "$DEST" "$DEST.sig" --clobber; then exit 0; fi
             echo "::warning::release upload attempt $attempt failed, retrying in 10s"
             sleep 10
           done
