@@ -1006,6 +1006,8 @@ async function deleteSelectedPoints() {
     selectedRows.value = []
     emitSelection()
     updateDisplay()
+    // Refresh station and category totals after the definition mutation succeeds.
+    dataRefreshKey.value++
     await loadDataPoints()
   } catch (e) {
     await showAlert(String(e))
