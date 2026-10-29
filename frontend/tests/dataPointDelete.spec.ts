@@ -4,6 +4,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { ref, nextTick, type Ref } from 'vue'
 import { dialogKey } from '@shared/composables/useDialog'
 import DataPointTable from '../src/components/DataPointTable.vue'
+import ConnectionTree from '../src/components/ConnectionTree.vue'
 import type { DataPointInfo } from '../src/types'
 
 const invokeMock = vi.fn()
@@ -63,6 +64,11 @@ function wireBackend(initial: DataPointInfo[]) {
       backend = backend.filter(p => !targets.some(t => t.ioa === p.ioa && t.asdu_type === p.asdu_type))
       return Promise.resolve(targets.length)
     }
+    if (cmd === 'list_servers') return Promise.resolve([{ id: 's1', bind_address: '127.0.0.1', port: 12404, state: 'Stopped', station_count: 1, client_count: 0 }])
+    if (cmd === 'list_stations') return Promise.resolve([{
+      common_address: 1, name: 'Test', point_count: backend.length,
+      category_counts: { single_point: backend.filter(p => p.asdu_type === 'M_SP_NA_1').length, float_measured: backend.filter(p => p.asdu_type === 'M_ME_NC_1').length },
+    }])
     if (cmd === 'list_point_mutations') return Promise.resolve([])
     return Promise.resolve()
   })
@@ -142,5 +148,30 @@ describe('DataPointTable 删除', () => {
     expect(be.lastCall()?.[1].points).toEqual([{ ioa: 3, asdu_type: 'M_ME_NC_1' }])
     expect(vm.filteredPoints.length).toBe(2)
     wrapper.unmount()
+  })
+
+  it.each([1, 2])('deleting %i points refreshes the tree category and station totals', async (count) => {
+    wireBackend([A, B, C])
+    const { wrapper, refs } = mountTable()
+    const tree = mount(ConnectionTree, {
+      global: { provide: { ...refs, treeRefreshKey: ref(0), [dialogKey as symbol]: { showAlert: () => Promise.resolve() } } },
+    })
+    try {
+      await selectStation(refs)
+      const spNode = () => tree.findAll('.category-node')[0]!
+      expect(spNode().find('.node-badge').text()).toBe('2')
+      expect(tree.find('.station-node .node-badge').text()).toBe('3')
+      const vm = wrapper.vm as unknown as { selectedRows: DataPointInfo[] }
+      vm.selectedRows = [A, B].slice(0, count)
+      await wrapper.find('.table-scroll-container').trigger('keydown', { key: 'Delete' })
+      await flushPromises()
+      expect(tree.find('.station-node .node-badge').text()).toBe(String(3 - count))
+      if (count === 2) expect(spNode().find('.node-badge').exists()).toBe(false)
+      else expect(spNode().find('.node-badge').text()).toBe('1')
+      expect(tree.findAll('.category-node')[6]!.find('.node-badge').text()).toBe('1')
+    } finally {
+      tree.unmount()
+      wrapper.unmount()
+    }
   })
 })
